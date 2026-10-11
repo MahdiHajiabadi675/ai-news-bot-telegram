@@ -1,7 +1,7 @@
 """
 Fast-track processor — بدون Gemini، فقط ترجمه سریع + انتشار
 منابع فارسی: مستقیم فرمت + انتشار (بدون Gemini)
-منابع انگلیسی: ترجمه سریع با Gemini (minimal prompt)
+منابع انگلیسی: ترجمه سریع با Gemini + fallback به Google Translate
 """
 import re
 import requests
@@ -11,6 +11,7 @@ from .config import (
     CHANNEL_ID, BOT_TOKEN, MAX_POSTS_PER_DAY, DATA_DIR
 )
 from . import storage
+from .fallback_translator import translate_with_fallback
 
 GEMINI_URL = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent"
 BASE = f"https://api.telegram.org/bot{BOT_TOKEN}"
@@ -23,7 +24,7 @@ def is_ai_related(text: str) -> bool:
     return False
 
 def quick_translate(title: str, summary: str) -> dict:
-    """ترجمه سریع — اگه fail بشه None برمی‌گرده (خبر ارسال نمی‌شه)"""
+    """ترجمه سریع — اگه fail بشه None برمی‌گرده"""
     import json as json_mod
     prompt = f"""Translate to Persian. Keep it natural and concise.
 
@@ -53,7 +54,6 @@ Return JSON: {{"title_fa": "...", "summary_fa": "..."}}"""
             if text.startswith("json"):
                 text = text[4:]
         result = json_mod.loads(text)
-        # بررسی که ترجمه خالی نباشه
         if not result.get("title_fa") or not result.get("summary_fa"):
             print(f"[WARN] Empty translation result")
             return None
@@ -97,7 +97,10 @@ def process_fast_track(articles: list) -> list:
         else:
             translated = quick_translate(article["title"], article["summary"])
             if translated is None:
-                print(f"[FAST] Skipped (translation failed): {article['title'][:60]}")
+                print(f"[FAST] Gemini failed, trying fallback...")
+                translated = translate_with_fallback(article["title"], article["summary"])
+            if translated is None:
+                print(f"[FAST] Skipped (all translation failed): {article['title'][:60]}")
                 continue
             item = {
                 "title_fa": translated.get("title_fa", article["title"]),

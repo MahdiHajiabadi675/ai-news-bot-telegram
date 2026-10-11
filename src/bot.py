@@ -124,7 +124,6 @@ def _handle_message(msg, state):
     text = msg.get("text", "").strip()
     chat_id = msg.get("chat", {}).get("id", 0)
 
-    # Check if editing an item
     pending = storage.load_pending()
     for i, item in enumerate(pending):
         if item.get("_editing"):
@@ -142,7 +141,7 @@ def _handle_message(msg, state):
         send_message(chat_id,
             "🤖 <b>ربات مدیریت کانال اخبار AI</b>\n\n"
             "دستورات:\n"
-            "/status - وضعیت\n"
+            "/status - وضعیت سیستم\n"
             "/pending - اخبار در انتظار تایید\n"
             "/pause - توقف انتشار\n"
             "/resume - ادامه انتشار\n"
@@ -155,12 +154,37 @@ def _handle_message(msg, state):
         approved_count = len(storage.load_approved())
         paused = "⏸️ متوقف" if state.get("paused") else "▶️ فعال"
         auto = "روشن" if state.get("auto_publish") else "خاموش"
+
+        stage = state.get("current_stage", "idle")
+        stage_emoji = {
+            "idle": "💤",
+            "collecting": "📡",
+            "analyzing": "🧠",
+            "publishing": "📤",
+            "waiting": "⏳",
+            "error": "🔴"
+        }.get(stage, "❓")
+
+        stage_time = state.get("stage_updated_at", "N/A")
+        if stage_time and stage_time != "N/A":
+            stage_time = stage_time[:19].replace("T", " ")
+
+        last_error = state.get("last_error")
+        error_text = f"\n🔴 خطای آخر: {last_error}" if last_error else ""
+
+        gemini_fails = state.get("gemini_fail_count", 0)
+        gemini_text = f"\nGemini fail: {gemini_fails}" if gemini_fails > 0 else ""
+
         send_message(chat_id,
             f"📊 <b>وضعیت ربات</b>\n\n"
+            f"{stage_emoji} مرحله: {stage}\n"
+            f"🕐 آخرین بروزرسانی: {stage_time}\n"
             f"وضعیت: {paused}\n"
             f"در انتظار تایید: {pending_count}\n"
             f"آماده انتشار: {approved_count}\n"
             f"انتشار خودکار: {auto}"
+            f"{gemini_text}"
+            f"{error_text}"
         )
 
     elif text == "/pending":
@@ -215,7 +239,6 @@ def _send_review(item):
     trust = item.get("source_trust", 3)
     trust_emoji = "🟢" if trust >= 4 else "🟡" if trust >= 3 else "🔴"
 
-    # Score display
     score = item.get("score", 0)
     if score >= 70:
         score_label = "زیاد"

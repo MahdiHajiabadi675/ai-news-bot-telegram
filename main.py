@@ -10,6 +10,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
 from src import storage
+from src.storage import set_stage
 from src.config import (
     COLLECT_INTERVAL_MIN, FAST_TRACK_ENABLED,
     AUTO_PUBLISH_ENABLED, AUTO_PUBLISH_THRESHOLD, AUTO_REJECT_THRESHOLD,
@@ -25,19 +26,15 @@ from src.publisher import publish_approved
 
 def calculate_score(item: dict) -> int:
     """محاسبه اسکور خبر (0-100)"""
-    # Source trust (0-20)
     source_trust = TRUST_SCORES.get(item["source"], 3)
     source_score = (source_trust / 5) * SCORE_SOURCE_WEIGHT
 
-    # Importance (0-30)
     importance_map = {"high": 1.0, "medium": 0.6, "low": 0.3}
     importance_score = importance_map.get(item["importance"], 0.5) * SCORE_IMPORTANCE_WEIGHT
 
-    # Confidence (0-30)
     confidence_map = {"confirmed": 1.0, "likely": 0.6, "rumor": 0.2}
     confidence_score = confidence_map.get(item["confidence"], 0.5) * SCORE_CONFIDENCE_WEIGHT
 
-    # Category (0-20)
     category_weight = CATEGORY_WEIGHTS.get(item["category"], 0.3)
     category_score = category_weight * SCORE_CATEGORY_WEIGHT
 
@@ -66,32 +63,31 @@ def run(force=False):
             should_collect = False
 
     if should_collect and not state.get("paused"):
+        state = set_stage(state, "collecting")
+        storage.save_state(state)
         print("[INFO] Collecting articles...")
         seen = storage.load_seen()
         articles = collect(seen)
 
         if articles:
-            # Auto-reject: بررسی کلمات مشکوک
             articles = auto_reject(articles)
 
-            # Fast-track: انتشار سریع بدون Gemini
             if FAST_TRACK_ENABLED:
                 print("[INFO] Processing fast-track...")
                 fast_items = [a for a in articles if a.get("fast_track")]
                 process_fast_track(fast_items)
                 articles = [a for a in articles if not a.get("fast_track")]
 
-            # تحلیل با Gemini برای بقیه
             if articles:
+                state = set_stage(state, "analyzing")
+                storage.save_state(state)
                 print("[INFO] Analyzing with Gemini...")
                 analyzed = analyze_articles(articles)
 
-                # Add to seen
                 for a in articles:
                     seen.add(a["hash"])
                 storage.save_seen(seen)
 
-                # Route: auto-approve یا pending
                 pending = storage.load_pending()
                 approved = storage.load_approved()
 
@@ -100,7 +96,6 @@ def run(force=False):
                     item["source_trust"] = source_trust
                     item["score"] = calculate_score(item)
 
-                    # Auto-reject: اسکور پایین
                     if item["score"] < AUTO_REJECT_THRESHOLD:
                         print(f"[REJECT] Low score ({item['score']}): {item['title_fa'][:50]}")
                         pub = storage.load_published()
@@ -108,7 +103,6 @@ def run(force=False):
                         storage.save_published(pub)
                         continue
 
-                    # Auto-publish: اسکور بالا + منبع معتبر + قطعی
                     is_trusted = source_trust >= 4
                     is_confirmed = item["confidence"] == "confirmed"
                     is_high_score = item["score"] >= AUTO_PUBLISH_THRESHOLD
@@ -132,16 +126,18 @@ def run(force=False):
         state["last_collect_time"] = now.isoformat() + "Z"
 
     # 4. Publish approved items
+    state = set_stage(state, "publishing")
+    storage.save_state(state)
     state = publish_approved(state)
 
     # 5. Save state
+    state = set_stage(state, "waiting")
     storage.save_state(state)
 
     print(f"[{datetime.utcnow().isoformat()}] Pipeline finished")
 
 
 def auto_reject(articles: list) -> list:
-    """فیلتر خودکار: حذف اخبار غیرمرتبط یا مشکوک"""
     kept = []
     for a in articles:
         title_lower = a["title"].lower()

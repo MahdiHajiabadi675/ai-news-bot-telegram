@@ -14,7 +14,6 @@ def _save(fname, data):
     with open(f, "w", encoding="utf-8") as fp:
         json.dump(data, fp, ensure_ascii=False, indent=2)
 
-# State
 def load_state():
     return _load("state.json", {
         "last_update_id": 0,
@@ -22,34 +21,43 @@ def load_state():
         "daily_post_count": 0,
         "daily_post_date": None,
         "paused": False,
-        "auto_publish": False
+        "auto_publish": False,
+        "current_stage": "idle",
+        "stage_updated_at": None,
+        "last_error": None,
+        "gemini_fail_count": 0,
+        "fallback_translator": "googletrans"
     })
 
 def save_state(state):
     _save("state.json", state)
 
-# Seen (dedup)
+def set_stage(state, stage, error=None):
+    state["current_stage"] = stage
+    from datetime import datetime
+    state["stage_updated_at"] = datetime.utcnow().isoformat() + "Z"
+    if error:
+        state["last_error"] = str(error)
+    return state
+
 def load_seen():
     return set(_load("seen.json", []))
 
 def save_seen(seen):
     _save("seen.json", list(seen))
 
-# Pending
 def load_pending():
     return _load("pending.json", [])
 
 def save_pending(items):
     _save("pending.json", items)
 
-# Approved
 def load_approved():
     return _load("approved.json", [])
 
 def save_approved(items):
     _save("approved.json", items)
 
-# Published (log)
 def load_published():
     return _load("published.json", [])
 
