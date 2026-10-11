@@ -23,6 +23,16 @@ def is_ai_related(text: str) -> bool:
             return True
     return False
 
+def is_english(text: str) -> bool:
+    """آیا متن انگلیسیه؟ (بیش از ۵۰٪ حروف لاتین)"""
+    if not text:
+        return False
+    latin_count = sum(1 for c in text if c.isascii() and c.isalpha())
+    total_alpha = sum(1 for c in text if c.isalpha())
+    if total_alpha == 0:
+        return False
+    return (latin_count / total_alpha) > 0.5
+
 def quick_translate(title: str, summary: str) -> dict:
     """ترجمه سریع — اگه fail بشه None برمی‌گرده"""
     import json as json_mod
@@ -82,7 +92,9 @@ def process_fast_track(articles: list) -> list:
             print(f"[FAST] Daily limit reached")
             break
 
-        if article["lang"] == "fa":
+        # اگه عنوان انگلیسی باشه (حتی از منبع فارسی) → ترجمه کن
+        if article["lang"] == "fa" and not is_english(article["title"]):
+            # عنوان فارسیه → مستقیم استفاده کن
             item = {
                 "title_fa": article["title"],
                 "summary_fa": article["summary"][:400],
@@ -95,6 +107,7 @@ def process_fast_track(articles: list) -> list:
                 "hash": article["hash"],
             }
         else:
+            # عنوان انگلیسیه → ترجمه کن
             translated = quick_translate(article["title"], article["summary"])
             if translated is None:
                 print(f"[FAST] Gemini failed, trying fallback...")
