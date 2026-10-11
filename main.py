@@ -124,6 +124,7 @@ def run(force=False):
                 print(f"[INFO] Routed: {len(analyzed)} items")
 
         state["last_collect_time"] = now.isoformat() + "Z"
+        storage.save_state(state)
 
     # 4. Publish approved items
     state = set_stage(state, "publishing")

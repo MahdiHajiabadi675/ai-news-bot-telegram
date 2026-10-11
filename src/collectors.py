@@ -30,8 +30,16 @@ FEEDS = [
     {"name": "تک‌راسا", "url": "https://www.techrasa.com/feed", "lang": "fa", "trusted": False, "fast_track": True},
 ]
 
-def _hash(text):
-    return hashlib.sha256(text.strip().lower().encode("utf-8")).hexdigest()[:20]
+def _normalize_url(url: str) -> str:
+    """نرمال‌سازی لینک برای مقایسه بهتر"""
+    url = url.strip().lower()
+    url = url.split("?")[0]  # حذف query params
+    url = url.rstrip("/")     # حذف اسلش آخر
+    return url
+
+def _hash(title: str, link: str) -> str:
+    """هش بر اساس لینک نرمال‌شده (نه عنوان) تا تکراری نشناخته شه"""
+    return hashlib.sha256(_normalize_url(link).encode("utf-8")).hexdigest()[:20]
 
 def _clean_html(html):
     if not html:
@@ -57,7 +65,7 @@ def collect(seen: set) -> list:
                     summary = content[0].get("value", summary)
                 summary = _clean_html(summary)
 
-                h = _hash(title + "|" + link)
+                h = _hash(title, link)
                 if h in seen:
                     continue
 
