@@ -23,6 +23,8 @@ def is_ai_related(text: str) -> bool:
     return False
 
 def quick_translate(title: str, summary: str) -> dict:
+    """ترجمه سریع — اگه fail بشه None برمی‌گرده (خبر ارسال نمی‌شه)"""
+    import json as json_mod
     prompt = f"""Translate to Persian. Keep it natural and concise.
 
 Title: {title}
@@ -50,10 +52,15 @@ Return JSON: {{"title_fa": "...", "summary_fa": "..."}}"""
             text = text.split("```")[1]
             if text.startswith("json"):
                 text = text[4:]
-        return json.loads(text)
+        result = json_mod.loads(text)
+        # بررسی که ترجمه خالی نباشه
+        if not result.get("title_fa") or not result.get("summary_fa"):
+            print(f"[WARN] Empty translation result")
+            return None
+        return result
     except Exception as e:
         print(f"[WARN] Quick translate failed: {e}")
-        return {"title_fa": title, "summary_fa": summary[:300]}
+        return None
 
 def process_fast_track(articles: list) -> list:
     if not articles:
@@ -89,6 +96,9 @@ def process_fast_track(articles: list) -> list:
             }
         else:
             translated = quick_translate(article["title"], article["summary"])
+            if translated is None:
+                print(f"[FAST] Skipped (translation failed): {article['title'][:60]}")
+                continue
             item = {
                 "title_fa": translated.get("title_fa", article["title"]),
                 "summary_fa": translated.get("summary_fa", article["summary"][:400]),
