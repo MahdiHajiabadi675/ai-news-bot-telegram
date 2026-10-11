@@ -1,12 +1,12 @@
 {
-  "last_update_id": 0,
-  "last_collect_time": null,
+  "last_update_id": 931060244,
+  "last_collect_time": "2026-10-11T23:26:18.242113Z",
   "daily_post_count": 0,
-  "daily_post_date": null,
+  "daily_post_date": "2026-10-11",
   "paused": false,
   "auto_publish": false,
-  "current_stage": "idle",
-  "stage_updated_at": null,
+  "current_stage": "waiting",
+  "stage_updated_at": "2026-10-11T23:26:34.964880Z",
   "last_error": null,
   "gemini_fail_count": 0,
   "fallback_translator": "googletrans"
