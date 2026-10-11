@@ -140,7 +140,7 @@ def _handle_message(msg, state):
 
     if text == "/start":
         send_message(chat_id,
-            "🤖 ربات مدیریت کانال اخبار AI\n\n"
+            "🤖 <b>ربات مدیریت کانال اخبار AI</b>\n\n"
             "دستورات:\n"
             "/status - وضعیت\n"
             "/pending - اخبار در انتظار تایید\n"
@@ -156,6 +156,7 @@ def _handle_message(msg, state):
         paused = "⏸️ متوقف" if state.get("paused") else "▶️ فعال"
         auto = "روشن" if state.get("auto_publish") else "خاموش"
         send_message(chat_id,
+            f"📊 <b>وضعیت ربات</b>\n\n"
             f"وضعیت: {paused}\n"
             f"در انتظار تایید: {pending_count}\n"
             f"آماده انتشار: {approved_count}\n"
@@ -192,7 +193,7 @@ def _handle_message(msg, state):
         published = [p for p in pub if p.get("published")]
         rejected = [p for p in pub if not p.get("published")]
         send_message(chat_id,
-            f"📊 آمار:\n"
+            f"📊 <b>آمار</b>\n\n"
             f"منتشر شده: {len(published)}\n"
             f"رد شده: {len(rejected)}"
         )
@@ -214,10 +215,26 @@ def _send_review(item):
     trust = item.get("source_trust", 3)
     trust_emoji = "🟢" if trust >= 4 else "🟡" if trust >= 3 else "🔴"
 
+    # Score display
+    score = item.get("score", 0)
+    if score >= 70:
+        score_label = "زیاد"
+        score_emoji = "🟢"
+    elif score >= 50:
+        score_label = "متوسط"
+        score_emoji = "🟡"
+    elif score >= 30:
+        score_label = "کم"
+        score_emoji = "🟠"
+    else:
+        score_label = "ضعیف"
+        score_emoji = "🔴"
+
     text = f"📰 <b>{item['title_fa']}</b>\n\n"
     text += f"{item['summary_fa']}\n\n"
     text += f"📌 اهمیت: {item['importance']} | اعتبار: {item['confidence']}\n"
     text += f"{trust_emoji} منبع: {item['source']} (اعتبار: {trust}/5)\n"
+    text += f"{score_emoji} اسکور: {score}/100 ({score_label})\n"
     text += f"🏷️ {' '.join('#'+h for h in item['hashtags'])}"
     text += f"\n🔗 {item['link']}"
 

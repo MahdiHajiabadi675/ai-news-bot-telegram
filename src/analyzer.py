@@ -20,7 +20,7 @@ Analyze EACH article below. For each one output a JSON object with these fields:
   * rumor = unverified leak or speculation
 - category: "model_release" | "benchmark" | "funding" | "research" | "policy" | "tool_release" | "industry" | "other"
 - hashtags: array of 3-5 hashtags (mix Persian & English, no # prefix)
-- admin_question: string — if confidence != "confirmed", a short Persian question for the channel admin asking whether to publish (e.g. "این خبر هنوز تایید رسمی نشده. منتشر کنم؟")
+- admin_question: string — if confidence != "confirmed", a short Persian question for the channel admin
 
 IMPORTANT: The "source_trust" field indicates if the source is trusted (official) or not.
 For trusted sources, set confidence to "confirmed" unless clearly a rumor.
@@ -59,6 +59,7 @@ def analyze_articles(articles: list) -> list:
         }
     }
 
+    results = None
     for attempt in range(3):
         try:
             resp = requests.post(
@@ -69,7 +70,6 @@ def analyze_articles(articles: list) -> list:
             )
             resp.raise_for_status()
             text = resp.json()["candidates"][0]["content"]["parts"][0]["text"]
-            # Extract JSON if wrapped in markdown
             if "```" in text:
                 text = text.split("```")[1]
                 if text.startswith("json"):

@@ -11,7 +11,6 @@ def publish_approved(state):
         print("[INFO] Bot is paused, skipping publish")
         return state
 
-    # Check daily limit
     today = date.today().isoformat()
     if state.get("daily_post_date") != today:
         state["daily_post_date"] = today
@@ -23,7 +22,7 @@ def publish_approved(state):
 
     published_log = storage.load_published()
 
-    # Sort: featured first, then by importance
+    # Sort by score (highest first)
     importance_order = {"high": 0, "medium": 1, "low": 2}
     approved.sort(key=lambda x: (
         0 if x.get("admin_action") == "featured" else 1,
@@ -61,23 +60,32 @@ def format_message(item):
     source = _escape_html(item["source"])
     hashtags = " ".join(f"#{h}" for h in item["hashtags"])
 
-    # انتخاب ایموجی بر اساس نوع
+    # Creative formatting based on category and importance
     if item.get("category") == "fast_track":
         emoji = "📡"
+        divider = "─" * 20
     elif item.get("admin_action") == "featured":
         emoji = "⭐️"
+        divider = "═" * 20
     elif item.get("importance") == "high":
         emoji = "🔥"
+        divider = "─" * 20
+    elif item.get("confidence") == "rumor":
+        emoji = "⚠️"
+        divider = "─" * 20
     else:
         emoji = "🤖"
+        divider = "─" * 20
 
-    text = f"{emoji} <b>{title}</b>\n\n"
+    text = f"{emoji} <b>{title}</b>\n"
+    text += f"{divider}\n\n"
     text += f"{summary}\n\n"
+    text += f"{divider}\n"
     text += f"📰 منبع: <a href=\"{link}\">{source}</a>\n"
     text += f"🏷️ {hashtags}"
 
     if item.get("confidence") == "rumor":
-        text += "\n\n⚠️ <i>این خبر تایید رسمی نشده است</i>"
+        text += f"\n\n⚠️ <i>این خبر تایید رسمی نشده است</i>"
 
     return text
 

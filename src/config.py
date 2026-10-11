@@ -18,27 +18,34 @@ DATA_DIR = BASE_DIR / "data"
 MAX_POSTS_PER_DAY = int(os.getenv("MAX_POSTS_PER_DAY", "15"))
 COLLECT_INTERVAL_MIN = int(os.getenv("COLLECT_INTERVAL_MIN", "45"))
 
-# Auto-publish settings
-AUTO_PUBLISH_TRUSTED = os.getenv("AUTO_PUBLISH_TRUSTED", "true").lower() == "true"
-AUTO_PUBLISH_CONFIRMED = os.getenv("AUTO_PUBLISH_CONFIRMED", "true").lower() == "true"
+# Scoring weights
+SCORE_SOURCE_WEIGHT = 20
+SCORE_IMPORTANCE_WEIGHT = 30
+SCORE_CONFIDENCE_WEIGHT = 30
+SCORE_CATEGORY_WEIGHT = 20
 
-# Fast-track settings (بدون Gemini — فقط ترجمه/فرمت)
+# Thresholds
+AUTO_PUBLISH_THRESHOLD = 70
+AUTO_REJECT_THRESHOLD = 30
+
+# Auto-publish settings
+AUTO_PUBLISH_ENABLED = os.getenv("AUTO_PUBLISH_ENABLED", "true").lower() == "true"
+
+# Fast-track settings
 FAST_TRACK_ENABLED = os.getenv("FAST_TRACK_ENABLED", "true").lower() == "true"
 
-# AI Keywords for fast-track filtering (Persian & English)
+# AI Keywords for fast-track filtering
 AI_KEYWORDS = [
-    # Persian
     "هوش مصنوعی", "یادگیری ماشین", "مدل", "GPT", "LLM", "شبکه عصبی",
     "deepseek", "chatgpt", "gemini", "claude", "anthropic", "openai",
     "مصنوعی", "ماشین", "الگوریتم",
-    # English
     "AI", "artificial intelligence", "machine learning", "deep learning",
     "neural network", "LLM", "large language model", "GPT", "transformer",
     "diffusion", "generative", "inference", "training", "fine-tuning",
     "benchmark", "model release", "AI chip", "GPU", "CUDA",
 ]
 
-# Auto-reject keywords (اگر در عنوان باشد → رد خودکار)
+# Auto-reject keywords
 REJECT_KEYWORDS = [
     "crypto", "cryptocurrency", "bitcoin", "blockchain", "nft", "token sale",
     "casino", "betting", "gambling", "forex", "trading signals",
@@ -50,13 +57,27 @@ TRUST_SCORES = {
     "OpenAI Blog": 5,
     "Google AI": 5,
     "HuggingFace": 5,
+    "Anthropic": 5,
+    "Meta AI": 5,
     "MIT Tech Review": 4,
     "Ars Technica AI": 4,
     "TechCrunch AI": 4,
-    "VentureBeat AI": 3,
     "The Verge AI": 3,
     "Wired AI": 3,
+    "VentureBeat AI": 3,
     "AI News": 3,
     "دیجیاتو": 3,
     "تک‌راسا": 3,
+}
+
+# Category weights for scoring
+CATEGORY_WEIGHTS = {
+    "model_release": 1.0,
+    "benchmark": 0.9,
+    "funding": 0.8,
+    "research": 0.7,
+    "policy": 0.6,
+    "tool_release": 0.8,
+    "industry": 0.5,
+    "other": 0.3,
 }

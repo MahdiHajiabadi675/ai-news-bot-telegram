@@ -1,6 +1,6 @@
 """
 Fast-track processor — بدون Gemini، فقط ترجمه سریع + انتشار
-منابع فارسی: مستقیم فرمت + انتشار
+منابع فارسی: مستقیم فرمت + انتشار (بدون Gemini)
 منابع انگلیسی: ترجمه سریع با Gemini (minimal prompt)
 """
 import re
@@ -16,7 +16,6 @@ GEMINI_URL = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_M
 BASE = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
 def is_ai_related(text: str) -> bool:
-    """بررسی سریع با کلمات کلیدی"""
     text_lower = text.lower()
     for kw in AI_KEYWORDS:
         if kw.lower() in text_lower:
@@ -24,7 +23,6 @@ def is_ai_related(text: str) -> bool:
     return False
 
 def quick_translate(title: str, summary: str) -> dict:
-    """ترجمه سریع با Gemini (فقط عنوان + خلاصه کوتاه)"""
     prompt = f"""Translate to Persian. Keep it natural and concise.
 
 Title: {title}
@@ -58,19 +56,16 @@ Return JSON: {{"title_fa": "...", "summary_fa": "..."}}"""
         return {"title_fa": title, "summary_fa": summary[:300]}
 
 def process_fast_track(articles: list) -> list:
-    """پردازش fast-track: فیلتر AI + ترجمه + انتشار"""
     if not articles:
         return []
 
     published = []
     for article in articles:
-        # فیلتر سریع: آیا مرتبط با AI هست؟
         combined = article["title"] + " " + article["summary"]
         if not is_ai_related(combined):
             print(f"[FAST] Skipped (not AI): {article['title'][:60]}")
             continue
 
-        # بررسی سقف روزانه
         state = storage.load_state()
         today = datetime.utcnow().date().isoformat()
         if state.get("daily_post_date") != today:
@@ -80,7 +75,6 @@ def process_fast_track(articles: list) -> list:
             print(f"[FAST] Daily limit reached")
             break
 
-        # ترجمه
         if article["lang"] == "fa":
             item = {
                 "title_fa": article["title"],
@@ -107,7 +101,6 @@ def process_fast_track(articles: list) -> list:
                 "hash": article["hash"],
             }
 
-        # انتشار
         text = format_message(item)
         result = _send(text)
 
@@ -121,7 +114,6 @@ def process_fast_track(articles: list) -> list:
         else:
             print(f"[FAST] Failed: {result}")
 
-    # لاگ
     if published:
         log = storage.load_published()
         for item in published:
