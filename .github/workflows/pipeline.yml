@@ -30,7 +30,12 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Run pipeline
-        run: python main.py run
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            python main.py run --force
+          else
+            python main.py run
+          fi
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHANNEL_ID: ${{ secrets.TELEGRAM_CHANNEL_ID }}

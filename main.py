@@ -21,7 +21,7 @@ from src.bot import poll_updates, _send_review, notify_admin_new
 from src.publisher import publish_approved
 
 
-def run():
+def run(force=False):
     print(f"[{datetime.utcnow().isoformat()}] Pipeline started")
 
     # 1. Load state
@@ -32,11 +32,11 @@ def run():
     if updates:
         print(f"[INFO] Processed {len(updates)} bot updates")
 
-    # 3. Collect new articles (if interval passed)
+    # 3. Collect new articles (if interval passed or forced)
     now = datetime.utcnow()
     last_collect = state.get("last_collect_time")
-    should_collect = True
-    if last_collect:
+    should_collect = force
+    if not force and last_collect:
         last_dt = datetime.fromisoformat(last_collect.replace("Z", ""))
         if (now - last_dt).total_seconds() < COLLECT_INTERVAL_MIN * 60:
             should_collect = False
@@ -121,6 +121,7 @@ def auto_reject(articles: list) -> list:
 
 if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "run":
-        run()
+        force = "--force" in sys.argv
+        run(force=force)
     else:
-        print("Usage: python main.py run")
+        print("Usage: python main.py run [--force]")
