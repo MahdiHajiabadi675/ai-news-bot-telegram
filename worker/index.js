@@ -26,6 +26,14 @@ export default {
     }
 
     if (path === '/run' && request.method === 'POST') {
+      const auth = request.headers.get('Authorization') || '';
+      const token = auth.replace('Bearer ', '');
+      if (env.WORKER_SECRET && token !== env.WORKER_SECRET) {
+        return new Response(JSON.stringify({ ok: false, error: 'Unauthorized' }), {
+          status: 403,
+          headers: { 'Content-Type': 'application/json' }
+        });
+      }
       return handleRun(env, BASE, CHANNEL_ID, ADMIN_ID);
     }
 
