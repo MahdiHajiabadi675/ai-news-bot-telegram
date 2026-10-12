@@ -51,3 +51,14 @@ jobs:
             -H "Authorization: Bearer ${{ secrets.WORKER_SECRET }}" \
             -H "Content-Type: application/json" \
             --max-time 60
+
+      - name: Notify admin if Gemini failed
+        if: failure()
+        run: |
+          curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"chat_id\": ${{ secrets.TELEGRAM_ADMIN_ID }},
+              \"text\": \"⚠️ Gemini API خطا داد!\\n\\nلطفاً API Key رو چک کن.\\n\\nWorkflow: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}\",
+              \"parse_mode\": \"HTML\"
+            }"
