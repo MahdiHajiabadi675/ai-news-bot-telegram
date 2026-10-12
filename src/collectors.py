@@ -58,7 +58,7 @@ def collect(seen: set) -> list:
     for feed_cfg in FEEDS:
         try:
             d = feedparser.parse(feed_cfg["url"])
-            for entry in d.entries[:15]:
+            for entry in d.entries[:10]:
                 title = entry.get("title", "").strip()
                 link = entry.get("link", "")
                 if not title or not link:

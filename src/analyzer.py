@@ -67,31 +67,25 @@ def analyze_articles(articles: list) -> list:
 
     for model in models_to_try:
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
-        for attempt in range(2):
-            try:
-                resp = requests.post(
-                    url,
-                    params={"key": GEMINI_API_KEY},
-                    json=payload,
-                    timeout=60
-                )
-                resp.raise_for_status()
-                text = resp.json()["candidates"][0]["content"]["parts"][0]["text"]
-                if "```" in text:
-                    text = text.split("```")[1]
-                    if text.startswith("json"):
-                        text = text[4:]
-                results = json.loads(text)
-                print(f"[INFO] Gemini model {model} succeeded")
-                break
-            except Exception as e:
-                print(f"[WARN] Gemini {model} attempt {attempt+1}: {e}")
-                if attempt == 1:
-                    break
-                import time
-                time.sleep(2)
-        if results:
+        try:
+            resp = requests.post(
+                url,
+                params={"key": GEMINI_API_KEY},
+                json=payload,
+                timeout=30
+            )
+            resp.raise_for_status()
+            text = resp.json()["candidates"][0]["content"]["parts"][0]["text"]
+            if "```" in text:
+                text = text.split("```")[1]
+                if text.startswith("json"):
+                    text = text[4:]
+            results = json.loads(text)
+            print(f"[INFO] Gemini model {model} succeeded")
             break
+        except Exception as e:
+            print(f"[WARN] Gemini {model}: {e}")
+            continue
 
     if not results:
         print("[WARN] All Gemini models failed - using basic scoring")
