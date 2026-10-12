@@ -85,7 +85,9 @@ def run(force=False):
                 analyzed = analyze_articles(articles)
 
                 for a in articles:
-                    seen.add(a["hash"])
+                    news_id = a.get("id", a.get("hash", ""))
+                    if news_id:
+                        seen.add(news_id)
                 storage.save_seen(seen)
 
                 pending = storage.load_pending()
