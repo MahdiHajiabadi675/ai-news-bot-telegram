@@ -1,6 +1,6 @@
 /**
  * Cloudflare Worker — ربات تلگرام همیشه فعال
- * مقادیر از Secrets خونده میشن
+ * آمار و وضعیت کامل
  */
 
 export default {
@@ -93,7 +93,13 @@ async function handleMessage(msg, env, BASE, CHANNEL_ID, ADMIN_ID) {
 
   const pending = await getJSON(env, 'pending', []);
   const approved = await getJSON(env, 'approved', []);
-  const state = await getJSON(env, 'state', { paused: false, auto_publish: false, daily_post_count: 0, daily_post_date: null });
+  const state = await getJSON(env, 'state', {
+    paused: false,
+    auto_publish: false,
+    daily_post_count: 0,
+    daily_post_date: null,
+    current_stage: 'idle'
+  });
 
   // Check if editing
   for (const item of pending) {
@@ -116,26 +122,64 @@ async function handleMessage(msg, env, BASE, CHANNEL_ID, ADMIN_ID) {
       '/pause - توقف انتشار\n' +
       '/resume - ادامه انتشار\n' +
       '/auto on|off - انتشار خودکار\n' +
-      '/stats - آمار'
+      '/stats - آمار کامل'
     );
   } else if (text === '/status') {
     const stage = state.current_stage || 'idle';
-    const stageEmoji = { idle: '💤', collecting: '📡', analyzing: '🧠', publishing: '📤', waiting: '⏳' }[stage] || '❓';
+    const stageEmoji = {
+      idle: '💤',
+      collecting: '📡',
+      analyzing: '🧠',
+      publishing: '📤',
+      waiting: '⏳',
+      error: '🔴'
+    }[stage] || '❓';
+
     const paused = state.paused ? '⏸️ متوقف' : '▶️ فعال';
-    const auto = state.auto_publish ? 'روشن' : 'خاموش';
+    const auto = state.auto_publish ? 'روشن ✅' : 'خاموش ❌';
+    const today = new Date().toISOString().slice(0, 10);
+    const dailyCount = state.daily_post_date === today ? (state.daily_post_count || 0) : 0;
+    const maxPosts = 15;
+
+    // آمار کلی
+    const published = await getJSON(env, 'published', []);
+    const totalPublished = published.filter(p => p.published).length;
+    const totalRejected = published.filter(p => !p.published).length;
+
+    // منابع بر اساس تعداد
+    const sourceCounts = {};
+    for (const p of published) {
+      if (p.published) {
+        sourceCounts[p.source] = (sourceCounts[p.source] || 0) + 1;
+      }
+    }
+    const topSources = Object.entries(sourceCounts)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 3)
+      .map(([name, count]) => `${name}: ${count}`)
+      .join('\n');
+
     await sendMessage(BASE, ADMIN_ID,
       `📊 <b>وضعیت ربات</b>\n\n` +
-      `${stageEmoji} مرحله: ${stage}\n` +
+      `${stageEmoji} مرحله فعلی: <b>${stage}</b>\n` +
+      `━━━━━━━━━━━━━━\n` +
       `وضعیت: ${paused}\n` +
-      `در انتظار تایید: ${pending.length}\n` +
-      `آماده انتشار: ${approved.length}\n` +
-      `انتشار خودکار: ${auto}`
+      `انتشار خودکار: ${auto}\n` +
+      `━━━━━━━━━━━━━━\n` +
+      `📰 امروز: ${dailyCount}/${maxPosts}\n` +
+      `📋 در انتظار تایید: ${pending.length}\n` +
+      `✅ آماده انتشار: ${approved.length}\n` +
+      `━━━━━━━━━━━━━━\n` +
+      `📈 کل منتشر شده: ${totalPublished}\n` +
+      `❌ کل رد شده: ${totalRejected}\n` +
+      (topSources ? `━━━━━━━━━━━━━━\n🏆 برترین منابع:\n${topSources}` : '')
     );
   } else if (text === '/pending') {
     if (pending.length === 0) {
       await sendMessage(BASE, ADMIN_ID, '📭 خبری در انتظار تایید نیست');
       return;
     }
+    await sendMessage(BASE, ADMIN_ID, `📋 <b>${pending.length} خبر در انتظار تایید:</b>`);
     for (const item of pending.slice(0, 5)) {
       await sendReview(BASE, ADMIN_ID, item);
     }
@@ -151,15 +195,77 @@ async function handleMessage(msg, env, BASE, CHANNEL_ID, ADMIN_ID) {
       const val = parts[1] === 'on';
       await updateState(env, { auto_publish: val });
       await sendMessage(BASE, ADMIN_ID, `انتشار خودکار: ${val ? 'روشن ✅' : 'خاموش ❌'}`);
+    } else {
+      await sendMessage(BASE, ADMIN_ID, 'استفاده: /auto on یا /auto off');
     }
   } else if (text === '/stats') {
     const published = await getJSON(env, 'published', []);
-    const pubCount = published.filter(p => p.published).length;
-    const rejCount = published.filter(p => !p.published).length;
+    const totalPublished = published.filter(p => p.published).length;
+    const totalRejected = published.filter(p => !p.published).length;
+
+    // آمار بر اساس منبع
+    const sourceCounts = {};
+    for (const p of published) {
+      if (p.published) {
+        sourceCounts[p.source] = (sourceCounts[p.source] || 0) + 1;
+      }
+    }
+
+    // آمار بر اساس دسته‌بندی
+    const categoryCounts = {};
+    for (const p of published) {
+      if (p.published) {
+        categoryCounts[p.category] = (categoryCounts[p.category] || 0) + 1;
+      }
+    }
+
+    // آمار بر اساس اعتبار
+    const confidenceCounts = { confirmed: 0, likely: 0, rumor: 0 };
+    for (const p of published) {
+      if (p.published && confidenceCounts[p.confidence] !== undefined) {
+        confidenceCounts[p.confidence]++;
+      }
+    }
+
+    // آمار بر اساس اهمیت
+    const importanceCounts = { high: 0, medium: 0, low: 0 };
+    for (const p of published) {
+      if (p.published && importanceCounts[p.importance] !== undefined) {
+        importanceCounts[p.importance]++;
+      }
+    }
+
+    const sourceLines = Object.entries(sourceCounts)
+      .sort((a, b) => b[1] - a[1])
+      .map(([name, count]) => `  ${name}: ${count}`)
+      .join('\n');
+
+    const categoryLines = Object.entries(categoryCounts)
+      .sort((a, b) => b[1] - a[1])
+      .map(([name, count]) => `  ${name}: ${count}`)
+      .join('\n');
+
     await sendMessage(BASE, ADMIN_ID,
-      `📊 <b>آمار</b>\n\n` +
-      `منتشر شده: ${pubCount}\n` +
-      `رد شده: ${rejCount}`
+      `📊 <b>آمار کامل سیستم</b>\n\n` +
+      `━━━━━━━━━━━━━━\n` +
+      `📈 کل منتشر شده: <b>${totalPublished}</b>\n` +
+      `❌ کل رد شده: <b>${totalRejected}</b>\n` +
+      `📋 در انتظار: <b>${pending.length}</b>\n` +
+      `✅ آماده انتشار: <b>${approved.length}</b>\n\n` +
+      `━━━━━━━━━━━━━━\n` +
+      `📰 بر اساس منبع:\n${sourceLines}\n\n` +
+      `━━━━━━━━━━━━━━\n` +
+      `📂 بر اساس دسته‌بندی:\n${categoryLines}\n\n` +
+      `━━━━━━━━━━━━━━\n` +
+      `🔒 بر اساس اعتبار:\n` +
+      `  قطعی: ${confidenceCounts.confirmed}\n` +
+      `  احتمالی: ${confidenceCounts.likely}\n` +
+      `  شایعه: ${confidenceCounts.rumor}\n\n` +
+      `━━━━━━━━━━━━━━\n` +
+      `🔥 بر اساس اهمیت:\n` +
+      `  بالا: ${importanceCounts.high}\n` +
+      `  متوسط: ${importanceCounts.medium}\n` +
+      `  پایین: ${importanceCounts.low}`
     );
   }
 }
