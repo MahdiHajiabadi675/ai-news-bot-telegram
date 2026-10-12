@@ -4,37 +4,37 @@ import re
 from datetime import datetime
 from bs4 import BeautifulSoup
 
+# منابع رسمی و معتبر AI
 # trusted: منبع معتبر (انتشار خودکار با اسکور بالا)
-# fast_track: انتشار سریع بدون Gemini (فقط ترجمه فارسی)
+# fast_track: انتشار سریع بدون Gemini (فقط ترجمه)
 FEEDS = [
-    # === منابع معتبر (Trust 5) ===
+    # === منابع رسمی AI (Trust 5) ===
     {"name": "OpenAI Blog", "url": "https://openai.com/blog/rss.xml", "lang": "en", "trusted": True, "fast_track": False},
     {"name": "Google AI", "url": "https://blog.google/technology/ai/rss/", "lang": "en", "trusted": True, "fast_track": False},
-    {"name": "HuggingFace", "url": "https://huggingface.co/blog/feed.xml", "lang": "en", "trusted": True, "fast_track": False},
+    {"name": "DeepMind", "url": "https://deepmind.google/blog/rss.xml", "lang": "en", "trusted": True, "fast_track": False},
     {"name": "Anthropic", "url": "https://www.anthropic.com/rss.xml", "lang": "en", "trusted": True, "fast_track": False},
     {"name": "Meta AI", "url": "https://ai.meta.com/blog/rss/", "lang": "en", "trusted": True, "fast_track": False},
+    {"name": "HuggingFace", "url": "https://huggingface.co/blog/feed.xml", "lang": "en", "trusted": True, "fast_track": False},
+    {"name": "Microsoft AI", "url": "https://blogs.microsoft.com/ai/feed/", "lang": "en", "trusted": True, "fast_track": False},
 
-    # === منابع خوب (Trust 4) ===
+    # === منابع معتبر AI (Trust 4) ===
     {"name": "MIT Tech Review", "url": "https://www.technologyreview.com/topic/artificial-intelligence/feed", "lang": "en", "trusted": True, "fast_track": False},
     {"name": "Ars Technica AI", "url": "https://arstechnica.com/ai/feed/", "lang": "en", "trusted": True, "fast_track": False},
     {"name": "TechCrunch AI", "url": "https://techcrunch.com/category/artificial-intelligence/feed/", "lang": "en", "trusted": True, "fast_track": False},
+    {"name": "The Verge AI", "url": "https://www.theverge.com/rss/ai-artificial-intelligence/index.xml", "lang": "en", "trusted": True, "fast_track": False},
+    {"name": "Wired AI", "url": "https://www.wired.com/feed/tag/ai/latest/rss", "lang": "en", "trusted": True, "fast_track": False},
 
-    # === منابع متوسط (Trust 3) ===
-    {"name": "The Verge AI", "url": "https://www.theverge.com/rss/ai-artificial-intelligence/index.xml", "lang": "en", "trusted": False, "fast_track": False},
-    {"name": "Wired AI", "url": "https://www.wired.com/feed/tag/ai/latest/rss", "lang": "en", "trusted": False, "fast_track": False},
-    {"name": "VentureBeat AI", "url": "https://venturebeat.com/category/ai/feed/", "lang": "en", "trusted": False, "fast_track": False},
+    # === منابع تحقیقاتی AI (Trust 4) ===
+    {"name": "Papers with Code", "url": "https://paperswithcode.com/rss.xml", "lang": "en", "trusted": True, "fast_track": False},
     {"name": "AI News", "url": "https://www.artificialintelligence-news.com/feed/", "lang": "en", "trusted": False, "fast_track": False},
-
-    # === منابع فارسی (Fast-track) ===
-    {"name": "دیجیاتو", "url": "https://www.digiato.com/feed", "lang": "fa", "trusted": False, "fast_track": True},
-    {"name": "تک‌راسا", "url": "https://www.techrasa.com/feed", "lang": "fa", "trusted": False, "fast_track": True},
+    {"name": "VentureBeat AI", "url": "https://venturebeat.com/category/ai/feed/", "lang": "en", "trusted": False, "fast_track": False},
 ]
 
 def _normalize_url(url: str) -> str:
     """نرمال‌سازی لینک برای مقایسه بهتر"""
     url = url.strip().lower()
-    url = url.split("?")[0]  # حذف query params
-    url = url.rstrip("/")     # حذف اسلش آخر
+    url = url.split("?")[0]
+    url = url.rstrip("/")
     return url
 
 def _hash(title: str, link: str) -> str:
