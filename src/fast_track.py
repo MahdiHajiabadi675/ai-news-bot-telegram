@@ -14,6 +14,9 @@ from . import storage
 from .fallback_translator import translate_with_fallback
 
 GEMINI_URL = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent"
+
+# Fallback models
+FALLBACK_MODELS = ["gemini-2.0-flash", "gemini-1.5-flash-latest", "gemini-1.5-flash"]
 BASE = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
 def is_ai_related(text: str) -> bool:
@@ -43,34 +46,41 @@ Summary: {summary[:500]}
 
 Return JSON: {{"title_fa": "...", "summary_fa": "..."}}"""
 
-    try:
-        resp = requests.post(
-            GEMINI_URL,
-            params={"key": GEMINI_API_KEY},
-            json={
-                "contents": [{"parts": [{"text": prompt}]}],
-                "generationConfig": {
-                    "temperature": 0.3,
-                    "maxOutputTokens": 512,
-                    "responseMimeType": "application/json"
-                }
-            },
-            timeout=30
-        )
-        resp.raise_for_status()
-        text = resp.json()["candidates"][0]["content"]["parts"][0]["text"]
-        if "```" in text:
-            text = text.split("```")[1]
-            if text.startswith("json"):
-                text = text[4:]
-        result = json_mod.loads(text)
-        if not result.get("title_fa") or not result.get("summary_fa"):
-            print(f"[WARN] Empty translation result")
-            return None
-        return result
-    except Exception as e:
-        print(f"[WARN] Quick translate failed: {e}")
-        return None
+    models_to_try = [GEMINI_MODEL] + [m for m in FALLBACK_MODELS if m != GEMINI_MODEL]
+
+    for model in models_to_try:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+        try:
+            resp = requests.post(
+                url,
+                params={"key": GEMINI_API_KEY},
+                json={
+                    "contents": [{"parts": [{"text": prompt}]}],
+                    "generationConfig": {
+                        "temperature": 0.3,
+                        "maxOutputTokens": 512,
+                        "responseMimeType": "application/json"
+                    }
+                },
+                timeout=30
+            )
+            resp.raise_for_status()
+            text = resp.json()["candidates"][0]["content"]["parts"][0]["text"]
+            if "```" in text:
+                text = text.split("```")[1]
+                if text.startswith("json"):
+                    text = text[4:]
+            result = json_mod.loads(text)
+            if not result.get("title_fa") or not result.get("summary_fa"):
+                print(f"[WARN] Empty translation result")
+                continue
+            print(f"[INFO] Quick translate succeeded with {model}")
+            return result
+        except Exception as e:
+            print(f"[WARN] Quick translate {model} failed: {e}")
+            continue
+
+    return None
 
 def process_fast_track(articles: list) -> list:
     if not articles:

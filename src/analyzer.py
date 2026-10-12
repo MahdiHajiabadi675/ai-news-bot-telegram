@@ -4,6 +4,9 @@ from .config import GEMINI_API_KEY, GEMINI_MODEL
 
 GEMINI_URL = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent"
 
+# Fallback models in order
+FALLBACK_MODELS = ["gemini-2.0-flash", "gemini-1.5-flash-latest", "gemini-1.5-flash"]
+
 PROMPT = """You are an AI news analyst for a Persian Telegram channel about AI models.
 
 Analyze EACH article below. For each one output a JSON object with these fields:
@@ -60,29 +63,39 @@ def analyze_articles(articles: list) -> list:
     }
 
     results = None
-    for attempt in range(3):
-        try:
-            resp = requests.post(
-                GEMINI_URL,
-                params={"key": GEMINI_API_KEY},
-                json=payload,
-                timeout=60
-            )
-            resp.raise_for_status()
-            text = resp.json()["candidates"][0]["content"]["parts"][0]["text"]
-            if "```" in text:
-                text = text.split("```")[1]
-                if text.startswith("json"):
-                    text = text[4:]
-            results = json.loads(text)
+    models_to_try = [GEMINI_MODEL] + [m for m in FALLBACK_MODELS if m != GEMINI_MODEL]
+
+    for model in models_to_try:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+        for attempt in range(2):
+            try:
+                resp = requests.post(
+                    url,
+                    params={"key": GEMINI_API_KEY},
+                    json=payload,
+                    timeout=60
+                )
+                resp.raise_for_status()
+                text = resp.json()["candidates"][0]["content"]["parts"][0]["text"]
+                if "```" in text:
+                    text = text.split("```")[1]
+                    if text.startswith("json"):
+                        text = text[4:]
+                results = json.loads(text)
+                print(f"[INFO] Gemini model {model} succeeded")
+                break
+            except Exception as e:
+                print(f"[WARN] Gemini {model} attempt {attempt+1}: {e}")
+                if attempt == 1:
+                    break
+                import time
+                time.sleep(2)
+        if results:
             break
-        except Exception as e:
-            print(f"[WARN] Gemini attempt {attempt+1}: {e}")
-            if attempt == 2:
-                print("[ERROR] Gemini API failed after 3 attempts")
-                return []
-            import time
-            time.sleep(2)
+
+    if not results:
+        print("[ERROR] All Gemini models failed")
+        return []
 
     analyzed = []
     for i, a in enumerate(articles):
