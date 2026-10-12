@@ -15,7 +15,7 @@ concurrency:
 jobs:
   pipeline:
     runs-on: ubuntu-latest
-    timeout-minutes: 8
+    timeout-minutes: 15
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -47,6 +47,7 @@ jobs:
 
       - name: Trigger worker to publish
         run: |
-          curl -X POST "${{ secrets.WORKER_URL }}/run" \
+          curl -s -X POST "${{ secrets.WORKER_URL }}/run" \
             -H "Authorization: Bearer ${{ secrets.WORKER_SECRET }}" \
-            -H "Content-Type: application/json"
+            -H "Content-Type: application/json" \
+            --max-time 60
