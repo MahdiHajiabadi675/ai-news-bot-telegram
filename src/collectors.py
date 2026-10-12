@@ -40,9 +40,11 @@ def _normalize_url(url: str) -> str:
     url = url.rstrip("/")
     return url
 
-def _hash(title: str, link: str) -> str:
-    """هش بر اساس لینک نرمال‌شده (نه عنوان) تا تکراری نشناخته شه"""
-    return hashlib.sha256(_normalize_url(link).encode("utf-8")).hexdigest()[:20]
+def _generate_id(title: str, link: str) -> str:
+    """ساخت ID یکتا برای خبر"""
+    # ترکیب لینک نرمال‌شده + عنوان هش شده
+    normalized = _normalize_url(link) + "|" + title.strip().lower()
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:16]
 
 def _clean_html(html):
     if not html:
@@ -68,12 +70,12 @@ def collect(seen: set) -> list:
                     summary = content[0].get("value", summary)
                 summary = _clean_html(summary)
 
-                h = _hash(title, link)
-                if h in seen:
+                news_id = _generate_id(title, link)
+                if news_id in seen:
                     continue
 
                 articles.append({
-                    "hash": h,
+                    "id": news_id,
                     "source": feed_cfg["name"],
                     "lang": feed_cfg["lang"],
                     "trusted": feed_cfg["trusted"],
@@ -81,7 +83,9 @@ def collect(seen: set) -> list:
                     "title": title,
                     "link": link,
                     "summary": summary,
-                    "collected_at": datetime.utcnow().isoformat() + "Z"
+                    "collected_at": datetime.utcnow().isoformat() + "Z",
+                    "status": "new",
+                    "published": False
                 })
         except Exception as e:
             print(f"[WARN] {feed_cfg['name']}: {e}")

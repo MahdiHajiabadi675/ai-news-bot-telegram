@@ -51,3 +51,13 @@ def load_published():
 
 def save_published(items):
     cloudflare_kv.put("published", items)
+
+def is_duplicate(news_id: str) -> bool:
+    """آیا خبر تکراریه؟"""
+    return news_id in load_seen()
+
+def mark_as_seen(news_id: str):
+    """علامت زدن خبر به عنوان دیده شده"""
+    seen = load_seen()
+    seen.add(news_id)
+    save_seen(seen)
