@@ -94,6 +94,7 @@ def run(force=False):
                 for item in analyzed:
                     source_trust = TRUST_SCORES.get(item["source"], 3)
                     item["source_trust"] = source_trust
+                    item["id"] = item.get("id", item.get("hash", ""))
                     item["score"] = calculate_score(item)
 
                     if item["score"] < AUTO_REJECT_THRESHOLD:

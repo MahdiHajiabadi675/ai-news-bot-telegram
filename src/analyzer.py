@@ -93,7 +93,7 @@ def analyze_articles(articles: list) -> list:
         analyzed = []
         for a in articles:
             analyzed.append({
-                "hash": a["hash"],
+                "id": a.get("id", a.get("hash", "")),
                 "source": a["source"],
                 "lang": a["lang"],
                 "trusted": a.get("trusted", False),
@@ -117,6 +117,7 @@ def analyze_articles(articles: list) -> list:
             continue
 
         a.update({
+            "id": a.get("id", a.get("hash", "")),
             "title_fa": r.get("title_fa", a["title"]),
             "summary_fa": r.get("summary_fa", ""),
             "importance": r.get("importance", "medium"),
