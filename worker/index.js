@@ -287,6 +287,7 @@ async function sendReview(BASE, ADMIN_ID, item) {
 
   let text = `📰 <b>${item.title_fa}</b>\n\n`;
   text += `${item.summary_fa}\n\n`;
+  text += `🆔 ID: <code>${item.hash || item.id || 'N/A'}</code>\n`;
   text += `📌 اهمیت: ${item.importance} | اعتبار: ${item.confidence}\n`;
   text += `${trustEmoji} منبع: ${item.source} (${trust}/5)\n`;
   text += `${scoreEmoji} اسکور: ${score}/100 (${scoreLabel})\n`;
