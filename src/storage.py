@@ -1,21 +1,10 @@
-import json
-from pathlib import Path
-from .config import DATA_DIR
-
-def _load(fname, default):
-    f = DATA_DIR / fname
-    if f.exists():
-        with open(f, "r", encoding="utf-8") as fp:
-            return json.load(fp)
-    return default
-
-def _save(fname, data):
-    f = DATA_DIR / fname
-    with open(f, "w", encoding="utf-8") as fp:
-        json.dump(data, fp, ensure_ascii=False, indent=2)
+"""
+Storage — از Cloudflare KV استفاده می‌کنه
+"""
+from . import cloudflare_kv
 
 def load_state():
-    return _load("state.json", {
+    return cloudflare_kv.get("state", {
         "last_update_id": 0,
         "last_collect_time": None,
         "daily_post_count": 0,
@@ -25,12 +14,11 @@ def load_state():
         "current_stage": "idle",
         "stage_updated_at": None,
         "last_error": None,
-        "gemini_fail_count": 0,
-        "fallback_translator": "googletrans"
+        "gemini_fail_count": 0
     })
 
 def save_state(state):
-    _save("state.json", state)
+    cloudflare_kv.put("state", state)
 
 def set_stage(state, stage, error=None):
     state["current_stage"] = stage
@@ -41,25 +29,25 @@ def set_stage(state, stage, error=None):
     return state
 
 def load_seen():
-    return set(_load("seen.json", []))
+    return set(cloudflare_kv.get("seen", []))
 
 def save_seen(seen):
-    _save("seen.json", list(seen))
+    cloudflare_kv.put("seen", list(seen))
 
 def load_pending():
-    return _load("pending.json", [])
+    return cloudflare_kv.get("pending", [])
 
 def save_pending(items):
-    _save("pending.json", items)
+    cloudflare_kv.put("pending", items)
 
 def load_approved():
-    return _load("approved.json", [])
+    return cloudflare_kv.get("approved", [])
 
 def save_approved(items):
-    _save("approved.json", items)
+    cloudflare_kv.put("approved", items)
 
 def load_published():
-    return _load("published.json", [])
+    return cloudflare_kv.get("published", [])
 
 def save_published(items):
-    _save("published.json", items)
+    cloudflare_kv.put("published", items)
