@@ -1,43 +1,39 @@
 /**
  * Cloudflare Worker — ربات تلگرام همیشه فعال
- * دریافت webhook، دستورات، دکمه‌ها + انتشار در کانال
+ * مقادیر از Secrets خونده میشن
  */
-
-const BOT_TOKEN = '';
-const CHANNEL_ID = '';
-const ADMIN_ID = 0;
-const BASE = `https://api.telegram.org/bot${BOT_TOKEN}`;
 
 export default {
   async fetch(request, env) {
+    const BOT_TOKEN = env.BOT_TOKEN;
+    const CHANNEL_ID = env.CHANNEL_ID;
+    const ADMIN_ID = Number(env.ADMIN_ID);
+    const BASE = `https://api.telegram.org/bot${BOT_TOKEN}`;
+
     const url = new URL(request.url);
     const path = url.pathname;
 
     if (path === '/webhook' && request.method === 'POST') {
-      return handleWebhook(request, env);
+      const update = await request.json();
+
+      if (update.callback_query) {
+        await handleCallback(update.callback_query, env, BASE, CHANNEL_ID, ADMIN_ID);
+      } else if (update.message) {
+        await handleMessage(update.message, env, BASE, CHANNEL_ID, ADMIN_ID);
+      }
+
+      return new Response('OK');
     }
 
     if (path === '/run' && request.method === 'POST') {
-      return handleRun(request, env);
+      return handleRun(env, BASE, CHANNEL_ID, ADMIN_ID);
     }
 
     return new Response('OK');
   }
 };
 
-async function handleWebhook(request, env) {
-  const update = await request.json();
-
-  if (update.callback_query) {
-    await handleCallback(update.callback_query, env);
-  } else if (update.message) {
-    await handleMessage(update.message, env);
-  }
-
-  return new Response('OK');
-}
-
-async function handleCallback(cb, env) {
+async function handleCallback(cb, env, BASE, CHANNEL_ID, ADMIN_ID) {
   const data = cb.data || '';
   const cbId = cb.id;
   const parts = data.split(':');
@@ -48,46 +44,48 @@ async function handleCallback(cb, env) {
   const approved = await getJSON(env, 'approved', []);
 
   if (action === 'approve') {
-    const item = pending.find(i => i.hash === itemHash);
-    if (item) {
+    const idx = pending.findIndex(i => i.hash === itemHash);
+    if (idx !== -1) {
+      const item = pending.splice(idx, 1)[0];
       item.status = 'approved';
       item.admin_action = 'approved';
       approved.push(item);
-      await saveJSON(env, 'pending', pending.filter(i => i.hash !== itemHash));
+      await saveJSON(env, 'pending', pending);
       await saveJSON(env, 'approved', approved);
-      await answerCallback(cbId, '✅ تایید شد');
+      await answerCallback(BASE, cbId, '✅ تایید شد');
     }
   } else if (action === 'reject') {
     await saveJSON(env, 'pending', pending.filter(i => i.hash !== itemHash));
-    await answerCallback(cbId, '❌ رد شد');
+    await answerCallback(BASE, cbId, '❌ رد شد');
   } else if (action === 'feature') {
-    const item = pending.find(i => i.hash === itemHash);
-    if (item) {
+    const idx = pending.findIndex(i => i.hash === itemHash);
+    if (idx !== -1) {
+      const item = pending.splice(idx, 1)[0];
       item.status = 'approved';
       item.admin_action = 'featured';
       approved.push(item);
-      await saveJSON(env, 'pending', pending.filter(i => i.hash !== itemHash));
+      await saveJSON(env, 'pending', pending);
       await saveJSON(env, 'approved', approved);
-      await answerCallback(cbId, '⭐️ ویژه');
+      await answerCallback(BASE, cbId, '⭐️ ویژه');
     }
   } else if (action === 'edit') {
     const item = pending.find(i => i.hash === itemHash);
     if (item) {
       item._editing = true;
       await saveJSON(env, 'pending', pending);
-      await sendMessage(ADMIN_ID, '✏️ متن ویرایش‌شده رو بفرست:');
-      await answerCallback(cbId);
+      await sendMessage(BASE, ADMIN_ID, '✏️ متن ویرایش‌شده رو بفرست:');
+      await answerCallback(BASE, cbId, '');
     }
   } else if (action === 'pause') {
     await updateState(env, { paused: true });
-    await answerCallback(cbId, '⏸️ متوقف');
+    await answerCallback(BASE, cbId, '⏸️ متوقف');
   } else if (action === 'resume') {
     await updateState(env, { paused: false });
-    await answerCallback(cbId, '▶️ فعال');
+    await answerCallback(BASE, cbId, '▶️ فعال');
   }
 }
 
-async function handleMessage(msg, env) {
+async function handleMessage(msg, env, BASE, CHANNEL_ID, ADMIN_ID) {
   const text = (msg.text || '').trim();
   const chatId = msg.chat.id;
 
@@ -104,13 +102,13 @@ async function handleMessage(msg, env) {
       item._editing = false;
       item._edited = true;
       await saveJSON(env, 'pending', pending);
-      await sendMessage(ADMIN_ID, '✅ ویرایش انجام شد');
+      await sendMessage(BASE, ADMIN_ID, '✅ ویرایش انجام شد');
       return;
     }
   }
 
   if (text === '/start') {
-    await sendMessage(ADMIN_ID,
+    await sendMessage(BASE, ADMIN_ID,
       '🤖 <b>ربات مدیریت کانال اخبار AI</b>\n\n' +
       'دستورات:\n' +
       '/status - وضعیت سیستم\n' +
@@ -125,7 +123,7 @@ async function handleMessage(msg, env) {
     const stageEmoji = { idle: '💤', collecting: '📡', analyzing: '🧠', publishing: '📤', waiting: '⏳' }[stage] || '❓';
     const paused = state.paused ? '⏸️ متوقف' : '▶️ فعال';
     const auto = state.auto_publish ? 'روشن' : 'خاموش';
-    await sendMessage(ADMIN_ID,
+    await sendMessage(BASE, ADMIN_ID,
       `📊 <b>وضعیت ربات</b>\n\n` +
       `${stageEmoji} مرحله: ${stage}\n` +
       `وضعیت: ${paused}\n` +
@@ -135,30 +133,30 @@ async function handleMessage(msg, env) {
     );
   } else if (text === '/pending') {
     if (pending.length === 0) {
-      await sendMessage(ADMIN_ID, '📭 خبری در انتظار تایید نیست');
+      await sendMessage(BASE, ADMIN_ID, '📭 خبری در انتظار تایید نیست');
       return;
     }
     for (const item of pending.slice(0, 5)) {
-      await sendReview(item);
+      await sendReview(BASE, ADMIN_ID, item);
     }
   } else if (text === '/pause') {
     await updateState(env, { paused: true });
-    await sendMessage(ADMIN_ID, '⏸️ انتشار متوقف شد');
+    await sendMessage(BASE, ADMIN_ID, '⏸️ انتشار متوقف شد');
   } else if (text === '/resume') {
     await updateState(env, { paused: false });
-    await sendMessage(ADMIN_ID, '▶️ انتشار ادامه یافت');
+    await sendMessage(BASE, ADMIN_ID, '▶️ انتشار ادامه یافت');
   } else if (text.startsWith('/auto')) {
     const parts = text.split();
     if (parts.length > 1 && ['on', 'off'].includes(parts[1])) {
       const val = parts[1] === 'on';
       await updateState(env, { auto_publish: val });
-      await sendMessage(ADMIN_ID, `انتشار خودکار: ${val ? 'روشن ✅' : 'خاموش ❌'}`);
+      await sendMessage(BASE, ADMIN_ID, `انتشار خودکار: ${val ? 'روشن ✅' : 'خاموش ❌'}`);
     }
   } else if (text === '/stats') {
     const published = await getJSON(env, 'published', []);
     const pubCount = published.filter(p => p.published).length;
     const rejCount = published.filter(p => !p.published).length;
-    await sendMessage(ADMIN_ID,
+    await sendMessage(BASE, ADMIN_ID,
       `📊 <b>آمار</b>\n\n` +
       `منتشر شده: ${pubCount}\n` +
       `رد شده: ${rejCount}`
@@ -166,7 +164,7 @@ async function handleMessage(msg, env) {
   }
 }
 
-async function sendReview(item) {
+async function sendReview(BASE, ADMIN_ID, item) {
   const trust = item.source_trust || 3;
   const trustEmoji = trust >= 4 ? '🟢' : trust >= 3 ? '🟡' : '🔴';
   const score = item.score || 0;
@@ -198,10 +196,10 @@ async function sendReview(item) {
     ]
   };
 
-  await sendMessage(ADMIN_ID, text, keyboard);
+  await sendMessage(BASE, ADMIN_ID, text, keyboard);
 }
 
-async function handleRun(request, env) {
+async function handleRun(env, BASE, CHANNEL_ID, ADMIN_ID) {
   const approved = await getJSON(env, 'approved', []);
   const state = await getJSON(env, 'state', {});
 
@@ -247,7 +245,7 @@ async function handleRun(request, env) {
       text += '\n\n⚠️ <i>این خبر تایید رسمی نشده است</i>';
     }
 
-    const result = await sendMessage(CHANNEL_ID, text);
+    const result = await sendMessage(BASE, CHANNEL_ID, text);
     if (result && result.ok) {
       state.daily_post_count++;
       published++;
@@ -260,14 +258,14 @@ async function handleRun(request, env) {
   }
 
   await saveJSON(env, 'approved', remaining);
-  await updateState(state, env);
+  await saveJSON(env, 'state', state);
 
   return new Response(JSON.stringify({ ok: true, published, remaining: remaining.length }), { headers: { 'Content-Type': 'application/json' } });
 }
 
 // === Helpers ===
 
-async function sendMessage(chatId, text, replyMarkup = null) {
+async function sendMessage(BASE, chatId, text, replyMarkup = null) {
   const data = { chat_id: chatId, text, parse_mode: 'HTML' };
   if (replyMarkup) data.reply_markup = replyMarkup;
   try {
@@ -283,7 +281,7 @@ async function sendMessage(chatId, text, replyMarkup = null) {
   }
 }
 
-async function answerCallback(cbId, text) {
+async function answerCallback(BASE, cbId, text) {
   try {
     await fetch(`${BASE}/answerCallbackQuery`, {
       method: 'POST',
