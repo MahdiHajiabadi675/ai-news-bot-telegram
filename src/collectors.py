@@ -4,9 +4,6 @@ import re
 from datetime import datetime
 from bs4 import BeautifulSoup
 
-# منابع رسمی و معتبر AI
-# trusted: منبع معتبر (انتشار خودکار با اسکور بالا)
-# fast_track: انتشار سریع بدون Gemini (فقط ترجمه)
 FEEDS = [
     # === منابع رسمی AI (Trust 5) ===
     {"name": "OpenAI Blog", "url": "https://openai.com/blog/rss.xml", "lang": "en", "trusted": True, "fast_track": False},
@@ -26,8 +23,14 @@ FEEDS = [
 
     # === منابع تحقیقاتی AI (Trust 4) ===
     {"name": "Papers with Code", "url": "https://paperswithcode.com/rss.xml", "lang": "en", "trusted": True, "fast_track": False},
-    {"name": "AI News", "url": "https://www.artificialintelligence-news.com/feed/", "lang": "en", "trusted": False, "fast_track": False},
-    {"name": "VentureBeat AI", "url": "https://venturebeat.com/category/ai/feed/", "lang": "en", "trusted": False, "fast_track": False},
+
+    # === منابع عمومی معتبر (Trust 3) ===
+    {"name": "TechCrunch", "url": "https://techcrunch.com/feed/", "lang": "en", "trusted": False, "fast_track": False},
+    {"name": "The Verge", "url": "https://www.theverge.com/rss/index.xml", "lang": "en", "trusted": False, "fast_track": False},
+    {"name": "Ars Technica", "url": "https://arstechnica.com/feed/", "lang": "en", "trusted": False, "fast_track": False},
+    {"name": "دیجیاتو", "url": "https://www.digiato.com/feed", "lang": "fa", "trusted": False, "fast_track": False},
+    {"name": "زومگ", "url": "https://zoomg.ir/feed", "lang": "fa", "trusted": False, "fast_track": False},
+    {"name": "تک‌راسا", "url": "https://www.techrasa.com/feed", "lang": "fa", "trusted": False, "fast_track": False},
 ]
 
 def _normalize_url(url: str) -> str:
