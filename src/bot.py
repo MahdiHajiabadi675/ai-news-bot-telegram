@@ -264,18 +264,19 @@ def _send_review(item):
     if item.get("admin_question"):
         text += f"\n\n❓ {item['admin_question']}"
 
+    item_id = item.get("id", item.get("hash", ""))
     keyboard = {
         "inline_keyboard": [
             [
-                {"text": "✅ تایید", "callback_data": f"approve:{item['hash']}"},
-                {"text": "❌ رد", "callback_data": f"reject:{item['hash']}"}
+                {"text": "✅ تایید", "callback_data": f"approve:{item_id}"},
+                {"text": "❌ رد", "callback_data": f"reject:{item_id}"}
             ],
             [
-                {"text": "⭐️ ویژه", "callback_data": f"feature:{item['hash']}"},
-                {"text": "✏️ ویرایش", "callback_data": f"edit:{item['hash']}"}
+                {"text": "⭐️ ویژه", "callback_data": f"feature:{item_id}"},
+                {"text": "✏️ ویرایش", "callback_data": f"edit:{item_id}"}
             ],
             [
-                {"text": "🔗 مشاهده منبع", "url": item["link"]}
+                {"text": "🔗 مشاهده منبع", "url": item.get("link", "")}
             ]
         ]
     }
