@@ -10,6 +10,9 @@ ADMIN_ID = int(os.getenv("TELEGRAM_ADMIN_ID", "0"))
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
 
+# Groq (LLM جایگزین رایگان)
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
+
 # Paths
 BASE_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = BASE_DIR / "data"
