@@ -26,15 +26,22 @@ export default {
     }
 
     if (path === '/run' && request.method === 'POST') {
+      console.log('=== /run endpoint called ===');
       const auth = request.headers.get('Authorization') || '';
       const token = auth.replace('Bearer ', '');
+      console.log('Auth token received:', token ? 'yes' : 'no');
+      console.log('Expected secret exists:', env.WORKER_SECRET ? 'yes' : 'no');
       if (env.WORKER_SECRET && token !== env.WORKER_SECRET) {
+        console.log('ERROR: Unauthorized - token mismatch');
         return new Response(JSON.stringify({ ok: false, error: 'Unauthorized' }), {
           status: 403,
           headers: { 'Content-Type': 'application/json' }
         });
       }
-      return handleRun(env, BASE, CHANNEL_ID, ADMIN_ID);
+      console.log('Calling handleRun...');
+      const result = await handleRun(env, BASE, CHANNEL_ID, ADMIN_ID);
+      console.log('handleRun result:', result.status);
+      return result;
     }
 
     return new Response('OK');
@@ -315,10 +322,14 @@ async function sendReview(BASE, ADMIN_ID, item) {
 }
 
 async function handleRun(env, BASE, CHANNEL_ID, ADMIN_ID) {
+  console.log('[handleRun] Started');
   const approved = await getJSON(env, 'approved', []);
   const state = await getJSON(env, 'state', {});
+  console.log('[handleRun] Approved items:', approved.length);
+  console.log('[handleRun] State:', JSON.stringify(state));
 
   if (state.paused) {
+    console.log('[handleRun] Bot is paused, skipping');
     return new Response(JSON.stringify({ ok: true, skipped: 'paused' }), { headers: { 'Content-Type': 'application/json' } });
   }
 
@@ -360,14 +371,18 @@ async function handleRun(env, BASE, CHANNEL_ID, ADMIN_ID) {
       text += '\n\n⚠️ <i>این خبر تایید رسمی نشده است</i>';
     }
 
+    console.log('[handleRun] Publishing:', item.title_fa?.substring(0, 50));
     const result = await sendMessage(BASE, CHANNEL_ID, text);
+    console.log('[handleRun] Send result:', JSON.stringify(result));
     if (result && result.ok) {
       state.daily_post_count++;
       published++;
       const publishedLog = await getJSON(env, 'published', []);
       publishedLog.push({ ...item, published: true, published_at: new Date().toISOString() });
       await saveJSON(env, 'published', publishedLog);
+      console.log('[handleRun] Published successfully');
     } else {
+      console.log('[handleRun] Failed to publish');
       remaining.push(item);
     }
   }
