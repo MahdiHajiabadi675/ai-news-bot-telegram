@@ -1,0 +1,22 @@
+name: Keep Alive
+
+on:
+  schedule:
+    - cron: '*/10 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  keepalive:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Keep alive
+        run: |
+          echo "✅ Keep alive at $(date)"
+          echo "This workflow ensures scheduled runs stay active."
