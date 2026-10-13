@@ -59,7 +59,7 @@ async function handleCallback(cb, env, BASE, CHANNEL_ID, ADMIN_ID) {
   const approved = await getJSON(env, 'approved', []);
 
   if (action === 'approve') {
-    const idx = pending.findIndex(i => i.hash === itemHash);
+    const idx = pending.findIndex(i => (i.hash === itemHash || i.id === itemHash));
     if (idx !== -1) {
       const item = pending.splice(idx, 1)[0];
       item.status = 'approved';
@@ -67,7 +67,9 @@ async function handleCallback(cb, env, BASE, CHANNEL_ID, ADMIN_ID) {
       approved.push(item);
       await saveJSON(env, 'pending', pending);
       await saveJSON(env, 'approved', approved);
-      await answerCallback(BASE, cbId, '✅ تایید شد');
+      await answerCallback(BASE, cbId, '✅ تایید شد — در حال انتشار...');
+      // انتشار فوری
+      await publishItem(env, BASE, CHANNEL_ID, ADMIN_ID, item);
     }
   } else if (action === 'reject') {
     await saveJSON(env, 'pending', pending.filter(i => i.hash !== itemHash));
@@ -319,6 +321,52 @@ async function sendReview(BASE, ADMIN_ID, item) {
   };
 
   await sendMessage(BASE, ADMIN_ID, text, keyboard);
+}
+
+async function publishItem(env, BASE, CHANNEL_ID, ADMIN_ID, item) {
+  const state = await getJSON(env, 'state', {});
+  if (state.paused) {
+    console.log('[publishItem] Bot is paused');
+    return;
+  }
+
+  const today = new Date().toISOString().slice(0, 10);
+  if (state.daily_post_date !== today) {
+    state.daily_post_date = today;
+    state.daily_post_count = 0;
+  }
+
+  if (state.daily_post_count >= 15) {
+    console.log('[publishItem] Daily limit reached');
+    return;
+  }
+
+  let text = '';
+  if (item.category === 'fast_track') {
+    text = `📡 <b>${item.title_fa}</b>\n\n${item.summary_fa}\n\n📰 منبع: <a href="${item.link}">${item.source}</a>\n🏷️ ${(item.hashtags || []).map(h => '#' + h).join(' ')}`;
+  } else if (item.admin_action === 'featured') {
+    text = `⭐️ <b>${item.title_fa}</b>\n\n${item.summary_fa}\n\n📰 منبع: <a href="${item.link}">${item.source}</a>\n🏷️ ${(item.hashtags || []).map(h => '#' + h).join(' ')}`;
+  } else if (item.importance === 'high') {
+    text = `🔥 <b>${item.title_fa}</b>\n\n${item.summary_fa}\n\n📰 منبع: <a href="${item.link}">${item.source}</a>\n🏷️ ${(item.hashtags || []).map(h => '#' + h).join(' ')}`;
+  } else {
+    text = `🤖 <b>${item.title_fa}</b>\n\n${item.summary_fa}\n\n📰 منبع: <a href="${item.link}">${item.source}</a>\n🏷️ ${(item.hashtags || []).map(h => '#' + h).join(' ')}`;
+  }
+
+  if (item.confidence === 'rumor') {
+    text += '\n\n⚠️ <i>این خبر تایید رسمی نشده است</i>';
+  }
+
+  const result = await sendMessage(BASE, CHANNEL_ID, text);
+  if (result && result.ok) {
+    state.daily_post_count++;
+    await saveJSON(env, 'state', state);
+    const publishedLog = await getJSON(env, 'published', []);
+    publishedLog.push({ ...item, published: true, published_at: new Date().toISOString() });
+    await saveJSON(env, 'published', publishedLog);
+    console.log('[publishItem] Published:', item.title_fa?.substring(0, 50));
+  } else {
+    console.log('[publishItem] Failed to publish');
+  }
 }
 
 async function handleRun(env, BASE, CHANNEL_ID, ADMIN_ID) {
