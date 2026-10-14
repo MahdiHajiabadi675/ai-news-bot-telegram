@@ -35,17 +35,12 @@ def analyze_articles(articles: list) -> list:
     if not articles:
         return []
 
-    # اول Gemini را امتحان کن
-    results = _try_gemini(articles)
+    # فقط یک درخواست به Gemini
+    results = _try_gemini_once(articles)
 
-    # اگه Gemini fail شد → Groq
-    if not results and GROQ_API_KEY:
-        print("[INFO] Gemini failed, trying Groq...")
-        results = _try_groq(articles)
-
-    # اگه هر دو fail شد → basic scoring (فقط ترجمه)
+    # اگه Gemini fail شد → basic scoring (بدون هیچ LLM دیگه‌ای)
     if not results:
-        print("[WARN] All LLMs failed - using basic scoring (translate only)")
+        print("[WARN] Gemini failed - using basic scoring (translate only)")
         return _basic_scoring(articles)
 
     # ادغام نتایج
@@ -73,8 +68,8 @@ def analyze_articles(articles: list) -> list:
     print(f"[INFO] Analyzed: {len(analyzed)} relevant from {len(articles)}")
     return analyzed
 
-def _try_gemini(articles: list):
-    """تلاش برای Gemini"""
+def _try_gemini_once(articles: list):
+    """فقط یک درخواست به Gemini"""
     if not GEMINI_API_KEY:
         return None
 
@@ -88,60 +83,23 @@ def _try_gemini(articles: list):
         }
     }
 
-    for model in [GEMINI_MODEL] + [m for m in FALLBACK_MODELS if m != GEMINI_MODEL]:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
-        try:
-            resp = requests.post(url, params={"key": GEMINI_API_KEY}, json=payload, timeout=30)
-            resp.raise_for_status()
-            text = resp.json()["candidates"][0]["content"]["parts"][0]["text"]
-            if "```" in text:
-                text = text.split("```")[1]
-                if text.startswith("json"):
-                    text = text[4:]
-            results = json.loads(text)
-            print(f"[INFO] Gemini {model} succeeded")
-            return results
-        except Exception as e:
-            print(f"[WARN] Gemini {model}: {e}")
-            continue
-    return None
-
-def _try_groq(articles: list):
-    """تلاش برای Groq (جایگزین رایگان)"""
-    if not GROQ_API_KEY:
-        return None
-
-    articles_text = _build_articles_text(articles)
-    prompt = PROMPT + articles_text
-
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent"
     try:
-        resp = requests.post(
-            GROQ_URL,
-            headers={
-                "Authorization": f"Bearer {GROQ_API_KEY}",
-                "Content-Type": "application/json"
-            },
-            json={
-                "model": GROQ_MODEL,
-                "messages": [{"role": "user", "content": prompt}],
-                "temperature": 0.3,
-                "max_tokens": 4096,
-                "response_format": {"type": "json_object"}
-            },
-            timeout=60
-        )
+        resp = requests.post(url, params={"key": GEMINI_API_KEY}, json=payload, timeout=30)
         resp.raise_for_status()
-        text = resp.json()["choices"][0]["message"]["content"]
+        text = resp.json()["candidates"][0]["content"]["parts"][0]["text"]
         if "```" in text:
             text = text.split("```")[1]
             if text.startswith("json"):
                 text = text[4:]
         results = json.loads(text)
-        print(f"[INFO] Groq {GROQ_MODEL} succeeded")
+        print(f"[INFO] Gemini succeeded")
         return results
     except Exception as e:
-        print(f"[WARN] Groq: {e}")
+        print(f"[WARN] Gemini: {e}")
         return None
+
+# Groq removed to avoid excessive API requests
 
 def _basic_scoring(articles: list):
     """فقط ترجمه + انتشار خودکار (بدون LLM)"""
