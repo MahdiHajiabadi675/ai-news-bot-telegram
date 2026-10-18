@@ -1,21 +1,17 @@
 """
-Fast-track processor — بدون Gemini، فقط ترجمه سریع + انتشار
-منابع فارسی: مستقیم فرمت + انتشار (بدون Gemini)
-منابع انگلیسی: ترجمه سریع با Gemini + fallback به Google Translate
+Fast-track processor — بدون هیچ درخواستی به Gemini
+منابع فارسی: مستقیم فرمت + انتشار
+منابع انگلیسی: ترجمه ساده با Google Translate
 """
-import re
-import requests
 from datetime import datetime
 from .config import (
-    GEMINI_API_KEY, GEMINI_MODEL, AI_KEYWORDS,
-    CHANNEL_ID, BOT_TOKEN, MAX_POSTS_PER_DAY, DATA_DIR
+    AI_KEYWORDS, CHANNEL_ID, BOT_TOKEN, MAX_POSTS_PER_DAY
 )
 from . import storage
 from .fallback_translator import translate_with_fallback
 
-GEMINI_URL = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent"
-
 BASE = f"https://api.telegram.org/bot{BOT_TOKEN}"
+
 
 def is_ai_related(text: str) -> bool:
     text_lower = text.lower()
@@ -23,6 +19,7 @@ def is_ai_related(text: str) -> bool:
         if kw.lower() in text_lower:
             return True
     return False
+
 
 def is_english(text: str) -> bool:
     """آیا متن انگلیسیه؟ (بیش از ۵۰٪ حروف لاتین)"""
@@ -34,49 +31,6 @@ def is_english(text: str) -> bool:
         return False
     return (latin_count / total_alpha) > 0.5
 
-def quick_translate(title: str, summary: str) -> dict:
-    """ترجمه سریع — فقط یک درخواست به Gemini. اگه fail بشه None برمی‌گرده"""
-    import json as json_mod
-    if not GEMINI_API_KEY:
-        return None
-
-    prompt = f"""Translate to Persian. Keep it natural and concise.
-
-Title: {title}
-Summary: {summary[:500]}
-
-Return JSON: {{"title_fa": "...", "summary_fa": "..."}}"""
-
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent"
-    try:
-        resp = requests.post(
-            url,
-            params={"key": GEMINI_API_KEY},
-            json={
-                "contents": [{"parts": [{"text": prompt}]}],
-                "generationConfig": {
-                    "temperature": 0.3,
-                    "maxOutputTokens": 512,
-                    "responseMimeType": "application/json"
-                }
-            },
-            timeout=30
-        )
-        resp.raise_for_status()
-        text = resp.json()["candidates"][0]["content"]["parts"][0]["text"]
-        if "```" in text:
-            text = text.split("```")[1]
-            if text.startswith("json"):
-                text = text[4:]
-        result = json_mod.loads(text)
-        if not result.get("title_fa") or not result.get("summary_fa"):
-            print(f"[WARN] Empty translation result")
-            return None
-        print(f"[INFO] Quick translate succeeded")
-        return result
-    except Exception as e:
-        print(f"[WARN] Quick translate failed: {e}")
-        return None
 
 def process_fast_track(articles: list) -> list:
     if not articles:
@@ -84,7 +38,7 @@ def process_fast_track(articles: list) -> list:
 
     published = []
     for article in articles:
-        combined = article["title"] + " " + article["summary"]
+        combined = article["title"] + " " + article.get("summary", "")
         if not is_ai_related(combined):
             print(f"[FAST] Skipped (not AI): {article['title'][:60]}")
             continue
@@ -98,9 +52,10 @@ def process_fast_track(articles: list) -> list:
             print(f"[FAST] Daily limit reached")
             break
 
-        # اگه عنوان انگلیسی باشه (حتی از منبع فارسی) → ترجمه کن
+        item_id = article.get("id", article.get("hash", ""))
+
+        # عنوان فارسی → مستقیم، عنوان انگلیسی → ترجمه ساده
         if article["lang"] == "fa" and not is_english(article["title"]):
-            # عنوان فارسیه → مستقیم استفاده کن
             item = {
                 "title_fa": article["title"],
                 "summary_fa": article["summary"][:400],
@@ -110,16 +65,12 @@ def process_fast_track(articles: list) -> list:
                 "category": "fast_track",
                 "source": article["source"],
                 "link": article["link"],
-                "id": article.get("id", article.get("hash", "")),
+                "id": item_id,
             }
         else:
-            # عنوان انگلیسیه → ترجمه کن
-            translated = quick_translate(article["title"], article["summary"])
+            translated = translate_with_fallback(article["title"], article.get("summary", ""))
             if translated is None:
-                print(f"[FAST] Gemini failed, trying fallback...")
-                translated = translate_with_fallback(article["title"], article["summary"])
-            if translated is None:
-                print(f"[FAST] Skipped (all translation failed): {article['title'][:60]}")
+                print(f"[FAST] Skipped (translation failed): {article['title'][:60]}")
                 continue
             item = {
                 "title_fa": translated.get("title_fa", article["title"]),
@@ -130,7 +81,7 @@ def process_fast_track(articles: list) -> list:
                 "category": "fast_track",
                 "source": article["source"],
                 "link": article["link"],
-                "id": article.get("id", article.get("hash", "")),
+                "id": item_id,
             }
 
         text = format_message(item)
@@ -154,6 +105,7 @@ def process_fast_track(articles: list) -> list:
 
     return published
 
+
 def format_message(item):
     title = item["title_fa"].replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
     summary = item["summary_fa"].replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
@@ -166,7 +118,9 @@ def format_message(item):
     text += f"🏷️ {hashtags}"
     return text
 
+
 def _send(text):
+    import requests
     try:
         resp = requests.post(f"{BASE}/sendMessage", json={
             "chat_id": CHANNEL_ID,

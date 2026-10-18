@@ -178,6 +178,12 @@ async function handleMessage(msg, env, BASE, CHANNEL_ID, ADMIN_ID) {
       .map(([name, count]) => `${name}: ${count}`)
       .join('\n');
 
+    // بودجه Gemini
+    const gb = await getJSON(env, 'gemini_budget', {});
+    const gbToday = gb.date === today ? (gb.count || 0) : 0;
+    const gbMax = gb.max_per_day || 24;
+    const gbLast = gb.last_call_at ? String(gb.last_call_at).slice(11, 16) : null;
+
     await sendMessage(BASE, ADMIN_ID,
       `📊 <b>وضعیت ربات</b>\n\n` +
       `${stageEmoji} مرحله فعلی: <b>${stage}</b>\n` +
@@ -191,6 +197,7 @@ async function handleMessage(msg, env, BASE, CHANNEL_ID, ADMIN_ID) {
       `━━━━━━━━━━━━━━\n` +
       `📈 کل منتشر شده: ${totalPublished}\n` +
       `❌ کل رد شده: ${totalRejected}\n` +
+      `🧠 Gemini امروز: ${gbToday}/${gbMax}` + (gbLast ? ` (آخرین: ${gbLast})` : '') + `\n` +
       (state.last_error ? `⚠️ خطای آخر: ${state.last_error}\n` : '') +
       (topSources ? `━━━━━━━━━━━━━━\n🏆 برترین منابع:\n${topSources}` : '')
     );

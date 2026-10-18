@@ -1,10 +1,10 @@
 name = "ai-news-bot-worker"
 main = "index.js"
-compatibility_date = "2024-01-01"
+compatibility_date = "2024-11-01"
+
+# ربات همیشه فعال (webhook) + دستورات ادمین
+# زمان‌بندی جمع‌آوری/تحلیل در GitHub Actions انجام می‌شه (نه اینجا)
 
 [[kv_namespaces]]
 binding = "KV"
 id = "YOUR_KV_NAMESPACE_ID"
-
-[triggers]
-crons = ["*/15 * * * *"]

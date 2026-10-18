@@ -10,6 +10,14 @@ ADMIN_ID = int(os.getenv("TELEGRAM_ADMIN_ID", "0"))
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
 
+# بودجه Gemini — جلوگیری از بن شدن API
+# حداکثر یک درخواست در هر بازه:
+GEMINI_MIN_INTERVAL_MIN = int(os.getenv("GEMINI_MIN_INTERVAL_MIN", "55"))
+# سقف روزانه:
+GEMINI_MAX_CALLS_PER_DAY = int(os.getenv("GEMINI_MAX_CALLS_PER_DAY", "24"))
+# حداکثر تعداد خبر در هر درخواست (بقیه ترجمه ساده می‌شن):
+GEMINI_BATCH_SIZE = int(os.getenv("GEMINI_BATCH_SIZE", "10"))
+
 # Paths
 BASE_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = BASE_DIR / "data"

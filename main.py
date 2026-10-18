@@ -83,11 +83,10 @@ def run(force=False):
                 state = set_stage(state, "analyzing")
                 storage.save_state(state)
                 print("[INFO] Analyzing with Gemini...")
-                analyzed = analyze_articles(articles)
+                analyzed, gemini_meta = analyze_articles(articles)
 
-                # تشخیص واقعی شکست Gemini (فقط یک بار در شروع هر قطعی اطلاع بده)
-                used_fallback = bool(analyzed) and all(a.get("fallback") for a in analyzed)
-                if used_fallback:
+                # فقط وقتی Gemini واقعاً fail شد به ادمین هشدار بده (نه وقتی بودجه تمومه)
+                if gemini_meta.get("gemini_failed"):
                     prev_fails = state.get("gemini_fail_count", 0)
                     state["gemini_fail_count"] = prev_fails + 1
                     state["last_error"] = "Gemini در دسترس نیست — ترجمه جایگزین استفاده شد"
@@ -96,9 +95,14 @@ def run(force=False):
                             send_message(ADMIN_ID, "⚠️ Gemini در دسترس نیست. اخبار با ترجمه جایگزین منتشر می‌شن.\nلطفاً GEMINI_API_KEY رو بررسی کن.")
                         except Exception as e:
                             print(f"[WARN] notify admin failed: {e}")
-                elif analyzed:
+                elif gemini_meta.get("gemini_used"):
                     state["gemini_fail_count"] = 0
                     state["last_error"] = None
+
+                if gemini_meta.get("skipped_budget"):
+                    print("[INFO] Gemini skipped (budget) — publishing continues")
+                if gemini_meta.get("fallback_count"):
+                    print(f"[INFO] {gemini_meta['fallback_count']} item(s) via simple translation")
 
                 for a in articles:
                     news_id = a.get("id", a.get("hash", ""))

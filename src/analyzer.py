@@ -1,15 +1,23 @@
 """
-Analyzer — تحلیل اخبار با LLM
-اگه LLM در دسترس نباشه → فقط ترجمه + انتشار خودکار
+Analyzer — تحلیل اخبار با Gemini (بودجه‌دار)
+
+سیاست مصرف Gemini:
+  • در هر اجرا حداکثر **یک** درخواست به Gemini زده می‌شود (batch).
+  • بین دو درخواست حداقل GEMINI_MIN_INTERVAL_MIN دقیقه فاصله است.
+  • سقف روزانه GEMINI_MAX_CALLS_PER_DAY.
+  • خبرهای بیشتر از GEMINI_BATCH_SIZE → ترجمه ساده (Google Translate).
+  • اگر Gemini در دسترس نباشد → همه با ترجمه ساده و برچسب fallback.
+
+هیچ‌وقت روی چند مدل loop نمی‌زند و هیچ‌وقت بیش از یک درخواست در هر اجرا نمی‌فرستد.
 """
 import json
 import re
 import requests
-from .config import GEMINI_API_KEY, GEMINI_MODEL
+from .config import GEMINI_API_KEY, GEMINI_MODEL, GEMINI_BATCH_SIZE
+from . import gemini_budget, cloudflare_kv
 
-# === Gemini ===
 GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta"
-_working_model = None
+_MODEL_CACHE = None
 
 PROMPT = """You are an AI news analyst for a Persian Telegram channel about AI models.
 
@@ -29,19 +37,65 @@ Output ONLY a JSON array, no other text.
 Articles:
 """
 
-def analyze_articles(articles: list) -> list:
+
+def analyze_articles(articles: list):
+    """تحلیل اخبار — حداکثر یک درخواست به Gemini، بقیه ترجمه ساده
+
+    برمی‌گرداند: (analyzed_items, meta)
+    """
+    meta = {
+        "gemini_used": False,
+        "gemini_failed": False,
+        "skipped_budget": False,
+        "gemini_batch": 0,
+        "fallback_count": 0,
+    }
+
     if not articles:
-        return []
+        return [], meta
 
-    # فقط یک درخواست به Gemini
-    results = _try_gemini_once(articles)
+    if not GEMINI_API_KEY:
+        print("[INFO] No GEMINI_API_KEY — simple translation")
+        items = _basic_scoring(articles)
+        meta["fallback_count"] = len(items)
+        return items, meta
 
-    # اگه Gemini fail شد → basic scoring (بدون هیچ LLM دیگه‌ای)
+    if not gemini_budget.can_call():
+        print("[INFO] Gemini budget exhausted — simple translation")
+        items = _basic_scoring(articles)
+        meta["skipped_budget"] = True
+        meta["fallback_count"] = len(items)
+        return items, meta
+
+    batch = articles[:GEMINI_BATCH_SIZE]
+    rest = articles[GEMINI_BATCH_SIZE:]
+    meta["gemini_batch"] = len(batch)
+
+    print(f"[INFO] Asking Gemini about {len(batch)} article(s) (1 request)")
+    results = _try_gemini_once(batch)
+
     if not results:
-        print("[WARN] Gemini failed - using basic scoring (translate only)")
-        return _basic_scoring(articles)
+        print("[WARN] Gemini failed — simple translation for all")
+        items = _basic_scoring(articles)
+        meta["gemini_failed"] = True
+        meta["fallback_count"] = len(items)
+        return items, meta
 
-    # ادغام نتایج (مطابقت با ایندکس Gemini، با fallback به ترتیب)
+    gemini_budget.mark_called()
+    meta["gemini_used"] = True
+    analyzed = _merge(batch, results)
+
+    if rest:
+        print(f"[INFO] {len(rest)} extra article(s) beyond batch — simple translation")
+        fallback = _basic_scoring(rest)
+        meta["fallback_count"] = len(fallback)
+        analyzed += fallback
+
+    return analyzed, meta
+
+
+def _merge(articles: list, results: list) -> list:
+    """ادغام نتایج Gemini با اخبار (مطابقت با ایندکس، fallback به ترتیب)"""
     by_index = {}
     for pos, r in enumerate(results):
         if not isinstance(r, dict):
@@ -55,9 +109,7 @@ def analyze_articles(articles: list) -> list:
     analyzed = []
     for i, a in enumerate(articles):
         r = by_index.get(i)
-        if not r:
-            continue
-        if not r.get("relevant", False):
+        if not r or not r.get("relevant", False):
             continue
 
         a.update({
@@ -76,52 +128,83 @@ def analyze_articles(articles: list) -> list:
     print(f"[INFO] Analyzed: {len(analyzed)} relevant from {len(articles)}")
     return analyzed
 
-def _resolve_model():
-    """مدل موجود رو از ListModels پیدا می‌کنه (وقتی مدل تنظیم‌شده منقضی شده باشه)"""
-    global _working_model
-    if _working_model:
-        return _working_model
+
+def _resolve_model() -> str:
+    """مدل Gemini — از کش KV استفاده می‌کنه تا فقط یک بار کشف بشه"""
+    global _MODEL_CACHE
+    if _MODEL_CACHE:
+        return _MODEL_CACHE
+
+    cached = cloudflare_kv.get("gemini_model")
+    if cached:
+        _MODEL_CACHE = cached
+        return cached
+
+    model = _discover_model() or GEMINI_MODEL
+    try:
+        cloudflare_kv.put("gemini_model", model)
+    except Exception:
+        pass
+    _MODEL_CACHE = model
+    print(f"[INFO] Gemini model selected: {model}")
+    return model
+
+
+def _invalidate_model():
+    """مدل کش‌شده رو پاک کن تا اجرای بعدی مدل تازه کشف کنه"""
+    global _MODEL_CACHE
+    _MODEL_CACHE = None
+    try:
+        cloudflare_kv.put("gemini_model", "")
+    except Exception:
+        pass
+
+
+def _discover_model():
+    """بهترین مدل موجود با متد generateContent را پیدا می‌کند"""
     try:
         resp = requests.get(
             f"{GEMINI_API_BASE}/models",
             params={"key": GEMINI_API_KEY, "pageSize": 200},
             timeout=15,
         )
-        if resp.status_code == 200:
-            usable = [
-                m.get("name", "").replace("models/", "")
-                for m in resp.json().get("models", [])
-                if "generateContent" in m.get("supportedGenerationMethods", [])
-            ]
-            if GEMINI_MODEL in usable:
-                _working_model = GEMINI_MODEL
-                return _working_model
-            bad = ("thinking", "lite", "8b", "embedding", "aqa", "tts", "image", "live", "vision")
+        if resp.status_code != 200:
+            return None
 
-            def ver(n):
-                m = re.search(r"gemini-(\d+)(?:\.(\d+))?", n)
-                return (int(m.group(1)), int(m.group(2) or 0)) if m else (0, 0)
+        usable = [
+            m.get("name", "").replace("models/", "")
+            for m in resp.json().get("models", [])
+            if "generateContent" in m.get("supportedGenerationMethods", [])
+        ]
+        if not usable:
+            return None
 
-            flash = [n for n in usable if "flash" in n and not any(b in n for b in bad)]
-            pool = flash or [n for n in usable if not any(b in n for b in bad)] or usable
-            if pool:
-                pool.sort(key=ver, reverse=True)
-                _working_model = pool[0]
-                print(f"[INFO] Gemini model auto-selected: {_working_model}")
-                return _working_model
+        if GEMINI_MODEL in usable:
+            return GEMINI_MODEL
+
+        bad = ("thinking", "lite", "8b", "embedding", "aqa", "tts", "image", "live", "vision")
+
+        def ver(n):
+            m = re.search(r"gemini-(\d+)(?:\.(\d+))?", n)
+            return (int(m.group(1)), int(m.group(2) or 0)) if m else (0, 0)
+
+        flash = [n for n in usable if "flash" in n and not any(b in n for b in bad)]
+        pool = flash or [n for n in usable if not any(b in n for b in bad)] or usable
+        pool.sort(key=ver, reverse=True)
+        return pool[0]
     except Exception as e:
         print(f"[WARN] Gemini model list failed: {e}")
-    _working_model = GEMINI_MODEL
-    return _working_model
-
-def _try_gemini_once(articles: list):
-    """فقط یک درخواست به Gemini"""
-    if not GEMINI_API_KEY:
         return None
 
-    articles_text = _build_articles_text(articles)
+
+def _try_gemini_once(articles: list):
+    """فقط و فقط یک درخواست به Gemini"""
+    if not articles:
+        return None
+
+    model = _resolve_model()
     payload = {
-        "contents": [{"parts": [{"text": PROMPT + articles_text}]}],
+        "contents": [{"parts": [{"text": PROMPT + _build_articles_text(articles)}]}],
         "generationConfig": {
             "temperature": 0.3,
             "maxOutputTokens": 4096,
@@ -129,7 +212,6 @@ def _try_gemini_once(articles: list):
         }
     }
 
-    model = _resolve_model()
     url = f"{GEMINI_API_BASE}/models/{model}:generateContent"
     try:
         resp = requests.post(url, params={"key": GEMINI_API_KEY}, json=payload, timeout=60)
@@ -139,12 +221,19 @@ def _try_gemini_once(articles: list):
             text = text.split("```")[1]
             if text.startswith("json"):
                 text = text[4:]
-        results = json.loads(text)
         print(f"[INFO] Gemini succeeded ({model})")
-        return _normalize_results(results)
+        return _normalize_results(json.loads(text))
+    except requests.exceptions.HTTPError as e:
+        code = e.response.status_code if e.response is not None else 0
+        print(f"[WARN] Gemini ({model}): HTTP {code}")
+        if code in (400, 404):
+            # مدل منقضی شده — اجرای بعدی مدل تازه انتخاب می‌کنه
+            _invalidate_model()
+        return None
     except Exception as e:
         print(f"[WARN] Gemini ({model}): {e}")
         return None
+
 
 def _normalize_results(results):
     """خروجی Gemini ممکنه آرایه، دیکشنری یا تک‌آبجکت باشه"""
@@ -157,17 +246,17 @@ def _normalize_results(results):
         return [results]
     return []
 
+
 def _basic_scoring(articles: list):
-    """فقط ترجمه + انتشار خودکار (بدون LLM)"""
+    """ترجمه ساده + برچسب fallback (بدون هیچ درخواستی به Gemini)"""
     analyzed = []
     for a in articles:
-        # اگه فارسیه → مستقیم، اگه انگلیسیه → ترجمه با Google Translate
         if a["lang"] == "fa":
             title_fa = a["title"]
             summary_fa = a["summary"][:400]
         else:
             from .fallback_translator import translate_with_fallback
-            translated = translate_with_fallback(a["title"], a["summary"])
+            translated = translate_with_fallback(a["title"], a["summary"]) if a.get("summary") else None
             if translated:
                 title_fa = translated.get("title_fa", a["title"])
                 summary_fa = translated.get("summary_fa", a["summary"][:400])
@@ -194,6 +283,7 @@ def _basic_scoring(articles: list):
             "fallback": True
         })
     return analyzed
+
 
 def _build_articles_text(articles: list) -> str:
     text = ""
