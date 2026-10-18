@@ -14,13 +14,13 @@ from src.storage import set_stage
 from src.config import (
     COLLECT_INTERVAL_MIN, FAST_TRACK_ENABLED,
     AUTO_PUBLISH_ENABLED, AUTO_PUBLISH_THRESHOLD, AUTO_REJECT_THRESHOLD,
-    TRUST_SCORES, REJECT_KEYWORDS, CATEGORY_WEIGHTS,
+    TRUST_SCORES, REJECT_KEYWORDS, CATEGORY_WEIGHTS, ADMIN_ID,
     SCORE_SOURCE_WEIGHT, SCORE_IMPORTANCE_WEIGHT, SCORE_CONFIDENCE_WEIGHT, SCORE_CATEGORY_WEIGHT
 )
 from src.collectors import collect
 from src.analyzer import analyze_articles
 from src.fast_track import process_fast_track
-from src.bot import poll_updates, _send_review, notify_admin_new
+from src.bot import poll_updates, _send_review, notify_admin_new, send_message
 from src.publisher import publish_approved
 
 
@@ -47,6 +47,7 @@ def run(force=False):
 
     # 1. Load state
     state = storage.load_state()
+    approved_to_publish = None
 
     # 2. Poll bot updates (admin actions)
     state, updates = poll_updates(state)
@@ -84,6 +85,21 @@ def run(force=False):
                 print("[INFO] Analyzing with Gemini...")
                 analyzed = analyze_articles(articles)
 
+                # تشخیص واقعی شکست Gemini (فقط یک بار در شروع هر قطعی اطلاع بده)
+                used_fallback = bool(analyzed) and all(a.get("fallback") for a in analyzed)
+                if used_fallback:
+                    prev_fails = state.get("gemini_fail_count", 0)
+                    state["gemini_fail_count"] = prev_fails + 1
+                    state["last_error"] = "Gemini در دسترس نیست — ترجمه جایگزین استفاده شد"
+                    if prev_fails == 0 and ADMIN_ID:
+                        try:
+                            send_message(ADMIN_ID, "⚠️ Gemini در دسترس نیست. اخبار با ترجمه جایگزین منتشر می‌شن.\nلطفاً GEMINI_API_KEY رو بررسی کن.")
+                        except Exception as e:
+                            print(f"[WARN] notify admin failed: {e}")
+                elif analyzed:
+                    state["gemini_fail_count"] = 0
+                    state["last_error"] = None
+
                 for a in articles:
                     news_id = a.get("id", a.get("hash", ""))
                     if news_id:
@@ -109,13 +125,21 @@ def run(force=False):
                     is_trusted = source_trust >= 4
                     is_confirmed = item["confidence"] == "confirmed"
                     is_high_score = item["score"] >= AUTO_PUBLISH_THRESHOLD
+                    is_fallback = item.get("fallback", False)
 
-                    if AUTO_PUBLISH_ENABLED and is_trusted and is_confirmed and is_high_score:
+                    # انتشار خودکار: هم از config و هم از کلید /auto در ربات پیروی می‌کنه
+                    auto_enabled = AUTO_PUBLISH_ENABLED and state.get("auto_publish_enabled", True)
+                    should_auto = auto_enabled and (
+                        (is_trusted and is_confirmed and is_high_score)
+                        or (is_fallback and source_trust >= 4)
+                    )
+
+                    if should_auto:
                         item["status"] = "approved"
                         item["admin_action"] = "auto_approved"
                         approved.append(item)
                         notify_admin_new(item)
-                        print(f"[AUTO] Published: {item['title_fa'][:50]} (score: {item['score']})")
+                        print(f"[AUTO] Approved: {item['title_fa'][:50]} (score: {item['score']})")
                     else:
                         item["status"] = "pending"
                         pending.append(item)
@@ -124,6 +148,7 @@ def run(force=False):
 
                 storage.save_pending(pending)
                 storage.save_approved(approved)
+                approved_to_publish = approved
                 print(f"[INFO] Routed: {len(analyzed)} items")
 
         state["last_collect_time"] = now.isoformat() + "Z"
@@ -132,7 +157,7 @@ def run(force=False):
     # 4. Publish approved items
     state = set_stage(state, "publishing")
     storage.save_state(state)
-    state = publish_approved(state)
+    state = publish_approved(state, approved_to_publish)
 
     # 5. Save state
     state = set_stage(state, "waiting")

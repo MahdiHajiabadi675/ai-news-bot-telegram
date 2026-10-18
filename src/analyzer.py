@@ -3,20 +3,18 @@ Analyzer — تحلیل اخبار با LLM
 اگه LLM در دسترس نباشه → فقط ترجمه + انتشار خودکار
 """
 import json
+import re
 import requests
-from .config import GEMINI_API_KEY, GEMINI_MODEL, GROQ_API_KEY
+from .config import GEMINI_API_KEY, GEMINI_MODEL
 
 # === Gemini ===
-GEMINI_URL = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent"
-FALLBACK_MODELS = ["gemini-2.0-flash", "gemini-1.5-flash-latest", "gemini-1.5-flash"]
-
-# === Groq (جایگزین رایگان) ===
-GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
-GROQ_MODEL = "llama-3.3-70b-versatile"
+GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta"
+_working_model = None
 
 PROMPT = """You are an AI news analyst for a Persian Telegram channel about AI models.
 
 Analyze EACH article below. For each one output a JSON object with these fields:
+- i: integer — the 1-based index of the article from the input list
 - relevant: boolean — is this about AI models, LLMs, AI tools, AI research, or major AI industry news?
 - title_fa: string — compelling Persian title (max 100 chars)
 - summary_fa: string — engaging Persian summary (2-3 sentences, ~200 chars)
@@ -43,12 +41,22 @@ def analyze_articles(articles: list) -> list:
         print("[WARN] Gemini failed - using basic scoring (translate only)")
         return _basic_scoring(articles)
 
-    # ادغام نتایج
+    # ادغام نتایج (مطابقت با ایندکس Gemini، با fallback به ترتیب)
+    by_index = {}
+    for pos, r in enumerate(results):
+        if not isinstance(r, dict):
+            continue
+        idx = r.get("i")
+        if isinstance(idx, int) and 1 <= idx <= len(articles):
+            by_index[idx - 1] = r
+        else:
+            by_index[pos] = r
+
     analyzed = []
     for i, a in enumerate(articles):
-        if i >= len(results):
-            break
-        r = results[i]
+        r = by_index.get(i)
+        if not r:
+            continue
         if not r.get("relevant", False):
             continue
 
@@ -68,6 +76,44 @@ def analyze_articles(articles: list) -> list:
     print(f"[INFO] Analyzed: {len(analyzed)} relevant from {len(articles)}")
     return analyzed
 
+def _resolve_model():
+    """مدل موجود رو از ListModels پیدا می‌کنه (وقتی مدل تنظیم‌شده منقضی شده باشه)"""
+    global _working_model
+    if _working_model:
+        return _working_model
+    try:
+        resp = requests.get(
+            f"{GEMINI_API_BASE}/models",
+            params={"key": GEMINI_API_KEY, "pageSize": 200},
+            timeout=15,
+        )
+        if resp.status_code == 200:
+            usable = [
+                m.get("name", "").replace("models/", "")
+                for m in resp.json().get("models", [])
+                if "generateContent" in m.get("supportedGenerationMethods", [])
+            ]
+            if GEMINI_MODEL in usable:
+                _working_model = GEMINI_MODEL
+                return _working_model
+            bad = ("thinking", "lite", "8b", "embedding", "aqa", "tts", "image", "live", "vision")
+
+            def ver(n):
+                m = re.search(r"gemini-(\d+)(?:\.(\d+))?", n)
+                return (int(m.group(1)), int(m.group(2) or 0)) if m else (0, 0)
+
+            flash = [n for n in usable if "flash" in n and not any(b in n for b in bad)]
+            pool = flash or [n for n in usable if not any(b in n for b in bad)] or usable
+            if pool:
+                pool.sort(key=ver, reverse=True)
+                _working_model = pool[0]
+                print(f"[INFO] Gemini model auto-selected: {_working_model}")
+                return _working_model
+    except Exception as e:
+        print(f"[WARN] Gemini model list failed: {e}")
+    _working_model = GEMINI_MODEL
+    return _working_model
+
 def _try_gemini_once(articles: list):
     """فقط یک درخواست به Gemini"""
     if not GEMINI_API_KEY:
@@ -83,9 +129,10 @@ def _try_gemini_once(articles: list):
         }
     }
 
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent"
+    model = _resolve_model()
+    url = f"{GEMINI_API_BASE}/models/{model}:generateContent"
     try:
-        resp = requests.post(url, params={"key": GEMINI_API_KEY}, json=payload, timeout=30)
+        resp = requests.post(url, params={"key": GEMINI_API_KEY}, json=payload, timeout=60)
         resp.raise_for_status()
         text = resp.json()["candidates"][0]["content"]["parts"][0]["text"]
         if "```" in text:
@@ -93,13 +140,22 @@ def _try_gemini_once(articles: list):
             if text.startswith("json"):
                 text = text[4:]
         results = json.loads(text)
-        print(f"[INFO] Gemini succeeded")
-        return results
+        print(f"[INFO] Gemini succeeded ({model})")
+        return _normalize_results(results)
     except Exception as e:
-        print(f"[WARN] Gemini: {e}")
+        print(f"[WARN] Gemini ({model}): {e}")
         return None
 
-# Groq removed to avoid excessive API requests
+def _normalize_results(results):
+    """خروجی Gemini ممکنه آرایه، دیکشنری یا تک‌آبجکت باشه"""
+    if isinstance(results, list):
+        return results
+    if isinstance(results, dict):
+        for v in results.values():
+            if isinstance(v, list):
+                return v
+        return [results]
+    return []
 
 def _basic_scoring(articles: list):
     """فقط ترجمه + انتشار خودکار (بدون LLM)"""
@@ -132,9 +188,10 @@ def _basic_scoring(articles: list):
             "importance": "medium",
             "confidence": "likely",
             "category": "other",
-            "hashtags": ["AI"],
+            "hashtags": ["هوش_مصنوعی", "اخبار_AI"],
             "admin_question": "",
-            "status": "analyzed"
+            "status": "analyzed",
+            "fallback": True
         })
     return analyzed
 

@@ -104,7 +104,7 @@ def _handle_callback(cb, state):
 
     elif action == "edit":
         for i, item in enumerate(pending):
-            if item["hash"] == item_hash:
+            if _item_key(item) == item_hash:
                 pending[i]["_editing"] = True
                 storage.save_pending(pending)
                 if ADMIN_ID:
@@ -153,7 +153,7 @@ def _handle_message(msg, state):
         pending_count = len(storage.load_pending())
         approved_count = len(storage.load_approved())
         paused = "⏸️ متوقف" if state.get("paused") else "▶️ فعال"
-        auto = "روشن" if state.get("auto_publish") else "خاموش"
+        auto = "روشن" if state.get("auto_publish_enabled", True) else "خاموش"
 
         stage = state.get("current_stage", "idle")
         stage_emoji = {
@@ -206,8 +206,8 @@ def _handle_message(msg, state):
     elif text.startswith("/auto"):
         parts = text.split()
         if len(parts) > 1 and parts[1] in ["on", "off"]:
-            state["auto_publish"] = parts[1] == "on"
-            status = "روشن ✅" if state["auto_publish"] else "خاموش ❌"
+            state["auto_publish_enabled"] = parts[1] == "on"
+            status = "روشن ✅" if state["auto_publish_enabled"] else "خاموش ❌"
             send_message(chat_id, f"انتشار خودکار: {status}")
         else:
             send_message(chat_id, "استفاده: /auto on یا /auto off")
@@ -222,11 +222,15 @@ def _handle_message(msg, state):
             f"رد شده: {len(rejected)}"
         )
 
-def _find_and_remove(items, item_hash):
+def _find_and_remove(items, item_id):
     for i, item in enumerate(items):
-        if item["hash"] == item_hash:
+        if _item_key(item) == item_id:
             return items.pop(i)
     return None
+
+def _item_key(item):
+    """کلید یکتای خبر — سازگار با آیتم‌های قدیمی (hash) و جدید (id)"""
+    return item.get("id") or item.get("hash") or ""
 
 def _now():
     from datetime import datetime
@@ -286,7 +290,7 @@ def _send_review(item):
 def notify_admin_new(item):
     if not ADMIN_ID:
         return
-    text = f"🔔 خبر جدید (خودکار منتشر شد):\n\n"
+    text = f"🔔 خبر جدید (تایید خودکار — در صف انتشار):\n\n"
     text += f"<b>{item['title_fa']}</b>\n"
     text += f"{item['summary_fa']}\n\n"
     text += f"📌 {item['importance']} | {item['confidence']}"

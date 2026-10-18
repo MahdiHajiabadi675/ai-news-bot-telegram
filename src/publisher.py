@@ -6,7 +6,7 @@ from .bot import send_message
 
 BASE = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
-def publish_approved(state):
+def publish_approved(state, approved_items=None):
     if state.get("paused"):
         print("[INFO] Bot is paused, skipping publish")
         return state
@@ -16,7 +16,8 @@ def publish_approved(state):
         state["daily_post_date"] = today
         state["daily_post_count"] = 0
 
-    approved = storage.load_approved()
+    # اگه لیست آماده در حافظه هست، همون رو استفاده کن (جلوگیری از خواندن کهنه KV)
+    approved = list(approved_items) if approved_items is not None else storage.load_approved()
     if not approved:
         return state
 

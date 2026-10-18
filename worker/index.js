@@ -14,6 +14,14 @@ export default {
     const path = url.pathname;
 
     if (path === '/webhook' && request.method === 'POST') {
+      // اگه WEBHOOK_SECRET تنظیم شده باشه، هدر تلگرام رو بررسی کن
+      if (env.WEBHOOK_SECRET) {
+        const got = request.headers.get('X-Telegram-Bot-Api-Secret-Token') || '';
+        if (got !== env.WEBHOOK_SECRET) {
+          return new Response('Forbidden', { status: 403 });
+        }
+      }
+
       const update = await request.json();
 
       if (update.callback_query) {
@@ -26,21 +34,15 @@ export default {
     }
 
     if (path === '/run' && request.method === 'POST') {
-      console.log('=== /run endpoint called ===');
       const auth = request.headers.get('Authorization') || '';
       const token = auth.replace('Bearer ', '');
-      console.log('Auth token received:', token ? 'yes' : 'no');
-      console.log('Expected secret exists:', env.WORKER_SECRET ? 'yes' : 'no');
-      if (env.WORKER_SECRET && token !== env.WORKER_SECRET) {
-        console.log('ERROR: Unauthorized - token mismatch');
+      if (!env.WORKER_SECRET || token !== env.WORKER_SECRET) {
         return new Response(JSON.stringify({ ok: false, error: 'Unauthorized' }), {
           status: 403,
           headers: { 'Content-Type': 'application/json' }
         });
       }
-      console.log('Calling handleRun...');
       const result = await handleRun(env, BASE, CHANNEL_ID, ADMIN_ID);
-      console.log('handleRun result:', result.status);
       return result;
     }
 
@@ -59,7 +61,7 @@ async function handleCallback(cb, env, BASE, CHANNEL_ID, ADMIN_ID) {
   const approved = await getJSON(env, 'approved', []);
 
   if (action === 'approve') {
-    const idx = pending.findIndex(i => (i.hash === itemHash || i.id === itemHash));
+    const idx = pending.findIndex(i => itemKey(i) === itemHash);
     if (idx !== -1) {
       const item = pending.splice(idx, 1)[0];
       item.status = 'approved';
@@ -72,10 +74,10 @@ async function handleCallback(cb, env, BASE, CHANNEL_ID, ADMIN_ID) {
       await publishItem(env, BASE, CHANNEL_ID, ADMIN_ID, item);
     }
   } else if (action === 'reject') {
-    await saveJSON(env, 'pending', pending.filter(i => i.hash !== itemHash));
+    await saveJSON(env, 'pending', pending.filter(i => itemKey(i) !== itemHash));
     await answerCallback(BASE, cbId, '❌ رد شد');
   } else if (action === 'feature') {
-    const idx = pending.findIndex(i => i.hash === itemHash);
+    const idx = pending.findIndex(i => itemKey(i) === itemHash);
     if (idx !== -1) {
       const item = pending.splice(idx, 1)[0];
       item.status = 'approved';
@@ -86,7 +88,7 @@ async function handleCallback(cb, env, BASE, CHANNEL_ID, ADMIN_ID) {
       await answerCallback(BASE, cbId, '⭐️ ویژه');
     }
   } else if (action === 'edit') {
-    const item = pending.find(i => i.hash === itemHash);
+    const item = pending.find(i => itemKey(i) === itemHash);
     if (item) {
       item._editing = true;
       await saveJSON(env, 'pending', pending);
@@ -112,7 +114,7 @@ async function handleMessage(msg, env, BASE, CHANNEL_ID, ADMIN_ID) {
   const approved = await getJSON(env, 'approved', []);
   const state = await getJSON(env, 'state', {
     paused: false,
-    auto_publish: false,
+    auto_publish_enabled: true,
     daily_post_count: 0,
     daily_post_date: null,
     current_stage: 'idle'
@@ -153,7 +155,7 @@ async function handleMessage(msg, env, BASE, CHANNEL_ID, ADMIN_ID) {
     }[stage] || '❓';
 
     const paused = state.paused ? '⏸️ متوقف' : '▶️ فعال';
-    const auto = state.auto_publish ? 'روشن ✅' : 'خاموش ❌';
+        const auto = (state.auto_publish_enabled === undefined ? true : state.auto_publish_enabled) ? 'روشن ✅' : 'خاموش ❌';
     const today = new Date().toISOString().slice(0, 10);
     const dailyCount = state.daily_post_date === today ? (state.daily_post_count || 0) : 0;
     const maxPosts = 15;
@@ -189,6 +191,7 @@ async function handleMessage(msg, env, BASE, CHANNEL_ID, ADMIN_ID) {
       `━━━━━━━━━━━━━━\n` +
       `📈 کل منتشر شده: ${totalPublished}\n` +
       `❌ کل رد شده: ${totalRejected}\n` +
+      (state.last_error ? `⚠️ خطای آخر: ${state.last_error}\n` : '') +
       (topSources ? `━━━━━━━━━━━━━━\n🏆 برترین منابع:\n${topSources}` : '')
     );
   } else if (text === '/pending') {
@@ -207,10 +210,10 @@ async function handleMessage(msg, env, BASE, CHANNEL_ID, ADMIN_ID) {
     await updateState(env, { paused: false });
     await sendMessage(BASE, ADMIN_ID, '▶️ انتشار ادامه یافت');
   } else if (text.startsWith('/auto')) {
-    const parts = text.split();
+    const parts = text.split(/\s+/);
     if (parts.length > 1 && ['on', 'off'].includes(parts[1])) {
       const val = parts[1] === 'on';
-      await updateState(env, { auto_publish: val });
+      await updateState(env, { auto_publish_enabled: val });
       await sendMessage(BASE, ADMIN_ID, `انتشار خودکار: ${val ? 'روشن ✅' : 'خاموش ❌'}`);
     } else {
       await sendMessage(BASE, ADMIN_ID, 'استفاده: /auto on یا /auto off');
@@ -294,9 +297,10 @@ async function sendReview(BASE, ADMIN_ID, item) {
   const scoreLabel = score >= 70 ? 'زیاد' : score >= 50 ? 'متوسط' : score >= 30 ? 'كم' : 'ضعیف';
   const scoreEmoji = score >= 70 ? '🟢' : score >= 50 ? '🟡' : score >= 30 ? '🟠' : '🔴';
 
+  const id = itemKey(item);
   let text = `📰 <b>${item.title_fa}</b>\n\n`;
   text += `${item.summary_fa}\n\n`;
-  text += `🆔 ID: <code>${item.hash || item.id || 'N/A'}</code>\n`;
+  text += `🆔 ID: <code>${id || 'N/A'}</code>\n`;
   text += `📌 اهمیت: ${item.importance} | اعتبار: ${item.confidence}\n`;
   text += `${trustEmoji} منبع: ${item.source} (${trust}/5)\n`;
   text += `${scoreEmoji} اسکور: ${score}/100 (${scoreLabel})\n`;
@@ -309,12 +313,12 @@ async function sendReview(BASE, ADMIN_ID, item) {
   const keyboard = {
     inline_keyboard: [
       [
-        { text: '✅ تایید', callback_data: `approve:${item.hash}` },
-        { text: '❌ رد', callback_data: `reject:${item.hash}` }
+        { text: '✅ تایید', callback_data: `approve:${id}` },
+        { text: '❌ رد', callback_data: `reject:${id}` }
       ],
       [
-        { text: '⭐️ ویژه', callback_data: `feature:${item.hash}` },
-        { text: '✏️ ویرایش', callback_data: `edit:${item.hash}` }
+        { text: '⭐️ ویژه', callback_data: `feature:${id}` },
+        { text: '✏️ ویرایش', callback_data: `edit:${id}` }
       ],
       [{ text: '🔗 مشاهده منبع', url: item.link }]
     ]
@@ -356,13 +360,22 @@ async function publishItem(env, BASE, CHANNEL_ID, ADMIN_ID, item) {
     text += '\n\n⚠️ <i>این خبر تایید رسمی نشده است</i>';
   }
 
+  const publishedLog = await getJSON(env, 'published', []);
+  const key = itemKey(item);
+  if (key && publishedLog.some(p => p.published && itemKey(p) === key)) {
+    console.log('[publishItem] Already published, skipping');
+    return;
+  }
+
   const result = await sendMessage(BASE, CHANNEL_ID, text);
   if (result && result.ok) {
     state.daily_post_count++;
     await saveJSON(env, 'state', state);
-    const publishedLog = await getJSON(env, 'published', []);
     publishedLog.push({ ...item, published: true, published_at: new Date().toISOString() });
     await saveJSON(env, 'published', publishedLog);
+    // از صف approved حذف کن تا دوباره منتشر نشه
+    const approvedList = await getJSON(env, 'approved', []);
+    await saveJSON(env, 'approved', approvedList.filter(i => itemKey(i) !== key));
     console.log('[publishItem] Published:', item.title_fa?.substring(0, 50));
   } else {
     console.log('[publishItem] Failed to publish');
@@ -390,6 +403,8 @@ async function handleRun(env, BASE, CHANNEL_ID, ADMIN_ID) {
   const MAX_POSTS = 15;
   let published = 0;
   const remaining = [];
+  const publishedLog = await getJSON(env, 'published', []);
+  const publishedIds = new Set(publishedLog.filter(p => p.published).map(p => itemKey(p)));
 
   const importanceOrder = { high: 0, medium: 1, low: 2 };
   approved.sort((a, b) => {
@@ -419,15 +434,20 @@ async function handleRun(env, BASE, CHANNEL_ID, ADMIN_ID) {
       text += '\n\n⚠️ <i>این خبر تایید رسمی نشده است</i>';
     }
 
+    const key = itemKey(item);
+    if (key && publishedIds.has(key)) {
+      console.log('[handleRun] Already published, skipping:', key);
+      continue;
+    }
+
     console.log('[handleRun] Publishing:', item.title_fa?.substring(0, 50));
     const result = await sendMessage(BASE, CHANNEL_ID, text);
     console.log('[handleRun] Send result:', JSON.stringify(result));
     if (result && result.ok) {
       state.daily_post_count++;
       published++;
-      const publishedLog = await getJSON(env, 'published', []);
       publishedLog.push({ ...item, published: true, published_at: new Date().toISOString() });
-      await saveJSON(env, 'published', publishedLog);
+      if (key) publishedIds.add(key);
       console.log('[handleRun] Published successfully');
     } else {
       console.log('[handleRun] Failed to publish');
@@ -437,6 +457,7 @@ async function handleRun(env, BASE, CHANNEL_ID, ADMIN_ID) {
 
   await saveJSON(env, 'approved', remaining);
   await saveJSON(env, 'state', state);
+  if (published > 0) await saveJSON(env, 'published', publishedLog);
 
   return new Response(JSON.stringify({ ok: true, published, remaining: remaining.length }), { headers: { 'Content-Type': 'application/json' } });
 }
@@ -488,4 +509,9 @@ async function updateState(env, updates) {
   const state = await getJSON(env, 'state', {});
   Object.assign(state, updates);
   await saveJSON(env, 'state', state);
+}
+
+/** کلید یکتای خبر — بعضی آیتم‌های قدیمی «hash» دارن، جدیدها «id» */
+function itemKey(item) {
+  return item.id || item.hash || '';
 }

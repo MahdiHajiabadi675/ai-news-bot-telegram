@@ -10,7 +10,7 @@ def load_state():
         "daily_post_count": 0,
         "daily_post_date": None,
         "paused": False,
-        "auto_publish": False,
+        "auto_publish_enabled": True,
         "current_stage": "idle",
         "stage_updated_at": None,
         "last_error": None,
