@@ -155,7 +155,7 @@ async function handleMessage(msg, env, BASE, CHANNEL_ID, ADMIN_ID) {
     }[stage] || '❓';
 
     const paused = state.paused ? '⏸️ متوقف' : '▶️ فعال';
-        const auto = (state.auto_publish_enabled === undefined ? true : state.auto_publish_enabled) ? 'روشن ✅' : 'خاموش ❌';
+    const auto = (state.auto_publish_enabled === undefined ? true : state.auto_publish_enabled) ? 'روشن ✅' : 'خاموش ❌';
     const today = new Date().toISOString().slice(0, 10);
     const dailyCount = state.daily_post_date === today ? (state.daily_post_count || 0) : 0;
     const maxPosts = 15;
