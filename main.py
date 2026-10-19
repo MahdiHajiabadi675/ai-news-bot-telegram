@@ -71,12 +71,31 @@ def run(force=False):
         articles = collect(seen)
 
         if articles:
+            collected_articles = articles
             articles = auto_reject(articles)
+
+            # Rejected items are final; do not inspect them on every run.
+            for article in collected_articles:
+                if article not in articles:
+                    news_id = article.get("id", article.get("hash", ""))
+                    if news_id:
+                        seen.add(news_id)
+            storage.save_seen(seen)
 
             if FAST_TRACK_ENABLED:
                 print("[INFO] Processing fast-track...")
                 fast_items = [a for a in articles if a.get("fast_track")]
-                process_fast_track(fast_items)
+                published_fast = process_fast_track(fast_items)
+                # fast_track persists the daily counter independently.
+                # Refresh it before the regular publisher enforces the limit.
+                fast_state = storage.load_state()
+                state["daily_post_date"] = fast_state.get("daily_post_date")
+                state["daily_post_count"] = fast_state.get("daily_post_count", 0)
+                for item in published_fast:
+                    news_id = item.get("id", item.get("hash", ""))
+                    if news_id:
+                        seen.add(news_id)
+                storage.save_seen(seen)
                 articles = [a for a in articles if not a.get("fast_track")]
 
             if articles:
@@ -84,6 +103,14 @@ def run(force=False):
                 storage.save_state(state)
                 print("[INFO] Analyzing with Gemini...")
                 analyzed, gemini_meta = analyze_articles(articles)
+
+                # Regular articles are considered seen only after analysis.
+                # If analysis fails, the next run can retry them.
+                for article in articles:
+                    news_id = article.get("id", article.get("hash", ""))
+                    if news_id:
+                        seen.add(news_id)
+                storage.save_seen(seen)
 
                 # فقط وقتی Gemini واقعاً fail شد به ادمین هشدار بده (نه وقتی بودجه تمومه)
                 if gemini_meta.get("gemini_failed"):
@@ -103,12 +130,6 @@ def run(force=False):
                     print("[INFO] Gemini skipped (budget) — publishing continues")
                 if gemini_meta.get("fallback_count"):
                     print(f"[INFO] {gemini_meta['fallback_count']} item(s) via simple translation")
-
-                for a in articles:
-                    news_id = a.get("id", a.get("hash", ""))
-                    if news_id:
-                        seen.add(news_id)
-                storage.save_seen(seen)
 
                 pending = storage.load_pending()
                 approved = storage.load_approved()

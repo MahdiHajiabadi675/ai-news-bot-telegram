@@ -257,16 +257,16 @@ def _send_review(item):
         score_label = "ضعیف"
         score_emoji = "🔴"
 
-    text = f"📰 <b>{item['title_fa']}</b>\n\n"
-    text += f"{item['summary_fa']}\n\n"
-    text += f"📌 اهمیت: {item['importance']} | اعتبار: {item['confidence']}\n"
-    text += f"{trust_emoji} منبع: {item['source']} (اعتبار: {trust}/5)\n"
+    text = f"📰 <b>{_escape_html(item['title_fa'])}</b>\n\n"
+    text += f"{_escape_html(item['summary_fa'])}\n\n"
+    text += f"📌 اهمیت: {_escape_html(item['importance'])} | اعتبار: {_escape_html(item['confidence'])}\n"
+    text += f"{trust_emoji} منبع: {_escape_html(item['source'])} (اعتبار: {trust}/5)\n"
     text += f"{score_emoji} اسکور: {score}/100 ({score_label})\n"
-    text += f"🏷️ {' '.join('#'+h for h in item['hashtags'])}"
-    text += f"\n🔗 {item['link']}"
+    text += f"🏷️ {' '.join('#'+_escape_html(h) for h in item['hashtags'])}"
+    text += f"\n🔗 {_escape_html(item['link'])}"
 
     if item.get("admin_question"):
-        text += f"\n\n❓ {item['admin_question']}"
+        text += f"\n\n❓ {_escape_html(item['admin_question'])}"
 
     item_id = item.get("id", item.get("hash", ""))
     keyboard = {
@@ -291,7 +291,10 @@ def notify_admin_new(item):
     if not ADMIN_ID:
         return
     text = f"🔔 خبر جدید (تایید خودکار — در صف انتشار):\n\n"
-    text += f"<b>{item['title_fa']}</b>\n"
-    text += f"{item['summary_fa']}\n\n"
-    text += f"📌 {item['importance']} | {item['confidence']}"
+    text += f"<b>{_escape_html(item['title_fa'])}</b>\n"
+    text += f"{_escape_html(item['summary_fa'])}\n\n"
+    text += f"📌 {_escape_html(item['importance'])} | {_escape_html(item['confidence'])}"
     send_message(ADMIN_ID, text)
+
+def _escape_html(value):
+    return str(value).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")

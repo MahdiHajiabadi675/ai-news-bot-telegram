@@ -22,7 +22,12 @@ export default {
         }
       }
 
-      const update = await request.json();
+      let update;
+      try {
+        update = await request.json();
+      } catch {
+        return new Response('Bad Request', { status: 400 });
+      }
 
       if (update.callback_query) {
         await handleCallback(update.callback_query, env, BASE, CHANNEL_ID, ADMIN_ID);
@@ -51,6 +56,11 @@ export default {
 };
 
 async function handleCallback(cb, env, BASE, CHANNEL_ID, ADMIN_ID) {
+  // Never trust callback data without checking the Telegram user who clicked it.
+  if (Number(cb.from?.id) !== ADMIN_ID) {
+    await answerCallback(BASE, cb.id, '⛔️ دسترسی ندارید', true);
+    return;
+  }
   const data = cb.data || '';
   const cbId = cb.id;
   const parts = data.split(':');
@@ -119,6 +129,7 @@ async function handleMessage(msg, env, BASE, CHANNEL_ID, ADMIN_ID) {
     daily_post_date: null,
     current_stage: 'idle'
   });
+  migrateState(state);
 
   // Check if editing
   for (const item of pending) {
@@ -305,16 +316,16 @@ async function sendReview(BASE, ADMIN_ID, item) {
   const scoreEmoji = score >= 70 ? '🟢' : score >= 50 ? '🟡' : score >= 30 ? '🟠' : '🔴';
 
   const id = itemKey(item);
-  let text = `📰 <b>${item.title_fa}</b>\n\n`;
-  text += `${item.summary_fa}\n\n`;
-  text += `🆔 ID: <code>${id || 'N/A'}</code>\n`;
-  text += `📌 اهمیت: ${item.importance} | اعتبار: ${item.confidence}\n`;
-  text += `${trustEmoji} منبع: ${item.source} (${trust}/5)\n`;
+  let text = `📰 <b>${escapeHtml(item.title_fa)}</b>\n\n`;
+  text += `${escapeHtml(item.summary_fa)}\n\n`;
+  text += `🆔 ID: <code>${escapeHtml(id || 'N/A')}</code>\n`;
+  text += `📌 اهمیت: ${escapeHtml(item.importance)} | اعتبار: ${escapeHtml(item.confidence)}\n`;
+  text += `${trustEmoji} منبع: ${escapeHtml(item.source)} (${trust}/5)\n`;
   text += `${scoreEmoji} اسکور: ${score}/100 (${scoreLabel})\n`;
-  text += `🏷️ ${(item.hashtags || []).map(h => '#' + h).join(' ')}\n`;
-  text += `🔗 ${item.link}`;
+  text += `🏷️ ${(item.hashtags || []).map(h => '#' + escapeHtml(h)).join(' ')}\n`;
+  text += `🔗 ${escapeHtml(item.link)}`;
   if (item.admin_question) {
-    text += `\n\n❓ ${item.admin_question}`;
+    text += `\n\n❓ ${escapeHtml(item.admin_question)}`;
   }
 
   const keyboard = {
@@ -336,6 +347,7 @@ async function sendReview(BASE, ADMIN_ID, item) {
 
 async function publishItem(env, BASE, CHANNEL_ID, ADMIN_ID, item) {
   const state = await getJSON(env, 'state', {});
+  migrateState(state);
   if (state.paused) {
     console.log('[publishItem] Bot is paused');
     return;
@@ -353,14 +365,19 @@ async function publishItem(env, BASE, CHANNEL_ID, ADMIN_ID, item) {
   }
 
   let text = '';
+  const title = escapeHtml(item.title_fa);
+  const summary = escapeHtml(item.summary_fa);
+  const source = escapeHtml(item.source);
+  const link = escapeHtml(item.link);
+  const hashtags = (item.hashtags || []).map(h => '#' + escapeHtml(h)).join(' ');
   if (item.category === 'fast_track') {
-    text = `📡 <b>${item.title_fa}</b>\n\n${item.summary_fa}\n\n📰 منبع: <a href="${item.link}">${item.source}</a>\n🏷️ ${(item.hashtags || []).map(h => '#' + h).join(' ')}`;
+    text = `📡 <b>${title}</b>\n\n${summary}\n\n📰 منبع: <a href="${link}">${source}</a>\n🏷️ ${hashtags}`;
   } else if (item.admin_action === 'featured') {
-    text = `⭐️ <b>${item.title_fa}</b>\n\n${item.summary_fa}\n\n📰 منبع: <a href="${item.link}">${item.source}</a>\n🏷️ ${(item.hashtags || []).map(h => '#' + h).join(' ')}`;
+    text = `⭐️ <b>${title}</b>\n\n${summary}\n\n📰 منبع: <a href="${link}">${source}</a>\n🏷️ ${hashtags}`;
   } else if (item.importance === 'high') {
-    text = `🔥 <b>${item.title_fa}</b>\n\n${item.summary_fa}\n\n📰 منبع: <a href="${item.link}">${item.source}</a>\n🏷️ ${(item.hashtags || []).map(h => '#' + h).join(' ')}`;
+    text = `🔥 <b>${title}</b>\n\n${summary}\n\n📰 منبع: <a href="${link}">${source}</a>\n🏷️ ${hashtags}`;
   } else {
-    text = `🤖 <b>${item.title_fa}</b>\n\n${item.summary_fa}\n\n📰 منبع: <a href="${item.link}">${item.source}</a>\n🏷️ ${(item.hashtags || []).map(h => '#' + h).join(' ')}`;
+    text = `🤖 <b>${title}</b>\n\n${summary}\n\n📰 منبع: <a href="${link}">${source}</a>\n🏷️ ${hashtags}`;
   }
 
   if (item.confidence === 'rumor') {
@@ -393,6 +410,7 @@ async function handleRun(env, BASE, CHANNEL_ID, ADMIN_ID) {
   console.log('[handleRun] Started');
   const approved = await getJSON(env, 'approved', []);
   const state = await getJSON(env, 'state', {});
+  migrateState(state);
   console.log('[handleRun] Approved items:', approved.length);
   console.log('[handleRun] State:', JSON.stringify(state));
 
@@ -427,14 +445,19 @@ async function handleRun(env, BASE, CHANNEL_ID, ADMIN_ID) {
     }
 
     let text = '';
+    const title = escapeHtml(item.title_fa);
+    const summary = escapeHtml(item.summary_fa);
+    const source = escapeHtml(item.source);
+    const link = escapeHtml(item.link);
+    const hashtags = (item.hashtags || []).map(h => '#' + escapeHtml(h)).join(' ');
     if (item.category === 'fast_track') {
-      text = `📡 <b>${item.title_fa}</b>\n\n${item.summary_fa}\n\n📰 منبع: <a href="${item.link}">${item.source}</a>\n🏷️ ${(item.hashtags || []).map(h => '#' + h).join(' ')}`;
+      text = `📡 <b>${title}</b>\n\n${summary}\n\n📰 منبع: <a href="${link}">${source}</a>\n🏷️ ${hashtags}`;
     } else if (item.admin_action === 'featured') {
-      text = `⭐️ <b>${item.title_fa}</b>\n\n${item.summary_fa}\n\n📰 منبع: <a href="${item.link}">${item.source}</a>\n🏷️ ${(item.hashtags || []).map(h => '#' + h).join(' ')}`;
+      text = `⭐️ <b>${title}</b>\n\n${summary}\n\n📰 منبع: <a href="${link}">${source}</a>\n🏷️ ${hashtags}`;
     } else if (item.importance === 'high') {
-      text = `🔥 <b>${item.title_fa}</b>\n\n${item.summary_fa}\n\n📰 منبع: <a href="${item.link}">${item.source}</a>\n🏷️ ${(item.hashtags || []).map(h => '#' + h).join(' ')}`;
+      text = `🔥 <b>${title}</b>\n\n${summary}\n\n📰 منبع: <a href="${link}">${source}</a>\n🏷️ ${hashtags}`;
     } else {
-      text = `🤖 <b>${item.title_fa}</b>\n\n${item.summary_fa}\n\n📰 منبع: <a href="${item.link}">${item.source}</a>\n🏷️ ${(item.hashtags || []).map(h => '#' + h).join(' ')}`;
+      text = `🤖 <b>${title}</b>\n\n${summary}\n\n📰 منبع: <a href="${link}">${source}</a>\n🏷️ ${hashtags}`;
     }
 
     if (item.confidence === 'rumor') {
@@ -487,6 +510,14 @@ async function sendMessage(BASE, chatId, text, replyMarkup = null) {
   }
 }
 
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
 async function answerCallback(BASE, cbId, text) {
   try {
     await fetch(`${BASE}/answerCallbackQuery`, {
@@ -514,8 +545,15 @@ async function saveJSON(env, key, value) {
 
 async function updateState(env, updates) {
   const state = await getJSON(env, 'state', {});
+  migrateState(state);
   Object.assign(state, updates);
   await saveJSON(env, 'state', state);
+}
+
+function migrateState(state) {
+  if (state.auto_publish_enabled === undefined && state.auto_publish !== undefined) {
+    state.auto_publish_enabled = Boolean(state.auto_publish);
+  }
 }
 
 /** کلید یکتای خبر — بعضی آیتم‌های قدیمی «hash» دارن، جدیدها «id» */

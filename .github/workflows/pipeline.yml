@@ -2,7 +2,8 @@ name: AI News Pipeline
 
 on:
   schedule:
-    - cron: '0 * * * *'
+    # Avoid the start of the hour, when GitHub Actions is most congested.
+    - cron: '17 * * * *'
   workflow_dispatch:
 
 permissions:
@@ -10,12 +11,13 @@ permissions:
 
 concurrency:
   group: pipeline
-  cancel-in-progress: true
+  # Do not cancel an active collection/publish run when the next hourly event arrives.
+  cancel-in-progress: false
 
 jobs:
   pipeline:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 15
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -35,9 +37,9 @@ jobs:
       - name: Run pipeline
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            python main.py run --force || true
+            python main.py run --force
           else
-            python main.py run || true
+            python main.py run
           fi
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}

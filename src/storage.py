@@ -4,7 +4,7 @@ Storage — از Cloudflare KV استفاده می‌کنه
 from . import cloudflare_kv
 
 def load_state():
-    return cloudflare_kv.get("state", {
+    state = cloudflare_kv.get("state", {
         "last_update_id": 0,
         "last_collect_time": None,
         "daily_post_count": 0,
@@ -16,6 +16,12 @@ def load_state():
         "last_error": None,
         "gemini_fail_count": 0
     })
+    if not isinstance(state, dict):
+        state = {}
+    # Migrate the old field name without changing the user's setting.
+    if "auto_publish_enabled" not in state and "auto_publish" in state:
+        state["auto_publish_enabled"] = bool(state["auto_publish"])
+    return state
 
 def save_state(state):
     cloudflare_kv.put("state", state)

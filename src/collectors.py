@@ -1,6 +1,7 @@
 import feedparser
 import hashlib
 import re
+import requests
 from datetime import datetime
 from bs4 import BeautifulSoup
 
@@ -57,7 +58,13 @@ def collect(seen: set) -> list:
     articles = []
     for feed_cfg in FEEDS:
         try:
-            d = feedparser.parse(feed_cfg["url"])
+            response = requests.get(
+                feed_cfg["url"],
+                timeout=15,
+                headers={"User-Agent": "ai-news-bot/1.0"},
+            )
+            response.raise_for_status()
+            d = feedparser.parse(response.content)
             for entry in d.entries[:10]:
                 title = entry.get("title", "").strip()
                 link = entry.get("link", "")
