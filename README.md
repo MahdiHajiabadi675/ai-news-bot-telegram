@@ -4,9 +4,11 @@
 
 ## ویژگی‌ها
 
-- 📰 **جمع‌آوری خودکار** از +13 منبع معتبر
+- 📰 **جمع‌آوری خودکار** از +19 منبع معتبر
 - 🇮🇷 **خلاصه‌سازی فارسی** با Gemini — **بودجه‌دار**: حداکثر ۱ درخواست در ساعت و ۲۴ در روز
 - 🧾 **ترجمه ساده** با Google Translate برای باقی اخبار (بدون مصرف Gemini)
+- 🇮🇷 **اخبار فارسی هرگز به Gemini نمی‌روند** (پردازش محلی)
+- 🔁 **ضدتکرار** — هر خبر فقط یک‌بار در کانال منتشر می‌شود
 - 🧠 **دسته‌بندی هوشمند**: مهم/متوسط/کم + قطعی/احتمالی/شایعه
 - ✅ **تایید شما**: اخبار مهم و غیرقطعی قبل از انتشار بررسی می‌شوند
 - ⭐️ **ویژه**: قابلیت پین کردن خبر مهم
@@ -76,6 +78,19 @@
 ```
 
 هیچ‌وقت روی چند مدل loop نمی‌زند و هیچ‌وقت بیش از یک درخواست در هر اجرا نمی‌فرستد.
+اخبار فارسی (`lang == "fa"`) همیشه محلی پردازش می‌شوند و به Gemini نمی‌روند.
+
+### محافظ‌های اجرای پایدار
+
+| تنظیم | پیش‌فرض | کار |
+|--------|---------|-----|
+| `MAX_ARTICLES_PER_RUN` | 30 | سقف پردازش هر اجرا (جلوگیری از تایم‌اوت) |
+| `MAX_REVIEWS_PER_RUN` | 5 | سقف پیام «در انتظار تایید» برای ادمین |
+| `MAX_POSTS_PER_DAY` | 15 | سقف انتشار روزانه در کانال |
+| `COLLECT_INTERVAL_MIN` | 45 | حداقل فاصله بین دو جمع‌آوری |
+
+اگر Google Translate سه بار پشت‌سرهم خطا بدهد، بقیهٔ اجرا معطل ترجمه نمی‌شود و خبر با
+عنوان اصلی منتشر می‌شود (کانال هرگز نمی‌خوابد).
 
 ## معماری
 
@@ -115,13 +130,63 @@ Cloudflare Worker (۲۴/۷ همیشه فعال)
 2. پوشه `data/` و `.github/` را بسازید
 3. همه فایل‌های پروژه را آپلود کنید
 
-### 5. تنظیم Secrets
-1. به مخزن بروید → **Settings** → **Secrets and variables** → **Actions**
-2. این متغیرها را اضافه کنید:
-   - `TELEGRAM_BOT_TOKEN`
-   - `TELEGRAM_CHANNEL_ID`
-   - `TELEGRAM_ADMIN_ID`
-   - `GEMINI_API_KEY`
+### 5. ساخت Cloudflare KV
+
+1. وارد [Cloudflare Dashboard](https://dash.cloudflare.com) شوید → **Workers & Pages** → **KV**
+2. **Create namespace** → نام: `ai-news-bot`
+3. دو مقدار لازم دارید:
+   - **Account ID** (از صفحه اصلی Workers)
+   - **Namespace ID** (از صفحهٔ همان KV)
+
+### 6. تنظیم Secrets در GitHub
+
+مخزن → **Settings** → **Secrets and variables** → **Actions** → این‌ها را اضافه کنید:
+
+| Secret | مقدار |
+|--------|-------|
+| `TELEGRAM_BOT_TOKEN` | توکن ربات |
+| `TELEGRAM_CHANNEL_ID` | `@ai_news_bot_telegram` یا آیدی عددی |
+| `TELEGRAM_ADMIN_ID` | آیدی عددی ادمین |
+| `GEMINI_API_KEY` | کلید Gemini |
+| `CF_ACCOUNT_ID` | Account ID کلادفلر |
+| `CF_KV_NAMESPACE` | Namespace ID |
+| `CF_API_TOKEN` | توکن API با دسترسی **Workers KV Storage → Edit** |
+
+### 7. تنظیم Worker در Cloudflare
+
+1. **Workers & Pages** → **Create** → **Worker** → نام: `ai-news-bot-worker`
+2. کد `worker/index.js` را در **Edit code** جای‌گذاری کنید → **Save and Deploy**
+3. **Settings → Variables and Secrets** → این‌ها را به‌صورت **Secret** اضافه کنید:
+   - `BOT_TOKEN` — توکن ربات
+   - `CHANNEL_ID` — آیدی کانال
+   - `ADMIN_ID` — آیدی عددی ادمین
+   - `WORKER_SECRET` — یک رشتهٔ تصادفی (برای محافظت از `/run`)
+4. **Settings → Bindings** → **KV Namespace** → نام متغیر: `KV` (باید دقیقاً `KV` باشد) → همان namespace
+5. آدرس Worker را کپی کنید (مثلاً `https://ai-news-bot-worker.xxx.workers.dev`)
+
+### 8. اتصال Webhook
+
+یک‌بار این آدرس را در مرورگر باز کنید:
+
+```
+https://api.telegram.org/bot<TOKEN>/setWebhook?url=https://<WORKER_URL>/webhook
+```
+
+باید `{"ok":true,...}` ببینید. سپس در ربات `/start` بزنید.
+
+> اگر `WEBHOOK_SECRET` را در Worker تنظیم کردید، باید `&secret_token=<همان مقدار>` را هم به آدرس بالا اضافه کنید.
+
+### 9. (اختیاری) اجرای مطمئن هر ساعت
+
+GitHub گاهی اجرای زمان‌بندی‌شده را ۴-۵ ساعت عقب می‌اندازد. برای اجرای قطعی هر ساعت:
+
+1. یک **GitHub Fine-grained Token** بسازید با دسترسی **Actions: Read and write** روی همین مخزن.
+2. در Worker دو Secret اضافه کنید:
+   - `GITHUB_TOKEN` — همان توکن
+   - `GITHUB_REPO` — `MahdiHajiabadi675/ai-news-bot-telegram`
+3. در Cloudflare → Worker → **Settings → Triggers → Cron Triggers** → `17 * * * *`
+
+اگر این‌ها تنظیم نشوند، همان cron خود GitHub (`17 * * * *`) کار را انجام می‌دهد.
 
 تمام! ✅ ربات هر ۱ ساعت اجرا می‌شود و Worker به‌صورت ۲۴/۷ فعال است.
 
@@ -172,9 +237,11 @@ ai-news-bot/
 
 ## منابع اخبار
 
-**معتبر (Trust 4-5):** OpenAI Blog, Google AI, HuggingFace, MIT Tech Review, Ars Technica, TechCrunch AI
+**معتبر (Trust 5):** OpenAI Blog, Google AI, DeepMind, Anthropic, Meta AI, HuggingFace, Microsoft AI
 
-**متوسط (Trust 3):** VentureBeat AI, The Verge AI, Wired AI, AI News, دیجیاتو, تک‌راسا
+**معتبر (Trust 4):** MIT Tech Review, Ars Technica AI, TechCrunch AI, Papers with Code
+
+**متوسط (Trust 3):** VentureBeat AI, The Verge AI, Wired AI, AI News, TechCrunch, The Verge, Ars Technica, دیجیاتو, زومگ, تک‌راسا
 
 ## امتیاز اعتبار منابع
 

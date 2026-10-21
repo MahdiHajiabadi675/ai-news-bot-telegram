@@ -5,6 +5,11 @@ compatibility_date = "2024-11-01"
 # ربات همیشه فعال (webhook) + دستورات ادمین
 # زمان‌بندی جمع‌آوری/تحلیل در GitHub Actions انجام می‌شه (نه اینجا)
 
+# اختیاری: اجرای مطمئن ساعت‌به‌ساعتِ ورک‌فلوی گیت‌هاب از طریق Cloudflare
+# (به‌همراه secrets: GITHUB_TOKEN و GITHUB_REPO)
+# [triggers]
+# crons = ["17 * * * *"]
+
 [[kv_namespaces]]
 binding = "KV"
 id = "YOUR_KV_NAMESPACE_ID"

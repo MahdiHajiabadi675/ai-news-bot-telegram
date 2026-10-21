@@ -5,6 +5,7 @@ Analyzer — تحلیل اخبار با Gemini (بودجه‌دار)
   • در هر اجرا حداکثر **یک** درخواست به Gemini زده می‌شود (batch).
   • بین دو درخواست حداقل GEMINI_MIN_INTERVAL_MIN دقیقه فاصله است.
   • سقف روزانه GEMINI_MAX_CALLS_PER_DAY.
+  • خبرهای فارسی هرگز به Gemini نمی‌روند (پردازش محلی).
   • خبرهای بیشتر از GEMINI_BATCH_SIZE → ترجمه ساده (Google Translate).
   • اگر Gemini در دسترس نباشد → همه با ترجمه ساده و برچسب fallback.
 
@@ -41,7 +42,9 @@ Articles:
 def analyze_articles(articles: list):
     """تحلیل اخبار — حداکثر یک درخواست به Gemini، بقیه ترجمه ساده
 
-    برمی‌گرداند: (analyzed_items, meta)
+    • اخبار فارسی (lang == "fa") هرگز به Gemini فرستاده نمی‌شوند و کاملاً
+      به‌صورت محلی پردازش می‌شوند.
+    • برمی‌گرداند: (analyzed_items, meta)
     """
     meta = {
         "gemini_used": False,
@@ -49,26 +52,44 @@ def analyze_articles(articles: list):
         "skipped_budget": False,
         "gemini_batch": 0,
         "fallback_count": 0,
+        "persian_local": 0,
     }
 
     if not articles:
         return [], meta
 
+    # ── جدا کردن فارسی و انگلیسی ──
+    fa_articles = [a for a in articles if a.get("lang") == "fa"]
+    en_articles = [a for a in articles if a.get("lang") != "fa"]
+
+    analyzed = []
+
+    # اخبار فارسی: بدون هیچ درخواستی به Gemini
+    if fa_articles:
+        local = _basic_scoring(fa_articles)
+        analyzed += local
+        meta["persian_local"] = len(fa_articles)
+        meta["fallback_count"] += len(local)
+        print(f"[INFO] {len(fa_articles)} Persian article(s) — local processing (no Gemini)")
+
+    if not en_articles:
+        return analyzed, meta
+
     if not GEMINI_API_KEY:
         print("[INFO] No GEMINI_API_KEY — simple translation")
-        items = _basic_scoring(articles)
-        meta["fallback_count"] = len(items)
-        return items, meta
+        fallback = _basic_scoring(en_articles)
+        meta["fallback_count"] += len(fallback)
+        return analyzed + fallback, meta
 
     if not gemini_budget.can_call():
         print("[INFO] Gemini budget exhausted — simple translation")
-        items = _basic_scoring(articles)
         meta["skipped_budget"] = True
-        meta["fallback_count"] = len(items)
-        return items, meta
+        fallback = _basic_scoring(en_articles)
+        meta["fallback_count"] += len(fallback)
+        return analyzed + fallback, meta
 
-    batch = articles[:GEMINI_BATCH_SIZE]
-    rest = articles[GEMINI_BATCH_SIZE:]
+    batch = en_articles[:GEMINI_BATCH_SIZE]
+    rest = en_articles[GEMINI_BATCH_SIZE:]
     meta["gemini_batch"] = len(batch)
 
     print(f"[INFO] Asking Gemini about {len(batch)} article(s) (1 request)")
@@ -76,19 +97,19 @@ def analyze_articles(articles: list):
 
     if not results:
         print("[WARN] Gemini failed — simple translation for all")
-        items = _basic_scoring(articles)
         meta["gemini_failed"] = True
-        meta["fallback_count"] = len(items)
-        return items, meta
+        fallback = _basic_scoring(en_articles)
+        meta["fallback_count"] += len(fallback)
+        return analyzed + fallback, meta
 
     gemini_budget.mark_called()
     meta["gemini_used"] = True
-    analyzed = _merge(batch, results)
+    analyzed += _merge(batch, results)
 
     if rest:
         print(f"[INFO] {len(rest)} extra article(s) beyond batch — simple translation")
         fallback = _basic_scoring(rest)
-        meta["fallback_count"] = len(fallback)
+        meta["fallback_count"] += len(fallback)
         analyzed += fallback
 
     return analyzed, meta
@@ -256,7 +277,7 @@ def _basic_scoring(articles: list):
             summary_fa = a["summary"][:400]
         else:
             from .fallback_translator import translate_with_fallback
-            translated = translate_with_fallback(a["title"], a["summary"]) if a.get("summary") else None
+            translated = translate_with_fallback(a["title"], a.get("summary", "") or "")
             if translated:
                 title_fa = translated.get("title_fa", a["title"])
                 summary_fa = translated.get("summary_fa", a["summary"][:400])

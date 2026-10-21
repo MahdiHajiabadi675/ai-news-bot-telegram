@@ -6,6 +6,11 @@ from .bot import send_message
 
 BASE = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
+def _item_key(item):
+    """کلید یکتای خبر — سازگار با id جدید و hash قدیمی"""
+    return item.get("id") or item.get("hash") or ""
+
+
 def publish_approved(state, approved_items=None):
     if state.get("paused"):
         print("[INFO] Bot is paused, skipping publish")
@@ -22,6 +27,8 @@ def publish_approved(state, approved_items=None):
         return state
 
     published_log = storage.load_published()
+    # ضدتکرار: هیچ خبری دو بار در کانال منتشر نمی‌شود
+    published_keys = {_item_key(p) for p in published_log if p.get("published")}
 
     # Sort by score (highest first)
     importance_order = {"high": 0, "medium": 1, "low": 2}
@@ -32,12 +39,24 @@ def publish_approved(state, approved_items=None):
 
     remaining = []
     for item in approved:
+        key = _item_key(item)
+
+        if key and key in published_keys:
+            print(f"[INFO] Already published, skipping: {key}")
+            continue
+
         if state["daily_post_count"] >= MAX_POSTS_PER_DAY:
             print(f"[INFO] Daily limit reached ({MAX_POSTS_PER_DAY})")
             remaining.append(item)
             continue
 
-        text = format_message(item)
+        try:
+            text = format_message(item)
+        except Exception as e:
+            # یک آیتم خراب نباید کل انتشار را متوقف کند
+            print(f"[ERROR] format_message failed ({key}): {e}")
+            continue
+
         result = send_message(CHANNEL_ID, text)
 
         if result and result.get("ok"):
@@ -45,9 +64,11 @@ def publish_approved(state, approved_items=None):
             item["status"] = "published"
             item["published_at"] = datetime.utcnow().isoformat() + "Z"
             published_log.append({**item, "published": True})
-            print(f"[INFO] Published: {item['title_fa'][:50]}")
+            if key:
+                published_keys.add(key)
+            print(f"[INFO] Published: {str(item.get('title_fa', ''))[:50]}")
         else:
-            print(f"[ERROR] Failed to publish: {result}")
+            print(f"[ERROR] Failed to publish ({key}): {result}")
             remaining.append(item)
 
     storage.save_approved(remaining)
@@ -55,11 +76,11 @@ def publish_approved(state, approved_items=None):
     return state
 
 def format_message(item):
-    title = _escape_html(item["title_fa"])
-    summary = _escape_html(item["summary_fa"])
-    link = item["link"]
-    source = _escape_html(item["source"])
-    hashtags = " ".join(f"#{h}" for h in item["hashtags"])
+    title = _escape_html(item.get("title_fa") or item.get("title") or "")
+    summary = _escape_html(item.get("summary_fa") or "")
+    link = _escape_html(item.get("link") or "")
+    source = _escape_html(item.get("source") or "")
+    hashtags = " ".join(f"#{_escape_html(h)}" for h in (item.get("hashtags") or []))
 
     # Creative formatting based on category and importance
     if item.get("category") == "fast_track":
@@ -82,8 +103,9 @@ def format_message(item):
     text += f"{divider}\n\n"
     text += f"{summary}\n\n"
     text += f"{divider}\n"
-    text += f"📰 منبع: <a href=\"{link}\">{source}</a>\n"
-    text += f"🏷️ {hashtags}"
+    text += f"📰 منبع: <a href=\"{link}\">{source}</a>"
+    if hashtags:
+        text += f"\n🏷️ {hashtags}"
 
     if item.get("confidence") == "rumor":
         text += f"\n\n⚠️ <i>این خبر تایید رسمی نشده است</i>"
@@ -91,4 +113,4 @@ def format_message(item):
     return text
 
 def _escape_html(text):
-    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    return str(text or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")

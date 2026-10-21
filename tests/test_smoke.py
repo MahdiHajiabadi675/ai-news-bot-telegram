@@ -46,6 +46,8 @@ import src.gemini_budget as budget  # noqa: E402
 import src.bot as bot  # noqa: E402
 import src.collectors as collectors  # noqa: E402
 import src.fallback_translator as translator  # noqa: E402
+import src.publisher as publisher  # noqa: E402
+import src.storage as storage  # noqa: E402
 
 _passed = 0
 
@@ -94,9 +96,9 @@ check("روز جدید شمارنده را صفر می‌کند", budget.can_cal
 
 
 # ───────────── آنالایزر ─────────────
-def article(i):
+def article(i, lang="en"):
     return {
-        "id": f"id{i}", "source": "OpenAI Blog", "lang": "fa", "trusted": True,
+        "id": f"id{i}", "source": "OpenAI Blog", "lang": lang, "trusted": True,
         "title": f"title {i}", "link": "http://x", "summary": "s",
     }
 
@@ -137,6 +139,16 @@ analyzer._try_gemini_once = lambda batch: None
 items, meta = analyzer.analyze_articles([article(1)])
 check("خطای Gemini → gemini_failed", meta["gemini_failed"] is True)
 check("خطای Gemini → همه ترجمه ساده", meta["fallback_count"] == 1)
+
+# اخبار فارسی هرگز به Gemini نمی‌روند
+reset_budget()
+analyzer.GEMINI_BATCH_SIZE = 10
+called["n"] = 0
+analyzer._try_gemini_once = lambda batch: called.__setitem__("n", called["n"] + 1)
+items, meta = analyzer.analyze_articles([article(1, lang="fa")])
+check("خبر فارسی → Gemini صدا زده نمی‌شود", called["n"] == 0)
+check("خبر فارسی → پردازش محلی", meta["persian_local"] == 1)
+check("خبر فارسی → عنوان فارسی حفظ می‌شود", items[0]["title_fa"] == "title 1")
 
 
 # ───────────── امتیازدهی و dedup ─────────────
@@ -186,5 +198,45 @@ check("زمان خراب → جمع‌آوری می‌کند",
       mainmod._should_collect(False, "not-a-date", NOW) is True)
 check("زمان آینده (اختلاف ساعت) → جمع‌آوری می‌کند",
       mainmod._should_collect(False, ago(-120), NOW) is True)
+
+
+# ───────────── state: پیش‌فرض انتشار خودکار ─────────────
+print("State defaults:")
+_store["state"] = {"auto_publish": False}
+st = storage.load_state()
+check("مقدار قدیمی auto_publish نادیده گرفته می‌شود", st["auto_publish_enabled"] is True)
+
+_store["state"] = {"auto_publish_enabled": False}
+check("false قدیمی خودکار روشن می‌شود",
+      storage.load_state()["auto_publish_enabled"] is True)
+
+_store["state"] = {"auto_publish_enabled": False, "auto_publish_set_by_admin": True}
+check("خاموش‌کردن دستی ادمین حفظ می‌شود",
+      storage.load_state()["auto_publish_enabled"] is False)
+
+
+# ───────────── انتشار: ضدتکرار و مقاوم‌بودن ─────────────
+print("Publisher:")
+sent = []
+publisher.send_message = lambda chat_id, text, **kw: (sent.append(text) or {"ok": True})
+
+_store["published"] = [{"id": "dup", "published": True}]
+_store["approved"] = [{"id": "dup", "title_fa": "t", "summary_fa": "s",
+                       "source": "x", "link": "http://x", "hashtags": []}]
+pstate = {"daily_post_count": 0,
+          "daily_post_date": datetime.datetime.utcnow().date().isoformat()}
+publisher.publish_approved(pstate)
+check("خبر تکراری دوباره منتشر نمی‌شود", sent == [])
+check("خبر تکراری از صف حذف می‌شود", _store["approved"] == [])
+
+_store["approved"] = [{"id": "fresh", "title_fa": "t", "summary_fa": "s",
+                       "source": "x", "link": "http://x", "hashtags": []}]
+publisher.publish_approved(pstate)
+check("خبر جدید منتشر می‌شود", len(sent) == 1)
+
+txt = publisher.format_message({"title_fa": "a<b", "summary_fa": None,
+                                "source": "s", "link": "http://x?a=1&b=2",
+                                "hashtags": []})
+check("فرمت پیام با فیلد ناقص کرش نمی‌کند", "&lt;" in txt)
 
 print(f"\n{_passed} تست با موفقیت گذشت ✅")

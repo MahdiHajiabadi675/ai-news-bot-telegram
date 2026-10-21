@@ -3,6 +3,10 @@ Storage — از Cloudflare KV استفاده می‌کنه
 """
 from . import cloudflare_kv
 
+# سقف نگهداری داده در KV (جلوگیری از رشد بی‌نهایت)
+MAX_PENDING_ITEMS = 300
+MAX_PUBLISHED_LOG = 1500
+
 def load_state():
     state = cloudflare_kv.get("state", {
         "last_update_id": 0,
@@ -18,9 +22,12 @@ def load_state():
     })
     if not isinstance(state, dict):
         state = {}
-    # Migrate the old field name without changing the user's setting.
-    if "auto_publish_enabled" not in state and "auto_publish" in state:
-        state["auto_publish_enabled"] = bool(state["auto_publish"])
+    # مقدار قدیمی «auto_publish» نادیده گرفته می‌شود (ممکن است از تست‌های
+    # قدیمی false مانده باشد). پیش‌فرض همیشه روشن است.
+    state.setdefault("auto_publish_enabled", True)
+    # اصلاح یک‌بارهٔ مقدار falseِ قدیمی — فقط اگر ادمین خودش خاموش نکرده باشد.
+    if state.get("auto_publish_enabled") is False and not state.get("auto_publish_set_by_admin"):
+        state["auto_publish_enabled"] = True
     return state
 
 def save_state(state):
@@ -44,6 +51,9 @@ def load_pending():
     return cloudflare_kv.get("pending", [])
 
 def save_pending(items):
+    if len(items) > MAX_PENDING_ITEMS:
+        # قدیمی‌ترین‌ها حذف شوند (خبر کهنه ارزش انتشار ندارد)
+        items = items[-MAX_PENDING_ITEMS:]
     cloudflare_kv.put("pending", items)
 
 def load_approved():
@@ -56,6 +66,8 @@ def load_published():
     return cloudflare_kv.get("published", [])
 
 def save_published(items):
+    if len(items) > MAX_PUBLISHED_LOG:
+        items = items[-MAX_PUBLISHED_LOG:]
     cloudflare_kv.put("published", items)
 
 def is_duplicate(news_id: str) -> bool:

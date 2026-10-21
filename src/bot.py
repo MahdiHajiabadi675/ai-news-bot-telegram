@@ -38,7 +38,7 @@ def poll_updates(state):
             "offset": offset + 1,
             "allowed_updates": ["message", "callback_query"]
         }, timeout=30)
-        updates = resp.json().get("result", [])
+        updates = resp.json().get("result") or []
     except Exception as e:
         print(f"[ERROR] poll_updates: {e}")
         return state, []
@@ -125,14 +125,25 @@ def _handle_message(msg, state):
     chat_id = msg.get("chat", {}).get("id", 0)
 
     pending = storage.load_pending()
-    for i, item in enumerate(pending):
-        if item.get("_editing"):
-            pending[i]["summary_fa"] = text
-            pending[i]["_editing"] = False
-            pending[i]["_edited"] = True
+    # اگر هنگام ویرایش دستوری رسید، حالت ویرایش لغو شود
+    if text.startswith("/"):
+        cancelled = False
+        for item in pending:
+            if item.get("_editing"):
+                item["_editing"] = False
+                cancelled = True
+        if cancelled:
             storage.save_pending(pending)
-            send_message(ADMIN_ID, "✅ ویرایش انجام شد — در انتظار تایید")
-            return
+    # دستورها هنگام ویرایش هم کار کنند (متنِ شروع‌شده با / را ویرایش نگیر)
+    if text and not text.startswith("/"):
+        for i, item in enumerate(pending):
+            if item.get("_editing"):
+                pending[i]["summary_fa"] = text
+                pending[i]["_editing"] = False
+                pending[i]["_edited"] = True
+                storage.save_pending(pending)
+                send_message(ADMIN_ID, "✅ ویرایش انجام شد — در انتظار تایید")
+                return
 
     if chat_id != ADMIN_ID:
         return
@@ -207,6 +218,7 @@ def _handle_message(msg, state):
         parts = text.split()
         if len(parts) > 1 and parts[1] in ["on", "off"]:
             state["auto_publish_enabled"] = parts[1] == "on"
+            state["auto_publish_set_by_admin"] = True
             status = "روشن ✅" if state["auto_publish_enabled"] else "خاموش ❌"
             send_message(chat_id, f"انتشار خودکار: {status}")
         else:
@@ -278,12 +290,16 @@ def _send_review(item):
             [
                 {"text": "⭐️ ویژه", "callback_data": f"feature:{item_id}"},
                 {"text": "✏️ ویرایش", "callback_data": f"edit:{item_id}"}
-            ],
-            [
-                {"text": "🔗 مشاهده منبع", "url": item.get("link", "")}
             ]
         ]
     }
+
+    # دکمه لینک فقط وقتی لینک معتبر باشد (وگرنه کل پیام رد می‌شود)
+    link = item.get("link") or ""
+    if link.startswith("http"):
+        keyboard["inline_keyboard"].append(
+            [{"text": "🔗 مشاهده منبع", "url": link}]
+        )
 
     send_message(ADMIN_ID, text, reply_markup=keyboard)
 
@@ -297,4 +313,4 @@ def notify_admin_new(item):
     send_message(ADMIN_ID, text)
 
 def _escape_html(value):
-    return str(value).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    return str(value or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")

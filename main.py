@@ -14,6 +14,7 @@ from src.storage import set_stage
 from src.config import (
     COLLECT_INTERVAL_MIN, FAST_TRACK_ENABLED,
     AUTO_PUBLISH_ENABLED, AUTO_PUBLISH_THRESHOLD, AUTO_REJECT_THRESHOLD,
+    MAX_ARTICLES_PER_RUN, MAX_REVIEWS_PER_RUN,
     TRUST_SCORES, REJECT_KEYWORDS, CATEGORY_WEIGHTS, ADMIN_ID,
     SCORE_SOURCE_WEIGHT, SCORE_IMPORTANCE_WEIGHT, SCORE_CONFIDENCE_WEIGHT, SCORE_CATEGORY_WEIGHT
 )
@@ -22,6 +23,7 @@ from src.analyzer import analyze_articles
 from src.fast_track import process_fast_track
 from src.bot import poll_updates, _send_review, notify_admin_new, send_message
 from src.publisher import publish_approved
+from src import fallback_translator
 
 
 def calculate_score(item: dict) -> int:
@@ -64,6 +66,7 @@ def _should_collect(force, last_collect, now=None, interval_min=None):
 
 def run(force=False):
     print(f"[{datetime.utcnow().isoformat()}] Pipeline started")
+    fallback_translator.reset()
 
     # 1. Load state
     state = storage.load_state()
@@ -91,6 +94,11 @@ def run(force=False):
         seen = storage.load_seen()
         articles = collect(seen)
 
+        # سقف پردازش در هر اجرا (جلوگیری از تایم‌اوت و اسپم تلگرام)
+        if len(articles) > MAX_ARTICLES_PER_RUN:
+            print(f"[INFO] Limiting to {MAX_ARTICLES_PER_RUN} of {len(articles)} new articles")
+            articles = articles[:MAX_ARTICLES_PER_RUN]
+
         if articles:
             collected_articles = articles
             articles = auto_reject(articles)
@@ -104,20 +112,21 @@ def run(force=False):
             storage.save_seen(seen)
 
             if FAST_TRACK_ENABLED:
-                print("[INFO] Processing fast-track...")
                 fast_items = [a for a in articles if a.get("fast_track")]
-                published_fast = process_fast_track(fast_items)
-                # fast_track persists the daily counter independently.
-                # Refresh it before the regular publisher enforces the limit.
-                fast_state = storage.load_state()
-                state["daily_post_date"] = fast_state.get("daily_post_date")
-                state["daily_post_count"] = fast_state.get("daily_post_count", 0)
-                for item in published_fast:
-                    news_id = item.get("id", item.get("hash", ""))
-                    if news_id:
-                        seen.add(news_id)
-                storage.save_seen(seen)
-                articles = [a for a in articles if not a.get("fast_track")]
+                if fast_items:
+                    print("[INFO] Processing fast-track...")
+                    published_fast = process_fast_track(fast_items)
+                    # fast_track persists the daily counter independently.
+                    # Refresh it before the regular publisher enforces the limit.
+                    fast_state = storage.load_state()
+                    state["daily_post_date"] = fast_state.get("daily_post_date")
+                    state["daily_post_count"] = fast_state.get("daily_post_count", 0)
+                    for item in published_fast:
+                        news_id = item.get("id", item.get("hash", ""))
+                        if news_id:
+                            seen.add(news_id)
+                    storage.save_seen(seen)
+                    articles = [a for a in articles if not a.get("fast_track")]
 
             if articles:
                 state = set_stage(state, "analyzing")
@@ -125,8 +134,7 @@ def run(force=False):
                 print("[INFO] Analyzing with Gemini...")
                 analyzed, gemini_meta = analyze_articles(articles)
 
-                # Regular articles are considered seen only after analysis.
-                # If analysis fails, the next run can retry them.
+                # بعد از تحلیل، خبر دیده‌شده محسوب می‌شود تا دوباره پردازش نشود.
                 for article in articles:
                     news_id = article.get("id", article.get("hash", ""))
                     if news_id:
@@ -154,6 +162,9 @@ def run(force=False):
 
                 pending = storage.load_pending()
                 approved = storage.load_approved()
+                reviews_sent = 0
+                notices_sent = 0
+                pending_this_run = 0
 
                 for item in analyzed:
                     source_trust = TRUST_SCORES.get(item["source"], 3)
@@ -184,13 +195,22 @@ def run(force=False):
                         item["status"] = "approved"
                         item["admin_action"] = "auto_approved"
                         approved.append(item)
-                        notify_admin_new(item)
+                        if notices_sent < MAX_REVIEWS_PER_RUN:
+                            notify_admin_new(item)
+                            notices_sent += 1
                         print(f"[AUTO] Approved: {item['title_fa'][:50]} (score: {item['score']})")
                     else:
                         item["status"] = "pending"
                         pending.append(item)
-                        _send_review(item)
+                        pending_this_run += 1
+                        if reviews_sent < MAX_REVIEWS_PER_RUN:
+                            _send_review(item)
+                            reviews_sent += 1
                         print(f"[PENDING] {item['title_fa'][:50]} (score: {item['score']})")
+
+                hidden = pending_this_run - reviews_sent
+                if hidden > 0 and ADMIN_ID:
+                    send_message(ADMIN_ID, f"📋 {hidden} خبر دیگر در انتظار تایید است — /pending")
 
                 storage.save_pending(pending)
                 storage.save_approved(approved)

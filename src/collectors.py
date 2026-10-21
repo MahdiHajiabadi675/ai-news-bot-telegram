@@ -4,6 +4,7 @@ import re
 import requests
 from datetime import datetime
 from bs4 import BeautifulSoup
+from .config import AI_KEYWORDS
 
 FEEDS = [
     # === منابع رسمی AI (Trust 5) ===
@@ -34,6 +35,19 @@ FEEDS = [
     {"name": "تک‌راسا", "url": "https://www.techrasa.com/feed", "lang": "fa", "trusted": False, "fast_track": False},
 ]
 
+# بعضی فیدها به User-Agentهای غیرمرورگر ۴۰۳ می‌دهند
+FEED_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+    ),
+    "Accept": "application/rss+xml, application/xml, text/xml;q=0.9, */*;q=0.8",
+}
+
+# حداکثر آیتم از هر فید (بقیه در اجرای بعدی دیده می‌شوند)
+MAX_PER_FEED = 8
+
+
 def _normalize_url(url: str) -> str:
     """نرمال‌سازی لینک برای مقایسه بهتر"""
     url = url.strip().lower()
@@ -54,18 +68,25 @@ def _clean_html(html):
     text = re.sub(r"\s+", " ", text).strip()
     return text[:2000]
 
+
+def _looks_ai_related(text: str) -> bool:
+    """برای فیدهای عمومی: فقط خبرهای مرتبط با AI نگه داشته شوند"""
+    low = text.lower()
+    return any(kw.lower() in low for kw in AI_KEYWORDS)
+
 def collect(seen: set) -> list:
     articles = []
+    collected_ids = set()
     for feed_cfg in FEEDS:
         try:
             response = requests.get(
                 feed_cfg["url"],
-                timeout=15,
-                headers={"User-Agent": "ai-news-bot/1.0"},
+                timeout=10,
+                headers=FEED_HEADERS,
             )
             response.raise_for_status()
             d = feedparser.parse(response.content)
-            for entry in d.entries[:10]:
+            for entry in d.entries[:MAX_PER_FEED]:
                 title = entry.get("title", "").strip()
                 link = entry.get("link", "")
                 if not title or not link:
@@ -77,9 +98,15 @@ def collect(seen: set) -> list:
                     summary = content[0].get("value", summary)
                 summary = _clean_html(summary)
 
-                news_id = _generate_id(title, link)
-                if news_id in seen:
+                # فیدهای عمومی (مثل TechCrunch/The Verge/دیجیاتو) فقط اگر
+                # خبر مرتبط با AI باشد نگه داشته می‌شود.
+                if not feed_cfg["trusted"] and not _looks_ai_related(title + " " + summary):
                     continue
+
+                news_id = _generate_id(title, link)
+                if news_id in seen or news_id in collected_ids:
+                    continue
+                collected_ids.add(news_id)
 
                 articles.append({
                     "id": news_id,

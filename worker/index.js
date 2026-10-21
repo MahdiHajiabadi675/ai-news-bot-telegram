@@ -52,6 +52,16 @@ export default {
     }
 
     return new Response('OK');
+  },
+
+  /**
+   * اختیاری: اجرای ساعت‌به‌ساعتِ ورک‌فلوی گیت‌هاب از طریق Cloudflare.
+   * فقط وقتی کار می‌کند که GITHUB_TOKEN و GITHUB_REPO در secrets تنظیم شده باشند.
+   * (برای فعال‌سازی: Settings → Triggers → Cron = 17 * * * *)
+   */
+  async scheduled(event, env, ctx) {
+    if (!env.GITHUB_TOKEN || !env.GITHUB_REPO) return;
+    ctx.waitUntil(dispatchGithubWorkflow(env));
   }
 };
 
@@ -82,10 +92,14 @@ async function handleCallback(cb, env, BASE, CHANNEL_ID, ADMIN_ID) {
       await answerCallback(BASE, cbId, '✅ تایید شد — در حال انتشار...');
       // انتشار فوری
       await publishItem(env, BASE, CHANNEL_ID, ADMIN_ID, item);
+    } else {
+      await answerCallback(BASE, cbId, '❌ خبر پیدا نشد (شاید قبلاً حذف شده)', true);
     }
   } else if (action === 'reject') {
-    await saveJSON(env, 'pending', pending.filter(i => itemKey(i) !== itemHash));
-    await answerCallback(BASE, cbId, '❌ رد شد');
+    const rest = pending.filter(i => itemKey(i) !== itemHash);
+    await saveJSON(env, 'pending', rest);
+    const found = rest.length < pending.length;
+    await answerCallback(BASE, cbId, found ? '❌ رد شد' : '❌ خبر پیدا نشد', !found);
   } else if (action === 'feature') {
     const idx = pending.findIndex(i => itemKey(i) === itemHash);
     if (idx !== -1) {
@@ -95,7 +109,9 @@ async function handleCallback(cb, env, BASE, CHANNEL_ID, ADMIN_ID) {
       approved.push(item);
       await saveJSON(env, 'pending', pending);
       await saveJSON(env, 'approved', approved);
-      await answerCallback(BASE, cbId, '⭐️ ویژه');
+      await answerCallback(BASE, cbId, '⭐️ ویژه — در بالای صف انتشار');
+    } else {
+      await answerCallback(BASE, cbId, '❌ خبر پیدا نشد', true);
     }
   } else if (action === 'edit') {
     const item = pending.find(i => itemKey(i) === itemHash);
@@ -104,6 +120,8 @@ async function handleCallback(cb, env, BASE, CHANNEL_ID, ADMIN_ID) {
       await saveJSON(env, 'pending', pending);
       await sendMessage(BASE, ADMIN_ID, '✏️ متن ویرایش‌شده رو بفرست:');
       await answerCallback(BASE, cbId, '');
+    } else {
+      await answerCallback(BASE, cbId, '❌ خبر پیدا نشد', true);
     }
   } else if (action === 'pause') {
     await updateState(env, { paused: true });
@@ -131,9 +149,18 @@ async function handleMessage(msg, env, BASE, CHANNEL_ID, ADMIN_ID) {
   });
   migrateState(state);
 
-  // Check if editing
+  // اگر هنگام ویرایش دستوری رسید، حالت ویرایش لغو شود
+  if (text.startsWith('/')) {
+    let cancelled = false;
+    for (const item of pending) {
+      if (item._editing) { item._editing = false; cancelled = true; }
+    }
+    if (cancelled) await saveJSON(env, 'pending', pending);
+  }
+
+  // Check if editing — دستورها (شروع با /) هرگز به‌عنوان متن ویرایش ذخیره نشوند
   for (const item of pending) {
-    if (item._editing) {
+    if (item._editing && !text.startsWith('/')) {
       item.summary_fa = text;
       item._editing = false;
       item._edited = true;
@@ -195,6 +222,12 @@ async function handleMessage(msg, env, BASE, CHANNEL_ID, ADMIN_ID) {
     const gbMax = gb.max_per_day || 24;
     const gbLast = gb.last_call_at ? String(gb.last_call_at).slice(11, 16) : null;
 
+    // برای عیب‌یابی: آخرین جمع‌آوری و تعداد خبرهای دیده‌شده
+    const lastCollect = state.last_collect_time
+      ? String(state.last_collect_time).slice(0, 16).replace('T', ' ')
+      : '—';
+    const seenList = await getJSON(env, 'seen', []);
+
     await sendMessage(BASE, ADMIN_ID,
       `📊 <b>وضعیت ربات</b>\n\n` +
       `${stageEmoji} مرحله فعلی: <b>${stage}</b>\n` +
@@ -208,6 +241,9 @@ async function handleMessage(msg, env, BASE, CHANNEL_ID, ADMIN_ID) {
       `━━━━━━━━━━━━━━\n` +
       `📈 کل منتشر شده: ${totalPublished}\n` +
       `❌ کل رد شده: ${totalRejected}\n` +
+      `━━━━━━━━━━━━━━\n` +
+      `🕐 آخرین جمع‌آوری: ${lastCollect}\n` +
+      `🔎 خبرهای دیده‌شده: ${Array.isArray(seenList) ? seenList.length : 0}\n` +
       `🧠 Gemini امروز: ${gbToday}/${gbMax}` + (gbLast ? ` (آخرین: ${gbLast})` : '') + `\n` +
       (state.last_error ? `⚠️ خطای آخر: ${state.last_error}\n` : '') +
       (topSources ? `━━━━━━━━━━━━━━\n🏆 برترین منابع:\n${topSources}` : '')
@@ -231,7 +267,7 @@ async function handleMessage(msg, env, BASE, CHANNEL_ID, ADMIN_ID) {
     const parts = text.split(/\s+/);
     if (parts.length > 1 && ['on', 'off'].includes(parts[1])) {
       const val = parts[1] === 'on';
-      await updateState(env, { auto_publish_enabled: val });
+      await updateState(env, { auto_publish_enabled: val, auto_publish_set_by_admin: true });
       await sendMessage(BASE, ADMIN_ID, `انتشار خودکار: ${val ? 'روشن ✅' : 'خاموش ❌'}`);
     } else {
       await sendMessage(BASE, ADMIN_ID, 'استفاده: /auto on یا /auto off');
@@ -337,10 +373,14 @@ async function sendReview(BASE, ADMIN_ID, item) {
       [
         { text: '⭐️ ویژه', callback_data: `feature:${id}` },
         { text: '✏️ ویرایش', callback_data: `edit:${id}` }
-      ],
-      [{ text: '🔗 مشاهده منبع', url: item.link }]
+      ]
     ]
   };
+
+  // دکمه لینک فقط با لینک معتبر (وگرنه تلگرام کل پیام را رد می‌کند)
+  if (typeof item.link === 'string' && item.link.startsWith('http')) {
+    keyboard.inline_keyboard.push([{ text: '🔗 مشاهده منبع', url: item.link }]);
+  }
 
   await sendMessage(BASE, ADMIN_ID, text, keyboard);
 }
@@ -350,6 +390,7 @@ async function publishItem(env, BASE, CHANNEL_ID, ADMIN_ID, item) {
   migrateState(state);
   if (state.paused) {
     console.log('[publishItem] Bot is paused');
+    await sendMessage(BASE, ADMIN_ID, '⏸️ ربات متوقف است — خبر در صف «آماده انتشار» ماند');
     return;
   }
 
@@ -361,6 +402,7 @@ async function publishItem(env, BASE, CHANNEL_ID, ADMIN_ID, item) {
 
   if (state.daily_post_count >= 15) {
     console.log('[publishItem] Daily limit reached');
+    await sendMessage(BASE, ADMIN_ID, '📛 سقف ۱۵ پست امروز پر شد — خبر در صف می‌ماند');
     return;
   }
 
@@ -388,6 +430,7 @@ async function publishItem(env, BASE, CHANNEL_ID, ADMIN_ID, item) {
   const key = itemKey(item);
   if (key && publishedLog.some(p => p.published && itemKey(p) === key)) {
     console.log('[publishItem] Already published, skipping');
+    await sendMessage(BASE, ADMIN_ID, 'ℹ️ این خبر قبلاً منتشر شده بود');
     return;
   }
 
@@ -427,7 +470,6 @@ async function handleRun(env, BASE, CHANNEL_ID, ADMIN_ID) {
 
   const MAX_POSTS = 15;
   let published = 0;
-  const remaining = [];
   const publishedLog = await getJSON(env, 'published', []);
   const publishedIds = new Set(publishedLog.filter(p => p.published).map(p => itemKey(p)));
 
@@ -440,8 +482,8 @@ async function handleRun(env, BASE, CHANNEL_ID, ADMIN_ID) {
 
   for (const item of approved) {
     if (state.daily_post_count >= MAX_POSTS) {
-      remaining.push(item);
-      continue;
+      console.log('[handleRun] Daily limit reached');
+      break; // بقیه در approved می‌مانند
     }
 
     let text = '';
@@ -481,15 +523,21 @@ async function handleRun(env, BASE, CHANNEL_ID, ADMIN_ID) {
       console.log('[handleRun] Published successfully');
     } else {
       console.log('[handleRun] Failed to publish');
-      remaining.push(item);
     }
   }
 
-  await saveJSON(env, 'approved', remaining);
   await saveJSON(env, 'state', state);
   if (published > 0) await saveJSON(env, 'published', publishedLog);
 
-  return new Response(JSON.stringify({ ok: true, published, remaining: remaining.length }), { headers: { 'Content-Type': 'application/json' } });
+  // فقط خبرهای منتشرشده را از صف حذف کن؛ تاییدهای هم‌زمان ادمین از دست نروند.
+  const freshApproved = await getJSON(env, 'approved', []);
+  const kept = freshApproved.filter(i => {
+    const k = itemKey(i);
+    return !(k && publishedIds.has(k));
+  });
+  await saveJSON(env, 'approved', kept);
+
+  return new Response(JSON.stringify({ ok: true, published, remaining: kept.length }), { headers: { 'Content-Type': 'application/json' } });
 }
 
 // === Helpers ===
@@ -512,21 +560,42 @@ async function sendMessage(BASE, chatId, text, replyMarkup = null) {
 
 function escapeHtml(value) {
   return String(value ?? '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;');
 }
 
-async function answerCallback(BASE, cbId, text) {
+async function answerCallback(BASE, cbId, text, showAlert = false) {
   try {
     await fetch(`${BASE}/answerCallbackQuery`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ callback_query_id: cbId, text })
+      body: JSON.stringify({ callback_query_id: cbId, text, show_alert: showAlert })
     });
   } catch (e) {
     console.error('answerCallback error:', e);
+  }
+}
+
+async function dispatchGithubWorkflow(env) {
+  try {
+    const resp = await fetch(
+      `https://api.github.com/repos/${env.GITHUB_REPO}/actions/workflows/pipeline.yml/dispatches`,
+      {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${env.GITHUB_TOKEN}`,
+          'Accept': 'application/vnd.github+json',
+          'User-Agent': 'ai-news-bot-worker',
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ ref: 'main' })
+      }
+    );
+    console.log('[scheduled] GitHub dispatch status:', resp.status);
+  } catch (e) {
+    console.error('[scheduled] dispatch failed:', e);
   }
 }
 
@@ -551,8 +620,12 @@ async function updateState(env, updates) {
 }
 
 function migrateState(state) {
-  if (state.auto_publish_enabled === undefined && state.auto_publish !== undefined) {
-    state.auto_publish_enabled = Boolean(state.auto_publish);
+  // مقدار قدیمی auto_publish نادیده گرفته می‌شود (ممکن است از تست‌های قدیمی false مانده باشد).
+  if (state.auto_publish_enabled === undefined) {
+    state.auto_publish_enabled = true;
+  } else if (state.auto_publish_enabled === false && state.auto_publish_set_by_admin !== true) {
+    // falseِ قدیمی/تصادفی → یک‌بار روشن شود؛ خاموش‌کردن دستی ادمین محفوظ می‌ماند.
+    state.auto_publish_enabled = true;
   }
 }
 
