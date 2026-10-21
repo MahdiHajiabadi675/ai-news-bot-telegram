@@ -42,6 +42,26 @@ def calculate_score(item: dict) -> int:
     return min(total, 100)
 
 
+def _should_collect(force, last_collect, now=None, interval_min=None):
+    """آیا الان باید اخبار را جمع‌آوری کرد؟"""
+    now = now or datetime.utcnow()
+    interval_min = COLLECT_INTERVAL_MIN if interval_min is None else interval_min
+
+    if force:
+        return True
+    if not last_collect:
+        return True
+
+    try:
+        last_dt = datetime.fromisoformat(str(last_collect).replace("Z", ""))
+        elapsed_min = (now - last_dt).total_seconds() / 60
+        # elapsed منفی (ساعت ناهماهنگ) → جمع‌آوری کن
+        return elapsed_min < 0 or elapsed_min >= interval_min
+    except Exception as e:
+        print(f"[WARN] Bad last_collect_time ({e}) — collecting anyway")
+        return True
+
+
 def run(force=False):
     print(f"[{datetime.utcnow().isoformat()}] Pipeline started")
 
@@ -57,11 +77,12 @@ def run(force=False):
     # 3. Collect new articles (if interval passed or forced)
     now = datetime.utcnow()
     last_collect = state.get("last_collect_time")
-    should_collect = force
-    if not force and last_collect:
-        last_dt = datetime.fromisoformat(last_collect.replace("Z", ""))
-        if (now - last_dt).total_seconds() < COLLECT_INTERVAL_MIN * 60:
-            should_collect = False
+    should_collect = _should_collect(force, last_collect, now)
+
+    if should_collect:
+        print("[INFO] Collection: yes")
+    else:
+        print(f"[INFO] Collection: skipped (last: {last_collect})")
 
     if should_collect and not state.get("paused"):
         state = set_stage(state, "collecting")

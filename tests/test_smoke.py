@@ -164,4 +164,27 @@ check("کلید از id", bot._item_key({"id": "x"}) == "x")
 check("کلید از hash (سازگاری قدیمی)", bot._item_key({"hash": "y"}) == "y")
 check("کلید خالی", bot._item_key({}) == "")
 
+
+# ───────────── تصمیم جمع‌آوری (باگ اصلی) ─────────────
+print("Collection decision:")
+NOW = datetime.datetime.utcnow()
+
+
+def ago(minutes):
+    return (NOW - datetime.timedelta(minutes=minutes)).isoformat() + "Z"
+
+
+check("اجرای دستی (force) همیشه جمع‌آوری می‌کند",
+      mainmod._should_collect(True, ago(1), NOW) is True)
+check("اولین اجرا (بدون زمان قبلی) جمع‌آوری می‌کند",
+      mainmod._should_collect(False, None, NOW) is True)
+check("اجرای زمانی بعد از بازه جمع‌آوری می‌کند",
+      mainmod._should_collect(False, ago(240), NOW) is True)
+check("اجرای زمانی در بازه جمع‌آوری نمی‌کند",
+      mainmod._should_collect(False, ago(10), NOW) is False)
+check("زمان خراب → جمع‌آوری می‌کند",
+      mainmod._should_collect(False, "not-a-date", NOW) is True)
+check("زمان آینده (اختلاف ساعت) → جمع‌آوری می‌کند",
+      mainmod._should_collect(False, ago(-120), NOW) is True)
+
 print(f"\n{_passed} تست با موفقیت گذشت ✅")
