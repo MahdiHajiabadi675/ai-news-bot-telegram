@@ -196,7 +196,7 @@ async function handleMessage(msg, env, BASE, CHANNEL_ID, ADMIN_ID) {
     const auto = (state.auto_publish_enabled === undefined ? true : state.auto_publish_enabled) ? 'روشن ✅' : 'خاموش ❌';
     const today = new Date().toISOString().slice(0, 10);
     const dailyCount = state.daily_post_date === today ? (state.daily_post_count || 0) : 0;
-    const maxPosts = 15;
+    const maxPosts = Number(env.MAX_POSTS_PER_RUN) || 15;
 
     // آمار کلی
     const published = await getJSON(env, 'published', []);
@@ -235,7 +235,7 @@ async function handleMessage(msg, env, BASE, CHANNEL_ID, ADMIN_ID) {
       `وضعیت: ${paused}\n` +
       `انتشار خودکار: ${auto}\n` +
       `━━━━━━━━━━━━━━\n` +
-      `📰 امروز: ${dailyCount}/${maxPosts}\n` +
+      `📰 این راند: ${dailyCount}/${maxPosts}\n` +
       `📋 در انتظار تایید: ${pending.length}\n` +
       `✅ آماده انتشار: ${approved.length}\n` +
       `━━━━━━━━━━━━━━\n` +
@@ -400,9 +400,9 @@ async function publishItem(env, BASE, CHANNEL_ID, ADMIN_ID, item) {
     state.daily_post_count = 0;
   }
 
-  if (state.daily_post_count >= 15) {
-    console.log('[publishItem] Daily limit reached');
-    await sendMessage(BASE, ADMIN_ID, '📛 سقف ۱۵ پست امروز پر شد — خبر در صف می‌ماند');
+  if (state.daily_post_count >= maxPosts) {
+    console.log('[publishItem] Run limit reached');
+    await sendMessage(BASE, ADMIN_ID, `📛 سقف ${maxPosts} پست این راند پر شد — خبر در صف می‌ماند`);
     return;
   }
 
@@ -468,7 +468,7 @@ async function handleRun(env, BASE, CHANNEL_ID, ADMIN_ID) {
     state.daily_post_count = 0;
   }
 
-  const MAX_POSTS = 15;
+  const MAX_POSTS = Number(env.MAX_POSTS_PER_RUN) || 15;
   let published = 0;
   const publishedLog = await getJSON(env, 'published', []);
   const publishedIds = new Set(publishedLog.filter(p => p.published).map(p => itemKey(p)));
@@ -482,7 +482,7 @@ async function handleRun(env, BASE, CHANNEL_ID, ADMIN_ID) {
 
   for (const item of approved) {
     if (state.daily_post_count >= MAX_POSTS) {
-      console.log('[handleRun] Daily limit reached');
+      console.log('[handleRun] Run limit reached');
       break; // بقیه در approved می‌مانند
     }
 

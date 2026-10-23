@@ -72,6 +72,12 @@ def run(force=False):
     state = storage.load_state()
     approved_to_publish = None
 
+    # هر راند اجرا بودجه انتشار مستقل دارد (سقف MAX_POSTS_PER_RUN)
+    # شمارنده در ابتدای هر اجرا صفر می‌شود تا هر اجرا تا ۱۵ پست برود
+    state["daily_post_count"] = 0
+    state["daily_post_date"] = datetime.utcnow().date().isoformat()
+    storage.save_state(state)
+
     # 2. Poll bot updates (admin actions)
     state, updates = poll_updates(state)
     if updates:

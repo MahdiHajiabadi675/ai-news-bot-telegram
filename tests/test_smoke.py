@@ -239,4 +239,17 @@ txt = publisher.format_message({"title_fa": "a<b", "summary_fa": None,
                                 "hashtags": []})
 check("فرمت پیام با فیلد ناقص کرش نمی‌کند", "&lt;" in txt)
 
+# ───────────── سقف انتشار در هر راند (MAX_POSTS_PER_RUN) ─────────────
+print("Publish per-run limit:")
+_store["approved"] = [{"id": f"p{i}", "title_fa": f"t{i}", "summary_fa": "s",
+                       "source": "x", "link": "http://x", "hashtags": []}
+                      for i in range(20)]
+pstate_run = {"daily_post_count": 0,
+              "daily_post_date": datetime.datetime.utcnow().date().isoformat()}
+sent_run = []
+publisher.send_message = lambda chat_id, text, **kw: (sent_run.append(text) or {"ok": True})
+publisher.publish_approved(pstate_run)
+check("از ۲۰ خبر فقط ۱۵ تا در یک راند منتشر می‌شود", len(sent_run) == 15)
+check("بقیه در صف approved می‌مانند", len(_store["approved"]) == 5)
+
 print(f"\n{_passed} تست با موفقیت گذشت ✅")

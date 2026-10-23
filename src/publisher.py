@@ -1,6 +1,6 @@
 import requests
 from datetime import datetime, date
-from .config import BOT_TOKEN, CHANNEL_ID, MAX_POSTS_PER_DAY
+from .config import BOT_TOKEN, CHANNEL_ID, MAX_POSTS_PER_RUN, MAX_POSTS_PER_DAY
 from . import storage
 from .bot import send_message
 
@@ -30,10 +30,23 @@ def publish_approved(state, approved_items=None):
     # ضدتکرار: هیچ خبری دو بار در کانال منتشر نمی‌شود
     published_keys = {_item_key(p) for p in published_log if p.get("published")}
 
-    # Sort by score (highest first)
+    # سقف امنیتی روزانه (اختیاری — پیش‌فرض خاموش)
+    if MAX_POSTS_PER_DAY and MAX_POSTS_PER_DAY > 0:
+        today_published = sum(
+            1 for p in published_log
+            if p.get("published") and str(p.get("published_at", ""))[:10] == today
+        )
+        if today_published >= MAX_POSTS_PER_DAY:
+            print(f"[INFO] Daily safety cap reached ({MAX_POSTS_PER_DAY}) — keeping in queue")
+            storage.save_approved(approved)
+            return state
+
+    # ترتیب انتشار: ویژه ← خبرهای خودکار ← تاییدی‌های ادمین (سپس اهمیت)
+    # یعنی اول ۱۵ خودکار می‌رود و هر جا بجای خالی ماند، تاییدی ادمین پر می‌کند
     importance_order = {"high": 0, "medium": 1, "low": 2}
     approved.sort(key=lambda x: (
         0 if x.get("admin_action") == "featured" else 1,
+        0 if x.get("admin_action") == "auto_approved" else 1,
         importance_order.get(x.get("importance", "medium"), 2)
     ))
 
@@ -45,8 +58,8 @@ def publish_approved(state, approved_items=None):
             print(f"[INFO] Already published, skipping: {key}")
             continue
 
-        if state["daily_post_count"] >= MAX_POSTS_PER_DAY:
-            print(f"[INFO] Daily limit reached ({MAX_POSTS_PER_DAY})")
+        if state["daily_post_count"] >= MAX_POSTS_PER_RUN:
+            print(f"[INFO] Run limit reached ({MAX_POSTS_PER_RUN}) — keeping in queue")
             remaining.append(item)
             continue
 

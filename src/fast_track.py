@@ -5,7 +5,7 @@ Fast-track processor — بدون هیچ درخواستی به Gemini
 """
 from datetime import datetime
 from .config import (
-    AI_KEYWORDS, CHANNEL_ID, BOT_TOKEN, MAX_POSTS_PER_DAY
+    AI_KEYWORDS, CHANNEL_ID, BOT_TOKEN, MAX_POSTS_PER_RUN
 )
 from . import storage
 from .fallback_translator import translate_with_fallback
@@ -48,8 +48,8 @@ def process_fast_track(articles: list) -> list:
         if state.get("daily_post_date") != today:
             state["daily_post_date"] = today
             state["daily_post_count"] = 0
-        if state["daily_post_count"] >= MAX_POSTS_PER_DAY:
-            print(f"[FAST] Daily limit reached")
+        if state["daily_post_count"] >= MAX_POSTS_PER_RUN:
+            print(f"[FAST] Run limit reached ({MAX_POSTS_PER_RUN})")
             break
 
         item_id = article.get("id", article.get("hash", ""))

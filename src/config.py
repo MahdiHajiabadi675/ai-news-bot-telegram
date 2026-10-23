@@ -35,7 +35,10 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = BASE_DIR / "data"
 
 # Behavior
-MAX_POSTS_PER_DAY = _int_env("MAX_POSTS_PER_DAY", 15)
+# سقف پست در **هر راند اجرا** (نه هر روز) — هر اجرا (مثلاً هر ساعت) تا این تعداد پست می‌رود
+MAX_POSTS_PER_RUN = _int_env("MAX_POSTS_PER_RUN", 15)
+# سقف امنیتی اختیاری در روز؛ 0 یعنی خاموش (روزانه محدودیتی نیست)
+MAX_POSTS_PER_DAY = _int_env("MAX_POSTS_PER_DAY", 0)
 COLLECT_INTERVAL_MIN = _int_env("COLLECT_INTERVAL_MIN", 45)
 
 # سقف پردازش در هر اجرا — جلوگیری از تایم‌اوت و اسپم تلگرام
