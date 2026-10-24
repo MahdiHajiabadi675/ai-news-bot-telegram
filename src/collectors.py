@@ -4,7 +4,7 @@ import re
 import requests
 from datetime import datetime
 from bs4 import BeautifulSoup
-from .config import AI_KEYWORDS
+from .classifier import is_ai_related
 
 FEEDS = [
     # === منابع رسمی AI (Trust 5) ===
@@ -71,8 +71,7 @@ def _clean_html(html):
 
 def _looks_ai_related(text: str) -> bool:
     """برای فیدهای عمومی: فقط خبرهای مرتبط با AI نگه داشته شوند"""
-    low = text.lower()
-    return any(kw.lower() in low for kw in AI_KEYWORDS)
+    return is_ai_related(text)
 
 def collect(seen: set) -> list:
     articles = []

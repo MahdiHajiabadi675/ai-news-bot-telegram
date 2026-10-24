@@ -1,6 +1,7 @@
 import requests
-from .config import BOT_TOKEN, ADMIN_ID
-from . import storage
+from .config import BOT_TOKEN, ADMIN_ID, AUTO_TRUST_THRESHOLD
+from . import storage, source_trust
+from .formatting import escape_html as _escape_html_fmt, clip, is_untranslated
 
 BASE = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
@@ -56,9 +57,56 @@ def poll_updates(state):
 
     return state, handled
 
+def _record_decision(item, action):
+    """تصمیم ادمین را در آمار اعتبار منبع ثبت می‌کند (اعتبار پویا)"""
+    try:
+        stats = storage.load_source_stats()
+        source_trust.record_decision(stats, item.get("source", ""), action, prior=item.get("source_prior"))
+        storage.save_source_stats(stats)
+    except Exception as e:
+        print(f"[WARN] record_decision failed: {e}")
+
+
+def clear_keyboard(pending_n, approved_n):
+    """کیبورد تایید پاک‌کردن صف"""
+    rows = [[{"text": f"🗑 فقط صف تایید ({pending_n})", "callback_data": "clrp"}]]
+    if approved_n:
+        rows.append([{"text": f"🗑 همه، با صف آماده انتشار ({pending_n + approved_n})", "callback_data": "clra"}])
+    rows.append([{"text": "↩️ انصراف", "callback_data": "clrx"}])
+    return {"inline_keyboard": rows}
+
+
+def _ask_clear(chat_id):
+    pending_n = len(storage.load_pending())
+    approved_n = len(storage.load_approved())
+    if not pending_n and not approved_n:
+        send_message(chat_id, "📭 صف خالی است")
+        return
+    send_message(
+        chat_id,
+        f"⚠️ <b>پاک‌کردن صف</b>\n\n📋 در انتظار تایید: {pending_n}\n✅ آماده انتشار: {approved_n}\n\n"
+        "این کار برگشت‌پذیر نیست. (رد‌شدن‌ها در اعتبار منابع حساب نمی‌شوند.)",
+        reply_markup=clear_keyboard(pending_n, approved_n),
+    )
+
+
+def _do_clear(include_approved):
+    pending = storage.load_pending()
+    n_p = len(pending)
+    storage.save_pending([])
+    n_a = 0
+    if include_approved:
+        n_a = len(storage.load_approved())
+        storage.save_approved([])
+    return n_p, n_a
+
+
 def _handle_callback(cb, state):
     data = cb.get("data", "")
     cb_id = cb.get("id", "")
+    if ADMIN_ID and cb.get("from", {}).get("id") != ADMIN_ID:
+        answer_callback(cb_id, "⛔️ دسترسی ندارید", show_alert=True)
+        return
     parts = data.split(":")
     action = parts[0]
     item_hash = parts[1] if len(parts) > 1 else ""
@@ -69,6 +117,7 @@ def _handle_callback(cb, state):
     if action == "approve":
         item = _find_and_remove(pending, item_hash)
         if item:
+            _record_decision(item, "approve")
             item["status"] = "approved"
             item["admin_action"] = "approved"
             approved.append(item)
@@ -81,6 +130,7 @@ def _handle_callback(cb, state):
     elif action == "reject":
         item = _find_and_remove(pending, item_hash)
         if item:
+            _record_decision(item, "reject")
             item["status"] = "rejected"
             storage.save_pending(pending)
             pub = storage.load_published()
@@ -93,6 +143,7 @@ def _handle_callback(cb, state):
     elif action == "feature":
         item = _find_and_remove(pending, item_hash)
         if item:
+            _record_decision(item, "feature")
             item["status"] = "approved"
             item["admin_action"] = "featured"
             approved.append(item)
@@ -111,6 +162,19 @@ def _handle_callback(cb, state):
                     send_message(ADMIN_ID, "✏️ متن ویرایش‌شده رو بفرست:")
                 answer_callback(cb_id)
                 break
+
+    elif action == "clearq":
+        answer_callback(cb_id)
+        _ask_clear(cb.get("from", {}).get("id") or ADMIN_ID)
+
+    elif action in ("clrp", "clra"):
+        n_p, n_a = _do_clear(include_approved=(action == "clra"))
+        answer_callback(cb_id, "🗑 پاک شد")
+        extra = f" و {n_a} خبر آماده انتشار" if action == "clra" else ""
+        send_message(ADMIN_ID, f"🗑 {n_p} خبر در انتظار تایید{extra} پاک شد.")
+
+    elif action == "clrx":
+        answer_callback(cb_id, "انصراف داده شد")
 
     elif action == "pause":
         state["paused"] = True
@@ -157,6 +221,8 @@ def _handle_message(msg, state):
             "/pause - توقف انتشار\n"
             "/resume - ادامه انتشار\n"
             "/auto on|off - انتشار خودکار اخبار مهم\n"
+            "/clear - پاک‌کردن کل صف\n"
+            "/sources - اعتبار پویای منابع\n"
             "/stats - آمار"
         )
 
@@ -183,9 +249,6 @@ def _handle_message(msg, state):
         last_error = state.get("last_error")
         error_text = f"\n🔴 خطای آخر: {last_error}" if last_error else ""
 
-        gemini_fails = state.get("gemini_fail_count", 0)
-        gemini_text = f"\nGemini fail: {gemini_fails}" if gemini_fails > 0 else ""
-
         send_message(chat_id,
             f"📊 <b>وضعیت ربات</b>\n\n"
             f"{stage_emoji} مرحله: {stage}\n"
@@ -194,7 +257,6 @@ def _handle_message(msg, state):
             f"در انتظار تایید: {pending_count}\n"
             f"آماده انتشار: {approved_count}\n"
             f"انتشار خودکار: {auto}"
-            f"{gemini_text}"
             f"{error_text}"
         )
 
@@ -205,6 +267,15 @@ def _handle_message(msg, state):
             return
         for item in pending[:5]:
             _send_review(item)
+        if len(pending) > 5:
+            send_message(chat_id, f"📋 {len(pending) - 5} خبر دیگر هم در صف است.",
+                         reply_markup={"inline_keyboard": [[{"text": "🗑 پاک کردن کل صف", "callback_data": "clearq"}]]})
+
+    elif text == "/clear":
+        _ask_clear(chat_id)
+
+    elif text == "/sources":
+        send_message(chat_id, sources_report(storage.load_source_stats()))
 
     elif text == "/pause":
         state["paused"] = True
@@ -248,11 +319,30 @@ def _now():
     from datetime import datetime
     return datetime.utcnow().isoformat() + "Z"
 
+def sources_report(stats):
+    """گزارش اعتبار پویای منابع (پایه ← فعلی)"""
+    from .collectors import FEEDS
+    names = [f["name"] for f in FEEDS]
+    rows = []
+    for name in names:
+        base = source_trust.prior_of(name)
+        now_t = source_trust.trust_of(name, stats)
+        e = stats.get(name) or {}
+        pos, neg = round(float(e.get("pos", 0)), 1), round(float(e.get("neg", 0)), 1)
+        arrow = "🔼" if now_t - base >= 0.3 else "🔽" if base - now_t >= 0.3 else "▫️"
+        auto = "🤖" if now_t >= AUTO_TRUST_THRESHOLD else "👀"
+        rows.append((now_t, f"{auto}{arrow} {_escape_html(name)}: {base} ← <b>{now_t:.1f}</b>  (✅{pos} ❌{neg})"))
+    rows.sort(key=lambda r: -r[0])
+    return ("📡 <b>اعتبار پویای منابع</b>\n"
+            f"🤖 = انتشار خودکار (≥ {AUTO_TRUST_THRESHOLD}) | 👀 = نیازمند تایید شما\n\n"
+            + "\n".join(r[1] for r in rows))
+
+
 def _send_review(item):
     if not ADMIN_ID:
         return
 
-    trust = item.get("source_trust", 3)
+    trust = float(item.get("source_trust", 3))
     trust_emoji = "🟢" if trust >= 4 else "🟡" if trust >= 3 else "🔴"
 
     score = item.get("score", 0)
@@ -271,8 +361,15 @@ def _send_review(item):
 
     text = f"📰 <b>{_escape_html(item['title_fa'])}</b>\n\n"
     text += f"{_escape_html(item['summary_fa'])}\n\n"
+    if is_untranslated(item):
+        text += "🔤 <i>ترجمه نشده — متن اصلی</i>\n\n"
+    elif item.get("title") and item.get("lang") not in ("fa", None):
+        text += f"🌐 {_escape_html(clip(item['title'], 150))}\n\n"
     text += f"📌 اهمیت: {_escape_html(item['importance'])} | اعتبار: {_escape_html(item['confidence'])}\n"
-    text += f"{trust_emoji} منبع: {_escape_html(item['source'])} (اعتبار: {trust}/5)\n"
+    text += f"{trust_emoji} منبع: {_escape_html(item['source'])} (اعتبار: {trust:.1f}/5)"
+    if item.get("corroborated_by"):
+        text += f" — 🔗 تایید شده توسط {item['corroborated_by']} منبع دیگر"
+    text += "\n"
     text += f"{score_emoji} اسکور: {score}/100 ({score_label})\n"
     text += f"🏷️ {' '.join('#'+_escape_html(h) for h in item['hashtags'])}"
     text += f"\n🔗 {_escape_html(item['link'])}"
@@ -290,16 +387,15 @@ def _send_review(item):
             [
                 {"text": "⭐️ ویژه", "callback_data": f"feature:{item_id}"},
                 {"text": "✏️ ویرایش", "callback_data": f"edit:{item_id}"}
-            ]
+            ],
+            [{"text": "🗑 پاک کردن کل صف", "callback_data": "clearq"}]
         ]
     }
 
     # دکمه لینک فقط وقتی لینک معتبر باشد (وگرنه کل پیام رد می‌شود)
     link = item.get("link") or ""
     if link.startswith("http"):
-        keyboard["inline_keyboard"].append(
-            [{"text": "🔗 مشاهده منبع", "url": link}]
-        )
+        keyboard["inline_keyboard"].insert(2, [{"text": "🔗 مشاهده منبع", "url": link}])
 
     send_message(ADMIN_ID, text, reply_markup=keyboard)
 
@@ -313,4 +409,4 @@ def notify_admin_new(item):
     send_message(ADMIN_ID, text)
 
 def _escape_html(value):
-    return str(value or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    return _escape_html_fmt(value)
