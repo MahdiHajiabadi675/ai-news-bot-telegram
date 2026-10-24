@@ -18,16 +18,14 @@ BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 CHANNEL_ID = os.getenv("TELEGRAM_CHANNEL_ID", "")
 ADMIN_ID = _int_env("TELEGRAM_ADMIN_ID", 0)
 
-# LLM (Gemini free tier)
+# Gemini — فعلاً کنار گذاشته شده (در پایپ‌لاین استفاده نمی‌شود).
+# ترجمه کاملاً با src/translator.py انجام می‌شود. این تنظیمات فقط برای
+# src/gemini_parked.py و src/gemini_budget.py نگه داشته شده‌اند تا ایدهٔ بعدی
+# رویشان پیاده شود.
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
-
-# بودجه Gemini — جلوگیری از بن شدن API
-# حداکثر یک درخواست در هر بازه:
 GEMINI_MIN_INTERVAL_MIN = _int_env("GEMINI_MIN_INTERVAL_MIN", 55)
-# سقف روزانه:
 GEMINI_MAX_CALLS_PER_DAY = _int_env("GEMINI_MAX_CALLS_PER_DAY", 24)
-# حداکثر تعداد خبر در هر درخواست (بقیه ترجمه ساده می‌شن):
 GEMINI_BATCH_SIZE = _int_env("GEMINI_BATCH_SIZE", 10)
 
 # Paths
@@ -56,21 +54,43 @@ SCORE_CATEGORY_WEIGHT = 20
 AUTO_PUBLISH_THRESHOLD = 70
 AUTO_REJECT_THRESHOLD = 30
 
+# نمایش متن اصلی (انگلیسی) زیر ترجمه فارسی در کانال
+SHOW_ORIGINAL_TEXT = os.getenv("SHOW_ORIGINAL_TEXT", "true").lower() == "true"
+
+# ───────── اعتبار پویای منابع ─────────
+# اعتبار پایهٔ هر منبع (TRUST_SCORES پایین) فقط «پیش‌فرض اولیه» است.
+# با هر تایید/رد ادمین، اعتبار واقعی منبع به‌روز می‌شود (src/source_trust.py).
+# وزن پیش‌فرض اولیه: معادل چند «مشاهدهٔ فرضی». هرچه بزرگ‌تر، دیرتر عوض می‌شود.
+TRUST_PRIOR_WEIGHT = _int_env("TRUST_PRIOR_WEIGHT", 8)
+# نیمه‌عمر شواهد (روز): تصمیم‌های قدیمی‌تر کم‌اثرتر می‌شوند
+TRUST_HALF_LIFE_DAYS = _int_env("TRUST_HALF_LIFE_DAYS", 30)
+# تایید «ویژه» چند برابر یک تایید معمولی ارزش دارد
+TRUST_FEATURE_WEIGHT = 1.5
+# حداقل اعتبار پویا برای انتشار خودکار (از 5)
+AUTO_TRUST_THRESHOLD = 4.0
+# هر منبع مستقل دیگری که همان خبر را داده باشد، چند امتیاز به اعتبار اضافه می‌کند
+CORROBORATION_BONUS = 0.5
+CORROBORATION_MAX_BONUS = 1.0
+
 # Auto-publish settings
 AUTO_PUBLISH_ENABLED = os.getenv("AUTO_PUBLISH_ENABLED", "true").lower() == "true"
 
 # Fast-track settings
 FAST_TRACK_ENABLED = os.getenv("FAST_TRACK_ENABLED", "true").lower() == "true"
 
-# AI Keywords for fast-track filtering
+# کلیدواژه‌های مرتبط با AI (فیلتر فیدهای عمومی و fast-track)
+# انگلیسی با مرز کلمه تطبیق داده می‌شود (تا "ai" داخل "said" پیدا نشود)،
+# فارسی به‌صورت زیررشته. کلمات خیلی عمومی (مثل "مدل"، "ماشین"، "training") حذف شده‌اند.
 AI_KEYWORDS = [
-    "هوش مصنوعی", "یادگیری ماشین", "مدل", "GPT", "LLM", "شبکه عصبی",
-    "deepseek", "chatgpt", "gemini", "claude", "anthropic", "openai",
-    "مصنوعی", "ماشین", "الگوریتم",
-    "AI", "artificial intelligence", "machine learning", "deep learning",
-    "neural network", "LLM", "large language model", "GPT", "transformer",
-    "diffusion", "generative", "inference", "training", "fine-tuning",
-    "benchmark", "model release", "AI chip", "GPU", "CUDA",
+    # فارسی
+    "هوش مصنوعی", "یادگیری ماشین", "یادگیری عمیق", "شبکه عصبی", "مدل زبانی",
+    "چت‌بات", "چت جی‌پی‌تی", "جمینای", "دیپ‌سیک", "اوپن‌ای‌آی", "آنتروپیک",
+    # انگلیسی
+    "AI", "A.I.", "artificial intelligence", "machine learning", "deep learning",
+    "neural network", "LLM", "LLMs", "large language model", "GPT", "ChatGPT",
+    "OpenAI", "Anthropic", "Claude", "Gemini", "DeepSeek", "Llama", "Mistral",
+    "Copilot", "transformer", "diffusion model", "generative", "fine-tuning",
+    "chatbot", "agentic", "Sora", "Midjourney", "Hugging Face", "AI chip", "GPU", "CUDA",
 ]
 
 # Auto-reject keywords

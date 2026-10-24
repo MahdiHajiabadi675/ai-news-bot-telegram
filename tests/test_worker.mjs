@@ -1,0 +1,137 @@
+/**
+ * تست Worker (Node ≥ 20) — بدون شبکه و بدون Cloudflare
+ * اجرا:  node tests/test_worker.mjs
+ */
+import { pathToFileURL } from 'node:url';
+import path from 'node:path';
+import assert from 'node:assert/strict';
+
+const workerPath = path.resolve(new URL('.', import.meta.url).pathname, '../worker/index.js');
+const worker = (await import(pathToFileURL(workerPath).href)).default;
+
+const ADMIN = 42;
+let passed = 0;
+const check = (label, cond) => { assert.ok(cond, `FAILED: ${label}`); passed++; console.log(`  ok - ${label}`); };
+
+// ── KV در حافظه + fetch جعلی ──
+const store = new Map();
+const KV = {
+  async get(k) { return store.has(k) ? store.get(k) : null; },
+  async put(k, v) { store.set(k, v); },
+};
+const calls = [];
+globalThis.fetch = async (url, opts) => {
+  const body = opts?.body ? JSON.parse(opts.body) : {};
+  calls.push({ method: String(url).split('/').pop(), body });
+  return { json: async () => ({ ok: true }) };
+};
+const env = { BOT_TOKEN: 't', CHANNEL_ID: '@chan', ADMIN_ID: String(ADMIN), KV };
+const set = (k, v) => store.set(k, JSON.stringify(v));
+const get = (k) => (store.has(k) ? JSON.parse(store.get(k)) : null);
+const last = (method) => [...calls].reverse().find(c => c.method === method);
+
+async function send(update) {
+  calls.length = 0;
+  const res = await worker.fetch(new Request('https://w.example/webhook', {
+    method: 'POST', body: JSON.stringify(update),
+  }), env);
+  assert.equal(await res.text(), 'OK');
+}
+const cb = (data, from = ADMIN) => ({ callback_query: { id: 'cb1', data, from: { id: from } } });
+const msg = (text) => ({ message: { text, chat: { id: ADMIN } } });
+
+const item = (id, extra = {}) => ({
+  id, source: 'Wired AI', source_prior: 3, title_fa: 'عنوان', summary_fa: 'خلاصه',
+  title: 'Original title', summary: 'Original summary', lang: 'en', translated: true,
+  link: 'http://x', hashtags: ['AI'], importance: 'medium', confidence: 'likely', ...extra,
+});
+
+console.log('Clear queue:');
+set('pending', [item('p1'), item('p2')]);
+set('approved', [item('a1')]);
+await send(cb('clearq'));
+let confirm = last('sendMessage');
+const datas = confirm.body.reply_markup.inline_keyboard.flat().map(b => b.callback_data);
+check('تایید پاک‌کردن: سه گزینه', JSON.stringify(datas) === JSON.stringify(['clrp', 'clra', 'clrx']));
+check('تا تایید نشود چیزی پاک نمی‌شود', get('pending').length === 2);
+
+await send(cb('clrp', 999));
+check('غیرادمین نمی‌تواند صف را پاک کند', get('pending').length === 2);
+
+await send(cb('clrx'));
+check('انصراف چیزی را پاک نمی‌کند', get('pending').length === 2 && get('approved').length === 1);
+
+await send(cb('clrp'));
+check('«فقط صف تایید» approved را دست نمی‌زند', get('pending').length === 0 && get('approved').length === 1);
+check('پاک‌کردن در آمار منابع ثبت نمی‌شود', get('source_stats') === null);
+
+set('pending', [item('p1')]);
+await send(cb('clra'));
+check('«همه» هر دو صف را پاک می‌کند', get('pending').length === 0 && get('approved').length === 0);
+
+set('pending', [item('p1')]);
+await send(msg('/clear'));
+check('دستور /clear تایید می‌خواهد', last('sendMessage').body.reply_markup.inline_keyboard.length >= 2);
+set('pending', []); set('approved', []);
+await send(msg('/clear'));
+check('صف خالی → پیام «خالی است»', last('sendMessage').body.text.includes('خالی'));
+
+console.log('Dynamic trust:');
+set('pending', [item('r1')]);
+await send(cb('reject:r1'));
+check('رد ادمین در source_stats ثبت می‌شود', get('source_stats')['Wired AI'].neg === 1);
+
+set('pending', [item('ok1')]); set('approved', []); set('published', []);
+await send(cb('approve:ok1'));
+check('تایید ادمین ثبت می‌شود', get('source_stats')['Wired AI'].pos === 1);
+const pub = calls.find(c => c.method === 'sendMessage' && c.body.chat_id === '@chan');
+check('تایید → انتشار فوری در کانال (باگ maxPosts رفع شده)', !!pub);
+check('پیام کانال: متن اصلی زیر ترجمه', pub.body.text.indexOf('عنوان') < pub.body.text.indexOf('متن اصلی')
+  && pub.body.text.includes('<blockquote expandable>') && pub.body.text.includes('Original summary'));
+
+set('pending', [item('f1')]);
+await send(cb('feature:f1'));
+check('«ویژه» وزن ۱٫۵ دارد', Math.abs(get('source_stats')['Wired AI'].pos - 2.5) < 0.05);
+
+set('source_stats', {
+  'OpenAI Blog': { prior: 5, pos: 0, neg: 0 },
+  'Wired AI': { prior: 3, pos: 20, neg: 0, updated: new Date().toISOString() },
+});
+await send(msg('/sources'));
+const rep = last('sendMessage').body.text;
+check('/sources: منبع تقویت‌شده خودکار می‌شود', /🤖.*Wired AI/.test(rep));
+check('/sources: منبع بدون شواهد = پیش‌فرض اولیه', /OpenAI Blog: 5 ← <b>5\.0<\/b>/.test(rep));
+
+console.log('Review message:');
+set('pending', [item('v1', { translated: false, source_trust: 3.4, corroborated_by: 2, score: 55 })]);
+await send(msg('/pending'));
+const rv = calls.filter(c => c.method === 'sendMessage').map(c => c.body).find(b => b.reply_markup);
+check('پیام بررسی: برچسب ترجمه نشده', rv.text.includes('ترجمه نشده'));
+check('پیام بررسی: اعتبار پویا + تایید چندمنبعی', rv.text.includes('3.4/5') && rv.text.includes('2 منبع'));
+check('پیام بررسی: دکمهٔ پاک‌کردن کل صف',
+  rv.reply_markup.inline_keyboard.flat().some(b => b.callback_data === 'clearq'));
+
+console.log('Channel format:');
+set('pending', [item('u1', { translated: false, title_fa: 'Original title', summary_fa: 'Original summary' })]);
+set('approved', []); set('published', []);
+await send(cb('approve:u1'));
+const pub2 = calls.find(c => c.method === 'sendMessage' && c.body.chat_id === '@chan');
+check('ترجمه‌نشده → برچسب و بدون بلوک تکراری',
+  pub2.body.text.includes('ترجمه نشده') && !pub2.body.text.includes('متن اصلی</b>'));
+
+set('pending', [item('fa1', { lang: 'fa' })]);
+set('approved', []); set('published', []);
+await send(cb('approve:fa1'));
+const pub3 = calls.find(c => c.method === 'sendMessage' && c.body.chat_id === '@chan');
+check('منبع فارسی → بدون بلوک متن اصلی', !pub3.body.text.includes('متن اصلی'));
+
+set('pending', [item('big1', { summary: 'x'.repeat(9000), summary_fa: 'y'.repeat(9000) })]);
+set('approved', []); set('published', []);
+await send(cb('approve:big1'));
+const pub4 = calls.find(c => c.method === 'sendMessage' && c.body.chat_id === '@chan');
+check('پیام بلند از ۴۰۰۰ کاراکتر بیشتر نمی‌شود', pub4.body.text.length <= 4000);
+
+await send(msg('/status'));
+check('/status بدون خطا و بدون Gemini', !last('sendMessage').body.text.includes('Gemini'));
+
+console.log(`\n${passed} تست Worker با موفقیت گذشت ✅`);

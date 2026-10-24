@@ -17,8 +17,7 @@ def load_state():
         "auto_publish_enabled": True,
         "current_stage": "idle",
         "stage_updated_at": None,
-        "last_error": None,
-        "gemini_fail_count": 0
+        "last_error": None
     })
     if not isinstance(state, dict):
         state = {}
@@ -69,6 +68,14 @@ def save_published(items):
     if len(items) > MAX_PUBLISHED_LOG:
         items = items[-MAX_PUBLISHED_LOG:]
     cloudflare_kv.put("published", items)
+
+def load_source_stats():
+    from . import source_trust
+    return source_trust.load_stats()
+
+def save_source_stats(stats):
+    from . import source_trust
+    source_trust.save_stats(stats)
 
 def is_duplicate(news_id: str) -> bool:
     """آیا خبر تکراریه؟"""

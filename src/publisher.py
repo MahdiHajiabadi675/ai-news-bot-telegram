@@ -3,6 +3,7 @@ from datetime import datetime, date
 from .config import BOT_TOKEN, CHANNEL_ID, MAX_POSTS_PER_RUN, MAX_POSTS_PER_DAY
 from . import storage
 from .bot import send_message
+from .formatting import format_message  # noqa: F401  (re-export برای سازگاری)
 
 BASE = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
@@ -87,43 +88,3 @@ def publish_approved(state, approved_items=None):
     storage.save_approved(remaining)
     storage.save_published(published_log)
     return state
-
-def format_message(item):
-    title = _escape_html(item.get("title_fa") or item.get("title") or "")
-    summary = _escape_html(item.get("summary_fa") or "")
-    link = _escape_html(item.get("link") or "")
-    source = _escape_html(item.get("source") or "")
-    hashtags = " ".join(f"#{_escape_html(h)}" for h in (item.get("hashtags") or []))
-
-    # Creative formatting based on category and importance
-    if item.get("category") == "fast_track":
-        emoji = "📡"
-        divider = "─" * 20
-    elif item.get("admin_action") == "featured":
-        emoji = "⭐️"
-        divider = "═" * 20
-    elif item.get("importance") == "high":
-        emoji = "🔥"
-        divider = "─" * 20
-    elif item.get("confidence") == "rumor":
-        emoji = "⚠️"
-        divider = "─" * 20
-    else:
-        emoji = "🤖"
-        divider = "─" * 20
-
-    text = f"{emoji} <b>{title}</b>\n"
-    text += f"{divider}\n\n"
-    text += f"{summary}\n\n"
-    text += f"{divider}\n"
-    text += f"📰 منبع: <a href=\"{link}\">{source}</a>"
-    if hashtags:
-        text += f"\n🏷️ {hashtags}"
-
-    if item.get("confidence") == "rumor":
-        text += f"\n\n⚠️ <i>این خبر تایید رسمی نشده است</i>"
-
-    return text
-
-def _escape_html(text):
-    return str(text or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")

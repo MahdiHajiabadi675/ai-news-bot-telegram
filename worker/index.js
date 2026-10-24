@@ -84,6 +84,7 @@ async function handleCallback(cb, env, BASE, CHANNEL_ID, ADMIN_ID) {
     const idx = pending.findIndex(i => itemKey(i) === itemHash);
     if (idx !== -1) {
       const item = pending.splice(idx, 1)[0];
+      await recordDecision(env, item, 'approve');
       item.status = 'approved';
       item.admin_action = 'approved';
       approved.push(item);
@@ -99,11 +100,15 @@ async function handleCallback(cb, env, BASE, CHANNEL_ID, ADMIN_ID) {
     const rest = pending.filter(i => itemKey(i) !== itemHash);
     await saveJSON(env, 'pending', rest);
     const found = rest.length < pending.length;
+    if (found) {
+      await recordDecision(env, pending.find(i => itemKey(i) === itemHash), 'reject');
+    }
     await answerCallback(BASE, cbId, found ? '❌ رد شد' : '❌ خبر پیدا نشد', !found);
   } else if (action === 'feature') {
     const idx = pending.findIndex(i => itemKey(i) === itemHash);
     if (idx !== -1) {
       const item = pending.splice(idx, 1)[0];
+      await recordDecision(env, item, 'feature');
       item.status = 'approved';
       item.admin_action = 'featured';
       approved.push(item);
@@ -123,6 +128,21 @@ async function handleCallback(cb, env, BASE, CHANNEL_ID, ADMIN_ID) {
     } else {
       await answerCallback(BASE, cbId, '❌ خبر پیدا نشد', true);
     }
+  } else if (action === 'clearq') {
+    await answerCallback(BASE, cbId, '');
+    await askClearQueue(env, BASE, ADMIN_ID);
+  } else if (action === 'clrp' || action === 'clra') {
+    // پاک‌کردن صف: تصمیم «خنثی» است و در اعتبار منابع ثبت نمی‌شود
+    const includeApproved = action === 'clra';
+    const nP = pending.length;
+    const nA = includeApproved ? approved.length : 0;
+    await saveJSON(env, 'pending', []);
+    if (includeApproved) await saveJSON(env, 'approved', []);
+    await answerCallback(BASE, cbId, '🗑 پاک شد');
+    await sendMessage(BASE, ADMIN_ID,
+      `🗑 ${nP} خبر در انتظار تایید` + (includeApproved ? ` و ${nA} خبر آماده انتشار` : '') + ' پاک شد.');
+  } else if (action === 'clrx') {
+    await answerCallback(BASE, cbId, 'انصراف داده شد');
   } else if (action === 'pause') {
     await updateState(env, { paused: true });
     await answerCallback(BASE, cbId, '⏸️ متوقف');
@@ -179,6 +199,8 @@ async function handleMessage(msg, env, BASE, CHANNEL_ID, ADMIN_ID) {
       '/pause - توقف انتشار\n' +
       '/resume - ادامه انتشار\n' +
       '/auto on|off - انتشار خودکار\n' +
+      '/clear - پاک‌کردن کل صف\n' +
+      '/sources - اعتبار پویای منابع\n' +
       '/stats - آمار کامل'
     );
   } else if (text === '/status') {
@@ -216,12 +238,6 @@ async function handleMessage(msg, env, BASE, CHANNEL_ID, ADMIN_ID) {
       .map(([name, count]) => `${name}: ${count}`)
       .join('\n');
 
-    // بودجه Gemini
-    const gb = await getJSON(env, 'gemini_budget', {});
-    const gbToday = gb.date === today ? (gb.count || 0) : 0;
-    const gbMax = gb.max_per_day || 24;
-    const gbLast = gb.last_call_at ? String(gb.last_call_at).slice(11, 16) : null;
-
     // برای عیب‌یابی: آخرین جمع‌آوری و تعداد خبرهای دیده‌شده
     const lastCollect = state.last_collect_time
       ? String(state.last_collect_time).slice(0, 16).replace('T', ' ')
@@ -244,7 +260,6 @@ async function handleMessage(msg, env, BASE, CHANNEL_ID, ADMIN_ID) {
       `━━━━━━━━━━━━━━\n` +
       `🕐 آخرین جمع‌آوری: ${lastCollect}\n` +
       `🔎 خبرهای دیده‌شده: ${Array.isArray(seenList) ? seenList.length : 0}\n` +
-      `🧠 Gemini امروز: ${gbToday}/${gbMax}` + (gbLast ? ` (آخرین: ${gbLast})` : '') + `\n` +
       (state.last_error ? `⚠️ خطای آخر: ${state.last_error}\n` : '') +
       (topSources ? `━━━━━━━━━━━━━━\n🏆 برترین منابع:\n${topSources}` : '')
     );
@@ -257,6 +272,14 @@ async function handleMessage(msg, env, BASE, CHANNEL_ID, ADMIN_ID) {
     for (const item of pending.slice(0, 5)) {
       await sendReview(BASE, ADMIN_ID, item);
     }
+    if (pending.length > 5) {
+      await sendMessage(BASE, ADMIN_ID, `📋 ${pending.length - 5} خبر دیگر هم در صف است.`,
+        { inline_keyboard: [[{ text: '🗑 پاک کردن کل صف', callback_data: 'clearq' }]] });
+    }
+  } else if (text === '/clear') {
+    await askClearQueue(env, BASE, ADMIN_ID);
+  } else if (text === '/sources') {
+    await sendMessage(BASE, ADMIN_ID, sourcesReport(await getJSON(env, 'source_stats', {}), env));
   } else if (text === '/pause') {
     await updateState(env, { paused: true });
     await sendMessage(BASE, ADMIN_ID, '⏸️ انتشار متوقف شد');
@@ -345,19 +368,25 @@ async function handleMessage(msg, env, BASE, CHANNEL_ID, ADMIN_ID) {
 }
 
 async function sendReview(BASE, ADMIN_ID, item) {
-  const trust = item.source_trust || 3;
+  const trust = Number(item.source_trust) || 3;
   const trustEmoji = trust >= 4 ? '🟢' : trust >= 3 ? '🟡' : '🔴';
   const score = item.score || 0;
-  const scoreLabel = score >= 70 ? 'زیاد' : score >= 50 ? 'متوسط' : score >= 30 ? 'كم' : 'ضعیف';
+  const scoreLabel = score >= 70 ? 'زیاد' : score >= 50 ? 'متوسط' : score >= 30 ? 'کم' : 'ضعیف';
   const scoreEmoji = score >= 70 ? '🟢' : score >= 50 ? '🟡' : score >= 30 ? '🟠' : '🔴';
 
   const id = itemKey(item);
   let text = `📰 <b>${escapeHtml(item.title_fa)}</b>\n\n`;
   text += `${escapeHtml(item.summary_fa)}\n\n`;
+  if (item.translated === false) {
+    text += `🔤 <i>ترجمه نشده — متن اصلی</i>\n\n`;
+  } else if (item.title && item.lang && item.lang !== 'fa') {
+    text += `🌐 ${escapeHtml(clip(item.title, 150))}\n\n`;
+  }
   text += `🆔 ID: <code>${escapeHtml(id || 'N/A')}</code>\n`;
   text += `📌 اهمیت: ${escapeHtml(item.importance)} | اعتبار: ${escapeHtml(item.confidence)}\n`;
-  text += `${trustEmoji} منبع: ${escapeHtml(item.source)} (${trust}/5)\n`;
-  text += `${scoreEmoji} اسکور: ${score}/100 (${scoreLabel})\n`;
+  text += `${trustEmoji} منبع: ${escapeHtml(item.source)} (${trust.toFixed(1)}/5)`;
+  if (item.corroborated_by) text += ` — 🔗 تایید شده توسط ${item.corroborated_by} منبع دیگر`;
+  text += `\n${scoreEmoji} اسکور: ${score}/100 (${scoreLabel})\n`;
   text += `🏷️ ${(item.hashtags || []).map(h => '#' + escapeHtml(h)).join(' ')}\n`;
   text += `🔗 ${escapeHtml(item.link)}`;
   if (item.admin_question) {
@@ -381,8 +410,134 @@ async function sendReview(BASE, ADMIN_ID, item) {
   if (typeof item.link === 'string' && item.link.startsWith('http')) {
     keyboard.inline_keyboard.push([{ text: '🔗 مشاهده منبع', url: item.link }]);
   }
+  keyboard.inline_keyboard.push([{ text: '🗑 پاک کردن کل صف', callback_data: 'clearq' }]);
 
   await sendMessage(BASE, ADMIN_ID, text, keyboard);
+}
+
+// ───────────── پاک‌کردن صف ─────────────
+
+async function askClearQueue(env, BASE, ADMIN_ID) {
+  const pending = await getJSON(env, 'pending', []);
+  const approved = await getJSON(env, 'approved', []);
+  if (!pending.length && !approved.length) {
+    await sendMessage(BASE, ADMIN_ID, '📭 صف خالی است');
+    return;
+  }
+  const rows = [[{ text: `🗑 فقط صف تایید (${pending.length})`, callback_data: 'clrp' }]];
+  if (approved.length) {
+    rows.push([{ text: `🗑 همه، با صف آماده انتشار (${pending.length + approved.length})`, callback_data: 'clra' }]);
+  }
+  rows.push([{ text: '↩️ انصراف', callback_data: 'clrx' }]);
+  await sendMessage(BASE, ADMIN_ID,
+    `⚠️ <b>پاک‌کردن صف</b>\n\n📋 در انتظار تایید: ${pending.length}\n✅ آماده انتشار: ${approved.length}\n\n` +
+    'این کار برگشت‌پذیر نیست. (ردشدن‌ها در اعتبار منابع حساب نمی‌شوند.)',
+    { inline_keyboard: rows });
+}
+
+// ───────────── اعتبار پویای منابع ─────────────
+// معادل src/source_trust.py — اگر آنجا را تغییر دادی، اینجا را هم عوض کن.
+
+const TRUST_PRIOR_WEIGHT_DEFAULT = 8;
+const TRUST_HALF_LIFE_DEFAULT = 30;
+const TRUST_FEATURE_WEIGHT = 1.5;
+const AUTO_TRUST_THRESHOLD = 4.0;
+
+function decayFactor(updated, now, env) {
+  const last = updated ? Date.parse(updated) : NaN;
+  if (!Number.isFinite(last) || now <= last) return 1;
+  const days = (now - last) / 86400000;
+  const half = Number(env?.TRUST_HALF_LIFE_DAYS) || TRUST_HALF_LIFE_DEFAULT;
+  return Math.pow(0.5, days / half);
+}
+
+function computeTrust(prior, pos, neg, env) {
+  const k = Number(env?.TRUST_PRIOR_WEIGHT) || TRUST_PRIOR_WEIGHT_DEFAULT;
+  const priorRate = (Math.max(1, Math.min(5, prior)) - 1) / 4;
+  const rate = (pos + priorRate * k) / (pos + neg + k);
+  return Math.round((1 + 4 * rate) * 100) / 100;
+}
+
+function trustOf(entry, env, now = Date.now()) {
+  const f = decayFactor(entry.updated, now, env);
+  return computeTrust(Number(entry.prior) || 3, (entry.pos || 0) * f, (entry.neg || 0) * f, env);
+}
+
+/** ثبت تصمیم ادمین: action = approve | feature | reject */
+async function recordDecision(env, item, action, now = Date.now()) {
+  try {
+    if (!item || !item.source || !['approve', 'feature', 'reject'].includes(action)) return;
+    const stats = await getJSON(env, 'source_stats', {});
+    const entry = stats[item.source] || { prior: Number(item.source_prior) || 3, pos: 0, neg: 0 };
+    const f = decayFactor(entry.updated, now, env);
+    let pos = (entry.pos || 0) * f;
+    let neg = (entry.neg || 0) * f;
+    if (action === 'reject') neg += 1;
+    else pos += action === 'feature' ? TRUST_FEATURE_WEIGHT : 1;
+    entry.pos = Math.round(pos * 1000) / 1000;
+    entry.neg = Math.round(neg * 1000) / 1000;
+    entry.updated = new Date(now).toISOString();
+    stats[item.source] = entry;
+    await saveJSON(env, 'source_stats', stats);
+  } catch (e) {
+    console.error('recordDecision failed:', e);
+  }
+}
+
+function sourcesReport(stats, env) {
+  const rows = Object.entries(stats || {}).map(([name, e]) => {
+    const base = Number(e.prior) || 3;
+    const now = trustOf(e, env);
+    const arrow = now - base >= 0.3 ? '🔼' : base - now >= 0.3 ? '🔽' : '▫️';
+    const auto = now >= AUTO_TRUST_THRESHOLD ? '🤖' : '👀';
+    return { now, line: `${auto}${arrow} ${escapeHtml(name)}: ${base} ← <b>${now.toFixed(1)}</b>  (✅${(e.pos || 0).toFixed(1)} ❌${(e.neg || 0).toFixed(1)})` };
+  });
+  if (!rows.length) return '📡 هنوز آماری برای منابع ثبت نشده (بعد از اولین اجرای pipeline پر می‌شود).';
+  rows.sort((a, b) => b.now - a.now);
+  return '📡 <b>اعتبار پویای منابع</b>\n' +
+    `🤖 = انتشار خودکار (≥ ${AUTO_TRUST_THRESHOLD}) | 👀 = نیازمند تایید شما\n\n` +
+    rows.map(r => r.line).join('\n');
+}
+
+// ───────────── قالب پیام کانال (معادل src/formatting.py) ─────────────
+
+function clip(text, n) {
+  const t = String(text ?? '').trim();
+  return t.length <= n ? t : t.slice(0, n - 1).trimEnd() + '…';
+}
+
+function formatChannelMessage(item, env) {
+  let emoji = '🤖';
+  let divider = '─'.repeat(20);
+  if (item.category === 'fast_track') emoji = '📡';
+  else if (item.admin_action === 'featured') { emoji = '⭐️'; divider = '═'.repeat(20); }
+  else if (item.importance === 'high') emoji = '🔥';
+  else if (item.confidence === 'rumor') emoji = '⚠️';
+
+  const untranslated = item.translated === false;
+  const title = escapeHtml(item.title_fa || item.title || '');
+  const summary = escapeHtml(clip(item.summary_fa, 700));
+  const link = escapeHtml(item.link);
+  const source = escapeHtml(item.source);
+  const hashtags = (item.hashtags || []).map(h => '#' + escapeHtml(h)).join(' ');
+
+  let original = '';
+  const showOriginal = String(env?.SHOW_ORIGINAL_TEXT ?? 'true').toLowerCase() !== 'false';
+  if (showOriginal && item.lang && item.lang !== 'fa' && !untranslated && item.title) {
+    const oTitle = escapeHtml(clip(item.title, 200));
+    const oSummary = escapeHtml(clip(item.summary, 500));
+    const body = `<b>${oTitle}</b>` + (oSummary ? `\n\n${oSummary}` : '');
+    original = `\n\n🌐 <b>متن اصلی</b>\n<blockquote expandable>${body}</blockquote>`;
+  }
+
+  let text = `${emoji} <b>${title}</b>\n${divider}\n\n${summary}${original}\n\n${divider}\n`;
+  text += `📰 منبع: <a href="${link}">${source}</a>`;
+  if (hashtags) text += `\n🏷️ ${hashtags}`;
+  if (untranslated) text += '\n\n🔤 <i>ترجمه نشده — متن اصلی</i>';
+  if (item.confidence === 'rumor') text += '\n\n⚠️ <i>این خبر تایید رسمی نشده است</i>';
+
+  if (text.length > 4000 && original) text = text.replace(original, '');
+  return text.length > 4000 ? text.slice(0, 4000) : text;
 }
 
 async function publishItem(env, BASE, CHANNEL_ID, ADMIN_ID, item) {
@@ -400,31 +555,14 @@ async function publishItem(env, BASE, CHANNEL_ID, ADMIN_ID, item) {
     state.daily_post_count = 0;
   }
 
+  const maxPosts = Number(env.MAX_POSTS_PER_RUN) || 15;
   if (state.daily_post_count >= maxPosts) {
     console.log('[publishItem] Run limit reached');
     await sendMessage(BASE, ADMIN_ID, `📛 سقف ${maxPosts} پست این راند پر شد — خبر در صف می‌ماند`);
     return;
   }
 
-  let text = '';
-  const title = escapeHtml(item.title_fa);
-  const summary = escapeHtml(item.summary_fa);
-  const source = escapeHtml(item.source);
-  const link = escapeHtml(item.link);
-  const hashtags = (item.hashtags || []).map(h => '#' + escapeHtml(h)).join(' ');
-  if (item.category === 'fast_track') {
-    text = `📡 <b>${title}</b>\n\n${summary}\n\n📰 منبع: <a href="${link}">${source}</a>\n🏷️ ${hashtags}`;
-  } else if (item.admin_action === 'featured') {
-    text = `⭐️ <b>${title}</b>\n\n${summary}\n\n📰 منبع: <a href="${link}">${source}</a>\n🏷️ ${hashtags}`;
-  } else if (item.importance === 'high') {
-    text = `🔥 <b>${title}</b>\n\n${summary}\n\n📰 منبع: <a href="${link}">${source}</a>\n🏷️ ${hashtags}`;
-  } else {
-    text = `🤖 <b>${title}</b>\n\n${summary}\n\n📰 منبع: <a href="${link}">${source}</a>\n🏷️ ${hashtags}`;
-  }
-
-  if (item.confidence === 'rumor') {
-    text += '\n\n⚠️ <i>این خبر تایید رسمی نشده است</i>';
-  }
+  const text = formatChannelMessage(item, env);
 
   const publishedLog = await getJSON(env, 'published', []);
   const key = itemKey(item);
@@ -486,25 +624,7 @@ async function handleRun(env, BASE, CHANNEL_ID, ADMIN_ID) {
       break; // بقیه در approved می‌مانند
     }
 
-    let text = '';
-    const title = escapeHtml(item.title_fa);
-    const summary = escapeHtml(item.summary_fa);
-    const source = escapeHtml(item.source);
-    const link = escapeHtml(item.link);
-    const hashtags = (item.hashtags || []).map(h => '#' + escapeHtml(h)).join(' ');
-    if (item.category === 'fast_track') {
-      text = `📡 <b>${title}</b>\n\n${summary}\n\n📰 منبع: <a href="${link}">${source}</a>\n🏷️ ${hashtags}`;
-    } else if (item.admin_action === 'featured') {
-      text = `⭐️ <b>${title}</b>\n\n${summary}\n\n📰 منبع: <a href="${link}">${source}</a>\n🏷️ ${hashtags}`;
-    } else if (item.importance === 'high') {
-      text = `🔥 <b>${title}</b>\n\n${summary}\n\n📰 منبع: <a href="${link}">${source}</a>\n🏷️ ${hashtags}`;
-    } else {
-      text = `🤖 <b>${title}</b>\n\n${summary}\n\n📰 منبع: <a href="${link}">${source}</a>\n🏷️ ${hashtags}`;
-    }
-
-    if (item.confidence === 'rumor') {
-      text += '\n\n⚠️ <i>این خبر تایید رسمی نشده است</i>';
-    }
+    const text = formatChannelMessage(item, env);
 
     const key = itemKey(item);
     if (key && publishedIds.has(key)) {

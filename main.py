@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
 AI News Bot — Telegram channel for AI model news
-Free tier: GitHub Actions + Gemini API + Telegram Bot API
+Free tier: GitHub Actions + Cloudflare Worker/KV + Telegram Bot API
+(ترجمه با src/translator.py؛ Gemini فعلاً کنار گذاشته شده)
 """
 import sys
 from datetime import datetime
@@ -13,23 +14,27 @@ from src import storage
 from src.storage import set_stage
 from src.config import (
     COLLECT_INTERVAL_MIN, FAST_TRACK_ENABLED,
-    AUTO_PUBLISH_ENABLED, AUTO_PUBLISH_THRESHOLD, AUTO_REJECT_THRESHOLD,
+    AUTO_PUBLISH_ENABLED, AUTO_PUBLISH_THRESHOLD, AUTO_REJECT_THRESHOLD, AUTO_TRUST_THRESHOLD,
     MAX_ARTICLES_PER_RUN, MAX_REVIEWS_PER_RUN,
     TRUST_SCORES, REJECT_KEYWORDS, CATEGORY_WEIGHTS, ADMIN_ID,
     SCORE_SOURCE_WEIGHT, SCORE_IMPORTANCE_WEIGHT, SCORE_CONFIDENCE_WEIGHT, SCORE_CATEGORY_WEIGHT
 )
-from src.collectors import collect
-from src.analyzer import analyze_articles
+from src.collectors import collect, FEEDS
+from src.analyzer import analyze_articles, localize
+from src import source_trust
 from src.fast_track import process_fast_track
 from src.bot import poll_updates, _send_review, notify_admin_new, send_message
 from src.publisher import publish_approved
-from src import fallback_translator
+from src import translator
 
 
 def calculate_score(item: dict) -> int:
     """محاسبه اسکور خبر (0-100)"""
-    source_trust = TRUST_SCORES.get(item["source"], 3)
-    source_score = (source_trust / 5) * SCORE_SOURCE_WEIGHT
+    # اعتبار پویای منبع (در analyze_articles محاسبه می‌شود)؛ بدون آن، پیش‌فرض اولیه
+    trust = item.get("source_trust")
+    if trust is None:
+        trust = TRUST_SCORES.get(item["source"], 3)
+    source_score = (trust / 5) * SCORE_SOURCE_WEIGHT
 
     importance_map = {"high": 1.0, "medium": 0.6, "low": 0.3}
     importance_score = importance_map.get(item["importance"], 0.5) * SCORE_IMPORTANCE_WEIGHT
@@ -66,7 +71,7 @@ def _should_collect(force, last_collect, now=None, interval_min=None):
 
 def run(force=False):
     print(f"[{datetime.utcnow().isoformat()}] Pipeline started")
-    fallback_translator.reset()
+    translator.reset()
 
     # 1. Load state
     state = storage.load_state()
@@ -137,8 +142,13 @@ def run(force=False):
             if articles:
                 state = set_stage(state, "analyzing")
                 storage.save_state(state)
-                print("[INFO] Analyzing with Gemini...")
-                analyzed, gemini_meta = analyze_articles(articles)
+                print("[INFO] Analyzing (local classifier + dynamic source trust)...")
+
+                # اعتبار پویای منابع (از تصمیم‌های ادمین) + تایید چندمنبعی
+                stats = storage.load_source_stats()
+                if source_trust.sync_priors(stats, [f["name"] for f in FEEDS]):
+                    storage.save_source_stats(stats)
+                analyzed = analyze_articles(articles, stats)
 
                 # بعد از تحلیل، خبر دیده‌شده محسوب می‌شود تا دوباره پردازش نشود.
                 for article in articles:
@@ -147,55 +157,38 @@ def run(force=False):
                         seen.add(news_id)
                 storage.save_seen(seen)
 
-                # فقط وقتی Gemini واقعاً fail شد به ادمین هشدار بده (نه وقتی بودجه تمومه)
-                if gemini_meta.get("gemini_failed"):
-                    prev_fails = state.get("gemini_fail_count", 0)
-                    state["gemini_fail_count"] = prev_fails + 1
-                    state["last_error"] = "Gemini در دسترس نیست — ترجمه جایگزین استفاده شد"
-                    if prev_fails == 0 and ADMIN_ID:
-                        try:
-                            send_message(ADMIN_ID, "⚠️ Gemini در دسترس نیست. اخبار با ترجمه جایگزین منتشر می‌شن.\nلطفاً GEMINI_API_KEY رو بررسی کن.")
-                        except Exception as e:
-                            print(f"[WARN] notify admin failed: {e}")
-                elif gemini_meta.get("gemini_used"):
-                    state["gemini_fail_count"] = 0
-                    state["last_error"] = None
-
-                if gemini_meta.get("skipped_budget"):
-                    print("[INFO] Gemini skipped (budget) — publishing continues")
-                if gemini_meta.get("fallback_count"):
-                    print(f"[INFO] {gemini_meta['fallback_count']} item(s) via simple translation")
-
                 pending = storage.load_pending()
                 approved = storage.load_approved()
                 reviews_sent = 0
                 notices_sent = 0
                 pending_this_run = 0
+                translated_ok = translated_fail = 0
 
                 for item in analyzed:
-                    source_trust = TRUST_SCORES.get(item["source"], 3)
-                    item["source_trust"] = source_trust
-                    item["id"] = item.get("id", item.get("hash", ""))
                     item["score"] = calculate_score(item)
 
                     if item["score"] < AUTO_REJECT_THRESHOLD:
-                        print(f"[REJECT] Low score ({item['score']}): {item['title_fa'][:50]}")
+                        print(f"[REJECT] Low score ({item['score']}): {item['title'][:50]}")
                         pub = storage.load_published()
                         pub.append({**item, "published": False, "rejected_at": _now(), "reject_reason": "low_score"})
                         storage.save_published(pub)
                         continue
 
-                    is_trusted = source_trust >= 4
+                    # ترجمه فقط برای خبرهای باقی‌مانده (همهٔ منابع)
+                    localize(item)
+                    if item.get("translated") is False:
+                        translated_fail += 1
+                    else:
+                        translated_ok += 1
+
+                    source_trust_now = item["source_trust"]
+                    is_trusted = source_trust_now >= AUTO_TRUST_THRESHOLD
                     is_confirmed = item["confidence"] == "confirmed"
                     is_high_score = item["score"] >= AUTO_PUBLISH_THRESHOLD
-                    is_fallback = item.get("fallback", False)
 
                     # انتشار خودکار: هم از config و هم از کلید /auto در ربات پیروی می‌کنه
                     auto_enabled = AUTO_PUBLISH_ENABLED and state.get("auto_publish_enabled", True)
-                    should_auto = auto_enabled and (
-                        (is_trusted and is_confirmed and is_high_score)
-                        or (is_fallback and source_trust >= 4)
-                    )
+                    should_auto = auto_enabled and is_trusted and is_confirmed and is_high_score
 
                     if should_auto:
                         item["status"] = "approved"
@@ -204,7 +197,7 @@ def run(force=False):
                         if notices_sent < MAX_REVIEWS_PER_RUN:
                             notify_admin_new(item)
                             notices_sent += 1
-                        print(f"[AUTO] Approved: {item['title_fa'][:50]} (score: {item['score']})")
+                        print(f"[AUTO] Approved: {item['title_fa'][:50]} (score: {item['score']}, trust: {source_trust_now})")
                     else:
                         item["status"] = "pending"
                         pending.append(item)
@@ -212,11 +205,22 @@ def run(force=False):
                         if reviews_sent < MAX_REVIEWS_PER_RUN:
                             _send_review(item)
                             reviews_sent += 1
-                        print(f"[PENDING] {item['title_fa'][:50]} (score: {item['score']})")
+                        print(f"[PENDING] {item['title_fa'][:50]} (score: {item['score']}, trust: {source_trust_now})")
+
+                if translated_fail:
+                    print(f"[WARN] {translated_fail} item(s) could not be translated (published with 'ترجمه نشده' label)")
+                    state["last_error"] = f"{translated_fail} خبر ترجمه نشد"
+                else:
+                    state["last_error"] = None
+                print(f"[INFO] Translated: {translated_ok}, untranslated: {translated_fail}")
 
                 hidden = pending_this_run - reviews_sent
                 if hidden > 0 and ADMIN_ID:
-                    send_message(ADMIN_ID, f"📋 {hidden} خبر دیگر در انتظار تایید است — /pending")
+                    send_message(
+                        ADMIN_ID,
+                        f"📋 {hidden} خبر دیگر در انتظار تایید است — /pending",
+                        reply_markup={"inline_keyboard": [[{"text": "🗑 پاک کردن کل صف", "callback_data": "clearq"}]]},
+                    )
 
                 storage.save_pending(pending)
                 storage.save_approved(approved)
