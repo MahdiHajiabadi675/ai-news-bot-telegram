@@ -102,6 +102,19 @@ const rep = last('sendMessage').body.text;
 check('/sources: منبع تقویت‌شده خودکار می‌شود', /🤖.*Wired AI/.test(rep));
 check('/sources: منبع بدون شواهد = پیش‌فرض اولیه', /OpenAI Blog: 5 ← <b>5\.0<\/b>/.test(rep));
 
+console.log('Feed health:');
+set('feed_health', {
+  Good: { ok: true, items: 8, new: 2, filtered: 1, checked: '2026-10-25T10:00:00Z', fails: 0 },
+  Broken: { ok: false, items: 0, new: 0, err: 'HTTPError: 404', fails: 5, checked: '2026-10-25T10:00:00Z' },
+});
+await send(msg('/feeds'));
+const fr = last('sendMessage').body.text;
+check('/feeds: فید خراب با علت و شمارنده', /❌ <b>Broken<\/b> — HTTPError: 404 \(پیاپی: 5\)/.test(fr));
+check('/feeds: فید سالم با آمار', fr.includes('✅ Good: 8 آیتم، 2 جدید'));
+set('feed_health', {});
+await send(msg('/feeds'));
+check('/feeds خالی', last('sendMessage').body.text.includes('هنوز'));
+
 console.log('Review message:');
 set('pending', [item('v1', { translated: false, source_trust: 3.4, corroborated_by: 2, score: 55 })]);
 await send(msg('/pending'));

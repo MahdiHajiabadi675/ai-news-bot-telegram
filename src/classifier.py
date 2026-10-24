@@ -18,6 +18,16 @@ _AI_RE = re.compile(
 )
 
 
+def normalize_fa(text: str) -> str:
+    """یکسان‌سازی متن فارسی: نیم‌فاصله→فاصله، ي/ك عربی→ی/ک، فاصله‌های تکراری حذف"""
+    text = (text or "").replace("\u200c", " ").replace("ي", "ی").replace("ك", "ک")
+    return re.sub(r"\s+", " ", text).strip()
+
+
+_FA_NORM = [normalize_fa(k) for k in _FA_KW]
+_FA_COMPACT = [k.replace(" ", "") for k in _FA_NORM]
+
+
 def is_english(text: str) -> bool:
     """آیا متن انگلیسیه؟ (بیش از ۵۰٪ حروف لاتین)"""
     letters = [c for c in (text or "") if c.isalpha()]
@@ -27,12 +37,17 @@ def is_english(text: str) -> bool:
 
 
 def is_ai_related(text: str) -> bool:
-    """مرتبط با AI؟ انگلیسی با مرز کلمه، فارسی زیررشته"""
+    """
+    مرتبط با AI؟ انگلیسی با مرز کلمه؛ فارسی زیررشته روی متن نرمال‌شده
+    (پس «هوش‌مصنوعی»، «هوش مصنوعی» و «هوشمصنوعی» هر سه پیدا می‌شوند)
+    """
     if not text:
         return False
     if _AI_RE.search(text):
         return True
-    return any(k in text for k in _FA_KW)
+    norm = normalize_fa(text)
+    compact = norm.replace(" ", "")
+    return any(k in norm for k in _FA_NORM) or any(k in compact for k in _FA_COMPACT)
 
 
 _RUMOR_RE = re.compile(

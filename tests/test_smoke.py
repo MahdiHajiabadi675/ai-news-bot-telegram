@@ -316,6 +316,74 @@ check("پیام بررسی: دکمهٔ پاک‌کردن کل صف", any(b.get("
 check("پیام بررسی: اعتبار پویا و تایید چندمنبعی", "3.4/5" in txt and "2 منبع" in txt)
 check("پیام بررسی: عنوان اصلی", "Orig" in txt)
 
+# ───────────── جمع‌آوری و سلامت فیدها ─────────────
+print("Collector & feed health:")
+real_feeds = collectors.FEEDS
+collectors.FEEDS = [
+    {"name": "Good", "url": "u1", "lang": "en", "trusted": True, "fast_track": False},
+    {"name": "Broken", "url": "u2", "lang": "en", "trusted": True, "fast_track": False},
+    {"name": "Empty", "url": "u3", "lang": "en", "trusted": True, "fast_track": False},
+    {"name": "Persian", "url": "u4", "lang": "fa", "trusted": False, "fast_track": False},
+]
+
+
+class _Resp:
+    def __init__(self, content): self.content = content
+    def raise_for_status(self): pass
+
+
+def _fake_get(url, **kw):
+    if url == "u2":
+        raise RuntimeError("403 blocked")
+    return _Resp(url.encode())
+
+
+class _Parsed:
+    def __init__(self, entries): self.entries = entries
+
+
+def _fake_parse(content):
+    if content == b"u1":
+        return _Parsed([{"title": "OpenAI ships X", "link": "http://a/1", "summary": "s"},
+                        {"title": "OpenAI ships Y", "link": "http://a/2", "summary": "s"}])
+    if content == b"u3":
+        return _Parsed([])
+    if content == b"u4":
+        return _Parsed([
+            {"title": "هوش\u200cمصنوعی جدید گوگل", "link": "http://p/1", "summary": ""},
+            {"title": "معرفی گوشی جدید سامسونگ", "link": "http://p/2", "summary": ""},
+        ])
+    return _Parsed([])
+
+
+collectors.requests.get = _fake_get
+collectors.feedparser.parse = _fake_parse
+collectors._clean_html = lambda h: h or ""
+got = collectors.collect(set())
+hl = collectors.collect.health
+check("فید سالم: ok و تعداد آیتم", hl["Good"]["ok"] and hl["Good"]["items"] == 2 and hl["Good"]["new"] == 2)
+check("فید خراب: ok=False و علت خطا", hl["Broken"]["ok"] is False and "blocked" in hl["Broken"]["err"])
+check("فید خالی (RSS نیست) خراب حساب می‌شود", hl["Empty"]["ok"] is False and hl["Empty"]["err"])
+check("نیم‌فاصله در «هوش‌مصنوعی» رد نمی‌شود", hl["Persian"]["new"] == 1 and hl["Persian"]["filtered"] == 1)
+check("جمع‌آوری با وجود فید خراب ادامه می‌یابد", len(got) == 3)
+check("اخبار تکراری (seen) دوباره جمع نمی‌شوند",
+      len(collectors.collect({a["id"] for a in got})) == 0)
+collectors.FEEDS = real_feeds
+
+_store.clear()
+bad = {"Good": {"ok": True, "items": 2, "new": 2, "filtered": 0, "err": None},
+       "Broken": {"ok": False, "items": 0, "new": 0, "filtered": 0, "err": "boom"}}
+alerts = [storage.update_feed_health(bad) for _ in range(4)]
+check("هشدار فید خراب دقیقاً در خطای سوم", [a == ["Broken"] for a in alerts] == [False, False, True, False])
+check("شمارندهٔ خطای پیاپی", _store["feed_health"]["Broken"]["fails"] == 4)
+bad["Broken"]["ok"] = True
+storage.update_feed_health(bad)
+check("بعد از سالم‌شدن شمارنده صفر می‌شود", _store["feed_health"]["Broken"]["fails"] == 0)
+rep = bot.feeds_report(storage.load_feed_health())
+check("گزارش /feeds", "سلامت فیدها" in rep and "Broken" in rep)
+check("گزارش خالی", "هنوز" in bot.feeds_report({}))
+
+
 # ───────────── امتیازدهی و dedup ─────────────
 print("Scoring & dedup:")
 import importlib.util  # noqa: E402

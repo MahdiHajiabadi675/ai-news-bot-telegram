@@ -74,9 +74,19 @@ def _looks_ai_related(text: str) -> bool:
     return is_ai_related(text)
 
 def collect(seen: set) -> list:
+    """
+    جمع‌آوری از همهٔ فیدها. وضعیت هر فید در collect.health ثبت می‌شود:
+      {نام: {"ok", "items" (کل آیتم‌های فید), "new" (جدید و پذیرفته‌شده),
+             "filtered" (ردشده با فیلتر AI), "err"}}
+    فیدی که خطا بدهد یا صفر آیتم داشته باشد ok=False می‌شود.
+    """
     articles = []
     collected_ids = set()
+    health = {}
     for feed_cfg in FEEDS:
+        name = feed_cfg["name"]
+        h = {"ok": False, "items": 0, "new": 0, "filtered": 0, "err": None}
+        health[name] = h
         try:
             response = requests.get(
                 feed_cfg["url"],
@@ -85,6 +95,13 @@ def collect(seen: set) -> list:
             )
             response.raise_for_status()
             d = feedparser.parse(response.content)
+            h["items"] = len(d.entries)
+            if not d.entries:
+                # صفحه‌ای که RSS نیست (مثلاً HTML یا ۴۰۴ نرم) → آیتمی ندارد
+                h["err"] = "فید خالی یا نامعتبر (RSS نیست)"
+                print(f"[WARN] {name}: no entries")
+                continue
+            h["ok"] = True
             for entry in d.entries[:MAX_PER_FEED]:
                 title = entry.get("title", "").strip()
                 link = entry.get("link", "")
@@ -100,16 +117,18 @@ def collect(seen: set) -> list:
                 # فیدهای عمومی (مثل TechCrunch/The Verge/دیجیاتو) فقط اگر
                 # خبر مرتبط با AI باشد نگه داشته می‌شود.
                 if not feed_cfg["trusted"] and not _looks_ai_related(title + " " + summary):
+                    h["filtered"] += 1
                     continue
 
                 news_id = _generate_id(title, link)
                 if news_id in seen or news_id in collected_ids:
                     continue
                 collected_ids.add(news_id)
+                h["new"] += 1
 
                 articles.append({
                     "id": news_id,
-                    "source": feed_cfg["name"],
+                    "source": name,
                     "lang": feed_cfg["lang"],
                     "trusted": feed_cfg["trusted"],
                     "fast_track": feed_cfg["fast_track"],
@@ -121,6 +140,12 @@ def collect(seen: set) -> list:
                     "published": False
                 })
         except Exception as e:
-            print(f"[WARN] {feed_cfg['name']}: {e}")
-    print(f"[INFO] Collected {len(articles)} new articles")
+            h["err"] = f"{type(e).__name__}: {str(e)[:120]}"
+            print(f"[WARN] {name}: {e}")
+    collect.health = health
+    ok = sum(1 for h in health.values() if h["ok"])
+    print(f"[INFO] Feeds OK: {ok}/{len(health)} — Collected {len(articles)} new articles")
     return articles
+
+
+collect.health = {}

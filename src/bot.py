@@ -223,6 +223,7 @@ def _handle_message(msg, state):
             "/auto on|off - انتشار خودکار اخبار مهم\n"
             "/clear - پاک‌کردن کل صف\n"
             "/sources - اعتبار پویای منابع\n"
+            "/feeds - سلامت فیدهای خبری\n"
             "/stats - آمار"
         )
 
@@ -274,6 +275,9 @@ def _handle_message(msg, state):
     elif text == "/clear":
         _ask_clear(chat_id)
 
+    elif text == "/feeds":
+        send_message(chat_id, feeds_report(storage.load_feed_health()))
+
     elif text == "/sources":
         send_message(chat_id, sources_report(storage.load_source_stats()))
 
@@ -318,6 +322,24 @@ def _item_key(item):
 def _now():
     from datetime import datetime
     return datetime.utcnow().isoformat() + "Z"
+
+def feeds_report(health):
+    """گزارش سلامت فیدها (آخرین جمع‌آوری)"""
+    if not health:
+        return "📡 هنوز گزارشی نیست (بعد از اولین جمع‌آوری پر می‌شود)."
+    bad = [(n, h) for n, h in health.items() if not h.get("ok")]
+    good = [(n, h) for n, h in health.items() if h.get("ok")]
+    lines = [f"📡 <b>سلامت فیدها</b>  ✅{len(good)}  ❌{len(bad)}\n"]
+    for n, h in sorted(bad):
+        lines.append(f"❌ <b>{_escape_html(n)}</b> — {_escape_html(h.get('err') or '?')} (پیاپی: {h.get('fails', 0)})")
+    for n, h in sorted(good):
+        lines.append(f"✅ {_escape_html(n)}: {h.get('items', 0)} آیتم، {h.get('new', 0)} جدید"
+                     + (f"، {h.get('filtered')} ردشده با فیلتر" if h.get("filtered") else ""))
+    checked = max((h.get("checked") or "" for h in health.values()), default="")
+    if checked:
+        lines.append(f"\n🕐 آخرین بررسی: {checked[:16].replace('T', ' ')} UTC")
+    return "\n".join(lines)
+
 
 def sources_report(stats):
     """گزارش اعتبار پویای منابع (پایه ← فعلی)"""

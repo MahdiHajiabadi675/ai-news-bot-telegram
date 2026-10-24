@@ -77,6 +77,38 @@ def save_source_stats(stats):
     from . import source_trust
     source_trust.save_stats(stats)
 
+def load_feed_health():
+    h = cloudflare_kv.get("feed_health", {})
+    return h if isinstance(h, dict) else {}
+
+
+FEED_FAIL_ALERT_AT = 3  # بعد از این‌همه خطای پیاپی به ادمین هشدار بده
+
+
+def update_feed_health(current: dict) -> list:
+    """
+    وضعیت فیدها را با سابقهٔ قبلی ادغام و در KV ذخیره می‌کند.
+    برمی‌گرداند: نام فیدهایی که همین الان به آستانهٔ هشدار رسیده‌اند.
+    """
+    from datetime import datetime
+    now = datetime.utcnow().isoformat() + "Z"
+    old = cloudflare_kv.get("feed_health", {})
+    old = old if isinstance(old, dict) else {}
+    merged, newly_failing = {}, []
+    for name, h in current.items():
+        prev = old.get(name) or {}
+        fails = 0 if h["ok"] else int(prev.get("fails", 0)) + 1
+        if fails == FEED_FAIL_ALERT_AT:
+            newly_failing.append(name)
+        merged[name] = {
+            **h,
+            "fails": fails,
+            "checked": now,
+            "last_ok": now if h["ok"] else prev.get("last_ok"),
+        }
+    cloudflare_kv.put("feed_health", merged)
+    return newly_failing
+
 def is_duplicate(news_id: str) -> bool:
     """آیا خبر تکراریه؟"""
     return news_id in load_seen()

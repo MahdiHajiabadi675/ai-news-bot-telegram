@@ -201,6 +201,7 @@ async function handleMessage(msg, env, BASE, CHANNEL_ID, ADMIN_ID) {
       '/auto on|off - انتشار خودکار\n' +
       '/clear - پاک‌کردن کل صف\n' +
       '/sources - اعتبار پویای منابع\n' +
+      '/feeds - سلامت فیدهای خبری\n' +
       '/stats - آمار کامل'
     );
   } else if (text === '/status') {
@@ -278,6 +279,8 @@ async function handleMessage(msg, env, BASE, CHANNEL_ID, ADMIN_ID) {
     }
   } else if (text === '/clear') {
     await askClearQueue(env, BASE, ADMIN_ID);
+  } else if (text === '/feeds') {
+    await sendMessage(BASE, ADMIN_ID, feedsReport(await getJSON(env, 'feed_health', {})));
   } else if (text === '/sources') {
     await sendMessage(BASE, ADMIN_ID, sourcesReport(await getJSON(env, 'source_stats', {}), env));
   } else if (text === '/pause') {
@@ -482,6 +485,23 @@ async function recordDecision(env, item, action, now = Date.now()) {
   } catch (e) {
     console.error('recordDecision failed:', e);
   }
+}
+
+function feedsReport(health) {
+  const entries = Object.entries(health || {});
+  if (!entries.length) return '📡 هنوز گزارشی نیست (بعد از اولین جمع‌آوری پر می‌شود).';
+  const bad = entries.filter(([, h]) => !h.ok).sort();
+  const good = entries.filter(([, h]) => h.ok).sort();
+  const lines = [`📡 <b>سلامت فیدها</b>  ✅${good.length}  ❌${bad.length}\n`];
+  for (const [n, h] of bad) {
+    lines.push(`❌ <b>${escapeHtml(n)}</b> — ${escapeHtml(h.err || '?')} (پیاپی: ${h.fails || 0})`);
+  }
+  for (const [n, h] of good) {
+    lines.push(`✅ ${escapeHtml(n)}: ${h.items || 0} آیتم، ${h.new || 0} جدید` + (h.filtered ? `، ${h.filtered} ردشده با فیلتر` : ''));
+  }
+  const checked = entries.map(([, h]) => h.checked || '').sort().pop();
+  if (checked) lines.push(`\n🕐 آخرین بررسی: ${checked.slice(0, 16).replace('T', ' ')} UTC`);
+  return lines.join('\n');
 }
 
 function sourcesReport(stats, env) {

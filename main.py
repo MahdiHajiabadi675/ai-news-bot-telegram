@@ -105,6 +105,17 @@ def run(force=False):
         seen = storage.load_seen()
         articles = collect(seen)
 
+        # سلامت فیدها: ذخیره در KV (برای /feeds) + هشدار برای فیدی که چند بار پیاپی خراب است
+        health = getattr(collect, "health", None)
+        if health:
+            try:
+                for name in storage.update_feed_health(health):
+                    if ADMIN_ID:
+                        err = health[name].get("err") or "بدون آیتم"
+                        send_message(ADMIN_ID, f"⚠️ فید «{name}» {storage.FEED_FAIL_ALERT_AT} بار پیاپی خراب بوده:\n{err}\n\nوضعیت همهٔ فیدها: /feeds")
+            except Exception as e:
+                print(f"[WARN] feed health failed: {e}")
+
         # سقف پردازش در هر اجرا (جلوگیری از تایم‌اوت و اسپم تلگرام)
         if len(articles) > MAX_ARTICLES_PER_RUN:
             print(f"[INFO] Limiting to {MAX_ARTICLES_PER_RUN} of {len(articles)} new articles")
