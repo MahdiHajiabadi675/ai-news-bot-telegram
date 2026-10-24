@@ -4,6 +4,7 @@ AI News Bot — Telegram channel for AI model news
 Free tier: GitHub Actions + Cloudflare Worker/KV + Telegram Bot API
 (ترجمه با src/translator.py؛ Gemini فعلاً کنار گذاشته شده)
 """
+import re
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -19,7 +20,7 @@ from src.config import (
     TRUST_SCORES, REJECT_KEYWORDS, CATEGORY_WEIGHTS, ADMIN_ID,
     SCORE_SOURCE_WEIGHT, SCORE_IMPORTANCE_WEIGHT, SCORE_CONFIDENCE_WEIGHT, SCORE_CATEGORY_WEIGHT
 )
-from src.collectors import collect, FEEDS
+from src.collectors import collect, FEEDS, interleave_by_source
 from src.analyzer import analyze_articles, localize
 from src import source_trust
 from src.fast_track import process_fast_track
@@ -116,7 +117,9 @@ def run(force=False):
             except Exception as e:
                 print(f"[WARN] feed health failed: {e}")
 
-        # سقف پردازش در هر اجرا (جلوگیری از تایم‌اوت و اسپم تلگرام)
+        # سقف پردازش در هر اجرا (جلوگیری از تایم‌اوت و اسپم تلگرام).
+        # اول نوبتی بین منابع مرتب می‌شود تا منابع آخر لیست (فارسی‌ها) حذف نشوند.
+        articles = interleave_by_source(articles)
         if len(articles) > MAX_ARTICLES_PER_RUN:
             print(f"[INFO] Limiting to {MAX_ARTICLES_PER_RUN} of {len(articles)} new articles")
             articles = articles[:MAX_ARTICLES_PER_RUN]
@@ -253,11 +256,17 @@ def run(force=False):
     print(f"[{datetime.utcnow().isoformat()}] Pipeline finished")
 
 
+_REJECT_RE = re.compile(
+    r"(?<![A-Za-z0-9])(?:" + "|".join(re.escape(k) for k in REJECT_KEYWORDS) + r")(?![A-Za-z0-9])",
+    re.IGNORECASE,
+)
+
+
 def auto_reject(articles: list) -> list:
+    """رد خبرهای مشکوک — با مرز کلمه (تا «cryptography» به‌خاطر «crypto» رد نشود)"""
     kept = []
     for a in articles:
-        title_lower = a["title"].lower()
-        if any(kw.lower() in title_lower for kw in REJECT_KEYWORDS):
+        if _REJECT_RE.search(a["title"]):
             print(f"[REJECT] Blocked keyword: {a['title'][:60]}")
             continue
         kept.append(a)

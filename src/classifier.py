@@ -8,14 +8,9 @@
 """
 import re
 
-from .config import AI_KEYWORDS
+from .ai_terms import EN_TERMS, FA_TERMS, PASS_SCORE
 
-_ASCII_KW = [k for k in AI_KEYWORDS if k.isascii()]
-_FA_KW = [k for k in AI_KEYWORDS if not k.isascii()]
-_AI_RE = re.compile(
-    r"(?<![A-Za-z0-9])(?:" + "|".join(re.escape(k) for k in _ASCII_KW) + r")(?![A-Za-z0-9])",
-    re.IGNORECASE,
-)
+_PERSIAN_LETTER = "\u0621-\u06CC"
 
 
 def normalize_fa(text: str) -> str:
@@ -24,8 +19,52 @@ def normalize_fa(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
-_FA_NORM = [normalize_fa(k) for k in _FA_KW]
-_FA_COMPACT = [k.replace(" ", "") for k in _FA_NORM]
+def _compile_en(term: str):
+    return re.compile(r"(?<![A-Za-z0-9])(?:" + term + r")(?![A-Za-z0-9])", re.IGNORECASE)
+
+
+def _compile_fa(term: str):
+    words = normalize_fa(term).split(" ")
+    body = r"\s?".join(re.escape(w) for w in words)
+    # فقط مرز ابتدای کلمه؛ برای واژهٔ کوتاه (≤ ۴ حرف) مرز انتهای کلمه هم لازم است
+    tail = rf"(?![{_PERSIAN_LETTER}])" if len(term.replace(" ", "")) <= 4 else ""
+    return re.compile(rf"(?<![{_PERSIAN_LETTER}]){body}{tail}")
+
+
+_EN_COMPILED = [(t, _compile_en(t), w) for t, w in EN_TERMS]
+_FA_COMPILED = [(t, _compile_fa(t), w) for t, w in FA_TERMS]
+
+
+def _matches(text: str) -> dict:
+    """واژه‌های تطبیق‌خورده در متن: {الگو: وزن}"""
+    if not text:
+        return {}
+    norm = normalize_fa(text)
+    found = {}
+    for term, rx, w in _EN_COMPILED:
+        if rx.search(text):
+            found[term] = w
+    for term, rx, w in _FA_COMPILED:
+        if rx.search(norm):
+            found[term] = w
+    return found
+
+
+def ai_relevance(title: str, summary: str = "", tags: str = "") -> float:
+    """
+    امتیاز ارتباط با AI: هر واژه در «عنوان+تگ‌ها» ×۲ و در «خلاصه» ×۱ (هر واژه یک بار).
+    خبر وقتی مرتبط است که امتیاز ≥ PASS_SCORE باشد (src/ai_terms.py).
+    """
+    head = _matches(f"{title or ''} {tags or ''}")
+    body = _matches(summary or "")
+    score = sum(w * 2 for w in head.values())
+    score += sum(w for t, w in body.items() if t not in head)
+    return score
+
+
+def is_ai_related(text: str) -> bool:
+    """نسخهٔ ساده برای یک متن واحد (مثلاً fast-track)"""
+    return ai_relevance("", text) >= PASS_SCORE
 
 
 def is_english(text: str) -> bool:
@@ -34,20 +73,6 @@ def is_english(text: str) -> bool:
     if not letters:
         return False
     return sum(1 for c in letters if c.isascii()) / len(letters) > 0.5
-
-
-def is_ai_related(text: str) -> bool:
-    """
-    مرتبط با AI؟ انگلیسی با مرز کلمه؛ فارسی زیررشته روی متن نرمال‌شده
-    (پس «هوش‌مصنوعی»، «هوش مصنوعی» و «هوشمصنوعی» هر سه پیدا می‌شوند)
-    """
-    if not text:
-        return False
-    if _AI_RE.search(text):
-        return True
-    norm = normalize_fa(text)
-    compact = norm.replace(" ", "")
-    return any(k in norm for k in _FA_NORM) or any(k in compact for k in _FA_COMPACT)
 
 
 _RUMOR_RE = re.compile(

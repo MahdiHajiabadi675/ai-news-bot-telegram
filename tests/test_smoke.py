@@ -201,6 +201,21 @@ check("کلمهٔ AI شناخته می‌شود", classifier.is_ai_related("New 
 check("کلیدواژهٔ فارسی شناخته می‌شود", classifier.is_ai_related("پیشرفت هوش مصنوعی در ایران") is True)
 check("«ماشین» (خودرو) AI نیست", classifier.is_ai_related("قیمت ماشین امروز") is False)
 
+rel = classifier.ai_relevance
+PASS = 3
+check("خبر بدون کلمهٔ «AI» ولی دربارهٔ AI: نام شرکت/مدل کافی است",
+      rel("Sam Altman says compute is the bottleneck") >= PASS)
+check("نام محصول در عنوان کافی است", rel("Meta releases Llama 4 with longer context") >= PASS)
+check("نام مدل در خلاصه کافی است", rel("Chrome adds a tab feature", "Uses Gemini to summarize") >= PASS)
+check("Nvidia در عنوان کافی است", rel("Nvidia unveils new chips") >= PASS)
+check("فارسی: نام مدل بدون «هوش مصنوعی»", rel("ایلان ماسک از گراک ۵ رونمایی کرد") >= PASS)
+check("یک واژهٔ ضعیف تنها کافی نیست", rel("Why my robot vacuum keeps getting stuck") < PASS)
+check("دو نشانهٔ ضعیف (عنوان + خلاصه) کافی است",
+      rel("Startup raises $50M for robots", "humanoid machines for warehouses") >= PASS)
+check("خبر غیر AI رد می‌شود", rel("Cloudflare outage hits thousands of sites") == 0)
+check("«رای آینده» با «ای آی» اشتباه گرفته نمی‌شود", rel("رای آینده مردم") == 0)
+check("تگ RSS امتیاز می‌دهد", rel("Someone made a thing", "", "Artificial Intelligence") >= PASS)
+
 c = classifier.classify({"title": "OpenAI releases new GPT model", "summary": ""}, 5.0, 0)
 check("انتشار مدل از منبع معتبر → model_release/high/confirmed",
       (c["category"], c["importance"], c["confidence"]) == ("model_release", "high", "confirmed"))
@@ -324,6 +339,7 @@ collectors.FEEDS = [
     {"name": "Broken", "url": "u2", "lang": "en", "trusted": True, "fast_track": False},
     {"name": "Empty", "url": "u3", "lang": "en", "trusted": True, "fast_track": False},
     {"name": "Persian", "url": "u4", "lang": "fa", "trusted": False, "fast_track": False},
+    {"name": "Tagged", "url": "u5", "lang": "en", "trusted": False, "fast_track": False},
 ]
 
 
@@ -348,6 +364,13 @@ def _fake_parse(content):
                         {"title": "OpenAI ships Y", "link": "http://a/2", "summary": "s"}])
     if content == b"u3":
         return _Parsed([])
+    if content == b"u5":
+        return _Parsed([
+            {"title": "Someone made a thing", "link": "http://t/1", "summary": "x",
+             "tags": [{"term": "Artificial Intelligence"}]},
+            {"title": "Samsung Galaxy review", "link": "http://t/2", "summary": "x",
+             "tags": [{"term": "Phones"}]},
+        ])
     if content == b"u4":
         return _Parsed([
             {"title": "هوش\u200cمصنوعی جدید گوگل", "link": "http://p/1", "summary": ""},
@@ -365,7 +388,11 @@ check("فید سالم: ok و تعداد آیتم", hl["Good"]["ok"] and hl["Goo
 check("فید خراب: ok=False و علت خطا", hl["Broken"]["ok"] is False and "blocked" in hl["Broken"]["err"])
 check("فید خالی (RSS نیست) خراب حساب می‌شود", hl["Empty"]["ok"] is False and hl["Empty"]["err"])
 check("نیم‌فاصله در «هوش‌مصنوعی» رد نمی‌شود", hl["Persian"]["new"] == 1 and hl["Persian"]["filtered"] == 1)
-check("جمع‌آوری با وجود فید خراب ادامه می‌یابد", len(got) == 3)
+check("جمع‌آوری با وجود فید خراب ادامه می‌یابد", len(got) == 4)
+check("تگ RSS «AI» کافی است حتی اگر در عنوان نباشد", hl["Tagged"]["new"] == 1 and hl["Tagged"]["filtered"] == 1)
+check("نمونهٔ ردشده‌ها برای عیب‌یابی ثبت می‌شود", hl["Tagged"]["filtered_titles"] == ["Samsung Galaxy review"])
+check("فید اختصاصی AI (trusted) فیلتر نمی‌شود",
+      collectors.collect.health["Good"]["filtered"] == 0)
 check("اخبار تکراری (seen) دوباره جمع نمی‌شوند",
       len(collectors.collect({a["id"] for a in got})) == 0)
 collectors.FEEDS = real_feeds
@@ -407,6 +434,17 @@ check("اعتبار پویای پایین، امتیاز را کم می‌کند
 check("ID نرمال‌شده پایدار است",
       collectors._generate_id("T", "http://A.com/x/?utm=1") ==
       collectors._generate_id("T", "http://a.com/x"))
+
+print("Collection helpers:")
+mix = [{"source": "A", "id": 1}, {"source": "A", "id": 2}, {"source": "A", "id": 3},
+       {"source": "B", "id": 4}, {"source": "C", "id": 5}]
+order = [a["id"] for a in collectors.interleave_by_source(mix)]
+check("ترتیب نوبتی بین منابع", order == [1, 4, 5, 2, 3])
+check("سقف ۳ تایی هر سه منبع را نگه می‌دارد",
+      {a["source"] for a in collectors.interleave_by_source(mix)[:3]} == {"A", "B", "C"})
+check("auto_reject: «crypto» رد می‌شود", mainmod.auto_reject([{"title": "Crypto giveaway now"}]) == [])
+check("auto_reject: «cryptography» (امنیت AI) رد نمی‌شود",
+      len(mainmod.auto_reject([{"title": "New cryptography attack on AI models"}])) == 1)
 
 print("Item key:")
 check("کلید از id", bot._item_key({"id": "x"}) == "x")

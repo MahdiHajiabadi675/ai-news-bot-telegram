@@ -498,6 +498,7 @@ function feedsReport(health) {
   }
   for (const [n, h] of good) {
     lines.push(`✅ ${escapeHtml(n)}: ${h.items || 0} آیتم، ${h.new || 0} جدید` + (h.filtered ? `، ${h.filtered} ردشده با فیلتر` : ''));
+    for (const t of (h.filtered_titles || []).slice(0, 3)) lines.push(`      🚫 ${escapeHtml(t)}`);
   }
   const checked = entries.map(([, h]) => h.checked || '').sort().pop();
   if (checked) lines.push(`\n🕐 آخرین بررسی: ${checked.slice(0, 16).replace('T', ' ')} UTC`);

@@ -78,20 +78,7 @@ AUTO_PUBLISH_ENABLED = os.getenv("AUTO_PUBLISH_ENABLED", "true").lower() == "tru
 # Fast-track settings
 FAST_TRACK_ENABLED = os.getenv("FAST_TRACK_ENABLED", "true").lower() == "true"
 
-# کلیدواژه‌های مرتبط با AI (فیلتر فیدهای عمومی و fast-track)
-# انگلیسی با مرز کلمه تطبیق داده می‌شود (تا "ai" داخل "said" پیدا نشود)،
-# فارسی به‌صورت زیررشته. کلمات خیلی عمومی (مثل "مدل"، "ماشین"، "training") حذف شده‌اند.
-AI_KEYWORDS = [
-    # فارسی
-    "هوش مصنوعی", "یادگیری ماشین", "یادگیری عمیق", "شبکه عصبی", "مدل زبانی",
-    "چت‌بات", "چت جی‌پی‌تی", "جمینای", "دیپ‌سیک", "اوپن‌ای‌آی", "آنتروپیک",
-    # انگلیسی
-    "AI", "A.I.", "artificial intelligence", "machine learning", "deep learning",
-    "neural network", "LLM", "LLMs", "large language model", "GPT", "ChatGPT",
-    "OpenAI", "Anthropic", "Claude", "Gemini", "DeepSeek", "Llama", "Mistral",
-    "Copilot", "transformer", "diffusion model", "generative", "fine-tuning",
-    "chatbot", "agentic", "Sora", "Midjourney", "Hugging Face", "AI chip", "GPU", "CUDA",
-]
+# واژه‌های تشخیص «خبر دربارهٔ AI» (وزن‌دار): src/ai_terms.py
 
 # Auto-reject keywords
 REJECT_KEYWORDS = [

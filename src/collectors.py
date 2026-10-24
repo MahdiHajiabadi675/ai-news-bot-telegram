@@ -4,7 +4,8 @@ import re
 import requests
 from datetime import datetime
 from bs4 import BeautifulSoup
-from .classifier import is_ai_related
+from .classifier import ai_relevance
+from .ai_terms import PASS_SCORE
 
 FEEDS = [
     # === منابع رسمی AI (Trust 5) ===
@@ -69,9 +70,31 @@ def _clean_html(html):
     return text[:2000]
 
 
-def _looks_ai_related(text: str) -> bool:
-    """برای فیدهای عمومی: فقط خبرهای مرتبط با AI نگه داشته شوند"""
-    return is_ai_related(text)
+def _entry_tags(entry) -> str:
+    """تگ/دستهٔ RSS خبر (مثلاً «AI»، «OpenAI») — نشانهٔ قوی از طرف سردبیر خود سایت"""
+    tags = entry.get("tags") or []
+    return " ".join(t.get("term", "") for t in tags if isinstance(t, dict))
+
+
+def interleave_by_source(articles: list) -> list:
+    """
+    ترتیب نوبتی بین منابع (هر منبع یکی، به‌ترتیب). وقتی سقف MAX_ARTICLES_PER_RUN اعمال می‌شود،
+    منابع آخر لیست (فارسی‌ها) گرسنه نمی‌مانند.
+    """
+    by_source, order = {}, []
+    for a in articles:
+        if a["source"] not in by_source:
+            by_source[a["source"]] = []
+            order.append(a["source"])
+        by_source[a["source"]].append(a)
+    out, i = [], 0
+    while len(out) < len(articles):
+        for name in order:
+            if i < len(by_source[name]):
+                out.append(by_source[name][i])
+        i += 1
+    return out
+
 
 def collect(seen: set) -> list:
     """
@@ -85,7 +108,7 @@ def collect(seen: set) -> list:
     health = {}
     for feed_cfg in FEEDS:
         name = feed_cfg["name"]
-        h = {"ok": False, "items": 0, "new": 0, "filtered": 0, "err": None}
+        h = {"ok": False, "items": 0, "new": 0, "filtered": 0, "filtered_titles": [], "err": None}
         health[name] = h
         try:
             response = requests.get(
@@ -114,10 +137,13 @@ def collect(seen: set) -> list:
                     summary = content[0].get("value", summary)
                 summary = _clean_html(summary)
 
-                # فیدهای عمومی (مثل TechCrunch/The Verge/دیجیاتو) فقط اگر
-                # خبر مرتبط با AI باشد نگه داشته می‌شود.
-                if not feed_cfg["trusted"] and not _looks_ai_related(title + " " + summary):
+                # فیدهای عمومی (مثل TechCrunch/The Verge/دیجیاتو) فقط اگر خبر مرتبط با AI باشد.
+                # فیدهای اختصاصی AI (trusted=True) فیلتر نمی‌شوند: لازم نیست «AI» در متن بیاید.
+                # امتیاز: واژه‌های وزن‌دار + تگ‌های RSS (src/ai_terms.py)
+                if not feed_cfg["trusted"] and ai_relevance(title, summary, _entry_tags(entry)) < PASS_SCORE:
                     h["filtered"] += 1
+                    if len(h["filtered_titles"]) < 3:
+                        h["filtered_titles"].append(title[:80])
                     continue
 
                 news_id = _generate_id(title, link)

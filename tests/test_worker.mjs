@@ -104,13 +104,14 @@ check('/sources: منبع بدون شواهد = پیش‌فرض اولیه', /Op
 
 console.log('Feed health:');
 set('feed_health', {
-  Good: { ok: true, items: 8, new: 2, filtered: 1, checked: '2026-10-25T10:00:00Z', fails: 0 },
+  Good: { ok: true, items: 8, new: 2, filtered: 1, filtered_titles: ['Phone review'], checked: '2026-10-25T10:00:00Z', fails: 0 },
   Broken: { ok: false, items: 0, new: 0, err: 'HTTPError: 404', fails: 5, checked: '2026-10-25T10:00:00Z' },
 });
 await send(msg('/feeds'));
 const fr = last('sendMessage').body.text;
 check('/feeds: فید خراب با علت و شمارنده', /❌ <b>Broken<\/b> — HTTPError: 404 \(پیاپی: 5\)/.test(fr));
 check('/feeds: فید سالم با آمار', fr.includes('✅ Good: 8 آیتم، 2 جدید'));
+check('/feeds: نمونهٔ ردشده‌ها', fr.includes('🚫 Phone review'));
 set('feed_health', {});
 await send(msg('/feeds'));
 check('/feeds خالی', last('sendMessage').body.text.includes('هنوز'));

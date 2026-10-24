@@ -335,6 +335,8 @@ def feeds_report(health):
     for n, h in sorted(good):
         lines.append(f"✅ {_escape_html(n)}: {h.get('items', 0)} آیتم، {h.get('new', 0)} جدید"
                      + (f"، {h.get('filtered')} ردشده با فیلتر" if h.get("filtered") else ""))
+        for t in (h.get("filtered_titles") or [])[:3]:
+            lines.append(f"      🚫 {_escape_html(t)}")
     checked = max((h.get("checked") or "" for h in health.values()), default="")
     if checked:
         lines.append(f"\n🕐 آخرین بررسی: {checked[:16].replace('T', ' ')} UTC")
