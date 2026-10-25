@@ -77,6 +77,22 @@ def save_source_stats(stats):
     from . import source_trust
     source_trust.save_stats(stats)
 
+RUN_LOG_KEEP = 48  # آخرین ۴۸ اجرا (حدود دو روز)
+
+
+def append_run_log(entry: dict):
+    """آمار «قیف» هر اجرا (چند خبر پیدا شد، کجا کم شد) برای دستور /runs"""
+    log = cloudflare_kv.get("run_log", [])
+    log = log if isinstance(log, list) else []
+    log.append(entry)
+    cloudflare_kv.put("run_log", log[-RUN_LOG_KEEP:])
+
+
+def load_run_log():
+    log = cloudflare_kv.get("run_log", [])
+    return log if isinstance(log, list) else []
+
+
 def load_feed_health():
     h = cloudflare_kv.get("feed_health", {})
     return h if isinstance(h, dict) else {}

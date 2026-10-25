@@ -39,6 +39,13 @@ MAX_POSTS_PER_RUN = _int_env("MAX_POSTS_PER_RUN", 15)
 MAX_POSTS_PER_DAY = _int_env("MAX_POSTS_PER_DAY", 0)
 COLLECT_INTERVAL_MIN = _int_env("COLLECT_INTERVAL_MIN", 45)
 
+# از هر فید، حداکثر این‌قدر از «جدیدترین» آیتم‌ها (بر اساس تاریخ انتشار، نه ترتیب فید) بررسی می‌شود
+MAX_PER_FEED = _int_env("MAX_PER_FEED", 15)
+# خبری که از این‌قدر ساعت قدیمی‌تر باشد نادیده گرفته می‌شود (جلوگیری از سیل خبر کهنه هنگام افزودن فید جدید)
+MAX_ITEM_AGE_HOURS = _int_env("MAX_ITEM_AGE_HOURS", 72)
+# فقط برای نمایش ساعت در گزارش‌ها (ایران = ۲۱۰ دقیقه)
+DISPLAY_TZ_OFFSET_MIN = _int_env("DISPLAY_TZ_OFFSET_MIN", 210)
+
 # سقف پردازش در هر اجرا — جلوگیری از تایم‌اوت و اسپم تلگرام
 MAX_ARTICLES_PER_RUN = _int_env("MAX_ARTICLES_PER_RUN", 30)
 # حداکثر پیام «در انتظار تایید» که در هر اجرا به ادمین می‌رود
@@ -87,22 +94,29 @@ REJECT_KEYWORDS = [
     "giveaway", "free money", "click here", "limited offer",
 ]
 
-# Source trust scores (1-5)
+# Source trust scores (1-5) — فقط «پیش‌فرض اولیه»؛ اعتبار واقعی پویاست (src/source_trust.py)
 TRUST_SCORES = {
+    # آزمایشگاه‌ها و شرکت‌های AI (سایت رسمی)
     "OpenAI Blog": 5,
     "Google AI": 5,
+    "Google Research": 5,
     "DeepMind": 5,
     "Anthropic": 5,
     "Meta AI": 5,
     "HuggingFace": 5,
-    "Microsoft AI": 5,
+    "Microsoft Research": 4,
+    "NVIDIA Blog": 4,
+    "AWS ML Blog": 4,
+    "Apple ML Research": 4,
+    # رسانه‌های معتبر
     "MIT Tech Review": 4,
     "Ars Technica AI": 4,
     "TechCrunch AI": 4,
-    "Papers with Code": 4,
     "The Verge AI": 3,
     "Wired AI": 3,
     "VentureBeat AI": 3,
+    "The Decoder": 3,
+    "MarkTechPost": 3,
     "AI News": 3,
     "TechCrunch": 3,
     "The Verge": 3,

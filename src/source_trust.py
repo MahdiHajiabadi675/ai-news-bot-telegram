@@ -96,13 +96,23 @@ def record_decision(stats: dict, source: str, action: str, prior=None, now=None)
 
 
 def sync_priors(stats: dict, sources) -> bool:
-    """پیش‌فرض اولیهٔ همهٔ منابع فعال را در stats ثبت می‌کند (برای نمایش در /sources). اگر تغییری بود True."""
+    """
+    پیش‌فرض اولیهٔ همهٔ منابع فعال را در stats ثبت می‌کند (برای نمایش در /sources).
+    منبعِ حذف‌شده از FEEDS که هیچ تصمیمی دربارهٔ آن ثبت نشده، از stats پاک می‌شود.
+    اگر تغییری بود True.
+    """
+    names = list(sources)
     changed = False
-    for name in sources:
+    for name in names:
         entry = stats.setdefault(name, {"pos": 0.0, "neg": 0.0})
         want = prior_of(name)
         if entry.get("prior") != want:
             entry["prior"] = want
+            changed = True
+    for name in list(stats):
+        e = stats[name]
+        if name not in names and not float(e.get("pos", 0)) and not float(e.get("neg", 0)):
+            del stats[name]
             changed = True
     return changed
 

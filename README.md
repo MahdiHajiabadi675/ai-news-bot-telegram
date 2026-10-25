@@ -72,6 +72,8 @@
 | `MAX_POSTS_PER_DAY`    | 0 (خاموش) | سقف امنیتی اختیاری روزانه                  |
 | `COLLECT_INTERVAL_MIN` | 45        | حداقل فاصله بین دو جمع‌آوری                |
 | `SHOW_ORIGINAL_TEXT`   | true      | متن اصلی زیر ترجمه                          |
+| `MAX_PER_FEED`         | 15        | از هر فید جدیدترین N آیتم (بر اساس تاریخ)    |
+| `MAX_ITEM_AGE_HOURS`   | 72        | خبر قدیمی‌تر از این نادیده گرفته می‌شود       |
 | `TRUST_PRIOR_WEIGHT`   | 8         | وزن اعتبار اولیه (بزرگ‌تر = دیرتر تغییر)     |
 | `TRUST_HALF_LIFE_DAYS` | 30        | نیمه‌عمر تصمیم‌های قدیمی                    |
 
@@ -184,6 +186,8 @@ GitHub گاهی اجرای زمان‌بندی‌شده را ۴-۵ ساعت عق
 | `/auto on\|off` | انتشار خودکار اخبار مهم |
 | `/clear` | پاک‌کردن کل صف (با تایید دوباره) — دکمهٔ 🗑 هم زیر هر خبر هست |
 | `/sources` | اعتبار پویای منابع (پایه ← فعلی) |
+| `/feeds` | سلامت فیدها: سالم/خراب، تعداد آیتم، سن جدیدترین خبر، نمونهٔ ردشده‌ها |
+| `/runs` | آمار اجراهای اخیر: چند خبر پیدا شد و کجا کم شد (قیف) |
 | `/stats` | آمار انتشار |
 
 ## هزینه‌ها
@@ -228,11 +232,14 @@ ai-news-bot/
 
 ## منابع اخبار
 
-**معتبر (Trust 5):** OpenAI Blog, Google AI, DeepMind, Anthropic, Meta AI, HuggingFace, Microsoft AI
+لیست کامل در `FEEDS` (`src/collectors.py`)؛ وضعیت زندهٔ هر فید با `/feeds`.
 
-**معتبر (Trust 4):** MIT Tech Review, Ars Technica AI, TechCrunch AI, Papers with Code
+- **سایت رسمی شرکت‌ها:** OpenAI، Google AI، Google Research، DeepMind، HuggingFace، Microsoft Research، NVIDIA، AWS ML، Apple ML
+- **Anthropic و Meta AI:** فید رسمی ندارند؛ از فیدهای جامعه (`Olshansk/rss-feeds`) استفاده می‌شود که هر ساعت از سایت رسمی ساخته می‌شوند
+- **رسانه‌های AI:** MIT Tech Review، Ars Technica AI، TechCrunch AI، The Verge AI، Wired AI، VentureBeat AI، The Decoder، MarkTechPost
+- **رسانه‌های عمومی (با فیلتر AI):** TechCrunch، The Verge، Ars Technica، دیجیاتو، زومگ، تک‌راسا
 
-**متوسط (Trust 3):** VentureBeat AI, The Verge AI, Wired AI, AI News, TechCrunch, The Verge, Ars Technica, دیجیاتو, زومگ, تک‌راسا
+فیدها موازی خوانده می‌شوند و از هر فید «جدیدترین» آیتم‌ها (بر اساس تاریخ انتشار، نه ترتیب فید) بررسی می‌شود.
 
 ## اعتبار اولیهٔ منابع
 
@@ -242,7 +249,7 @@ ai-news-bot/
 
 ## منابع اخبار
 
-برای اضافه کردن منبع جدید، کافیست به لیست `FEEDS` در `src/collectors.py` اضافه کنید:
+برای اضافه کردن منبع جدید، کافیست به لیست `FEEDS` در `src/collectors.py` اضافه کنید (و اعتبار اولیه‌اش را در `TRUST_SCORES`):
 
 ```python
 {"name": "منبع جدید", "url": "https://...", "lang": "en", "trusted": False, "fast_track": True}

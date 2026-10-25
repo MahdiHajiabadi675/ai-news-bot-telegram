@@ -73,6 +73,8 @@ def _should_collect(force, last_collect, now=None, interval_min=None):
 def run(force=False):
     print(f"[{datetime.utcnow().isoformat()}] Pipeline started")
     translator.reset()
+    # آمار «قیف» همین اجرا برای /runs: چند خبر پیدا شد و کجا کم شد
+    rl = {"t": datetime.utcnow().isoformat() + "Z", "forced": bool(force), "collected": False}
 
     # 1. Load state
     state = storage.load_state()
@@ -98,6 +100,7 @@ def run(force=False):
         print("[INFO] Collection: yes")
     else:
         print(f"[INFO] Collection: skipped (last: {last_collect})")
+        rl["skipped"] = True
 
     if should_collect and not state.get("paused"):
         state = set_stage(state, "collecting")
@@ -105,6 +108,9 @@ def run(force=False):
         print("[INFO] Collecting articles...")
         seen = storage.load_seen()
         articles = collect(seen)
+        _health = getattr(collect, "health", None) or {}
+        rl.update(collected=True, feeds_ok=sum(1 for h in _health.values() if h.get("ok")),
+                  feeds_total=len(_health), fetched=len(articles))
 
         # سلامت فیدها: ذخیره در KV (برای /feeds) + هشدار برای فیدی که چند بار پیاپی خراب است
         health = getattr(collect, "health", None)
@@ -124,9 +130,11 @@ def run(force=False):
             print(f"[INFO] Limiting to {MAX_ARTICLES_PER_RUN} of {len(articles)} new articles")
             articles = articles[:MAX_ARTICLES_PER_RUN]
 
+        rl["processed"] = len(articles)
         if articles:
             collected_articles = articles
             articles = auto_reject(articles)
+            rl["rejected_keyword"] = len(collected_articles) - len(articles)
 
             # Rejected items are final; do not inspect them on every run.
             for article in collected_articles:
@@ -163,6 +171,8 @@ def run(force=False):
                 if source_trust.sync_priors(stats, [f["name"] for f in FEEDS]):
                     storage.save_source_stats(stats)
                 analyzed = analyze_articles(articles, stats)
+                rl["analyzed"] = len(analyzed)
+                rl.update(low_score=0, auto=0, pending=0)
 
                 # بعد از تحلیل، خبر دیده‌شده محسوب می‌شود تا دوباره پردازش نشود.
                 for article in articles:
@@ -182,6 +192,7 @@ def run(force=False):
                     item["score"] = calculate_score(item)
 
                     if item["score"] < AUTO_REJECT_THRESHOLD:
+                        rl["low_score"] += 1
                         print(f"[REJECT] Low score ({item['score']}): {item['title'][:50]}")
                         pub = storage.load_published()
                         pub.append({**item, "published": False, "rejected_at": _now(), "reject_reason": "low_score"})
@@ -205,6 +216,7 @@ def run(force=False):
                     should_auto = auto_enabled and is_trusted and is_confirmed and is_high_score
 
                     if should_auto:
+                        rl["auto"] += 1
                         item["status"] = "approved"
                         item["admin_action"] = "auto_approved"
                         approved.append(item)
@@ -213,6 +225,7 @@ def run(force=False):
                             notices_sent += 1
                         print(f"[AUTO] Approved: {item['title_fa'][:50]} (score: {item['score']}, trust: {source_trust_now})")
                     else:
+                        rl["pending"] += 1
                         item["status"] = "pending"
                         pending.append(item)
                         pending_this_run += 1
@@ -221,6 +234,7 @@ def run(force=False):
                             reviews_sent += 1
                         print(f"[PENDING] {item['title_fa'][:50]} (score: {item['score']}, trust: {source_trust_now})")
 
+                rl["untranslated"] = translated_fail
                 if translated_fail:
                     print(f"[WARN] {translated_fail} item(s) could not be translated (published with 'ترجمه نشده' label)")
                     state["last_error"] = f"{translated_fail} خبر ترجمه نشد"
@@ -252,6 +266,16 @@ def run(force=False):
     # 5. Save state
     state = set_stage(state, "waiting")
     storage.save_state(state)
+
+    # آمار این اجرا برای /runs (اگر ذخیره نشد، پایپ‌لاین خراب نشود)
+    try:
+        rl["paused"] = bool(state.get("paused"))
+        rl["published"] = state.get("daily_post_count", 0)
+        rl["queue_pending"] = len(storage.load_pending())
+        rl["queue_approved"] = len(storage.load_approved())
+        storage.append_run_log(rl)
+    except Exception as e:
+        print(f"[WARN] run log failed: {e}")
 
     print(f"[{datetime.utcnow().isoformat()}] Pipeline finished")
 

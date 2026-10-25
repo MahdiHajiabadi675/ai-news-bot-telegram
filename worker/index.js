@@ -202,6 +202,7 @@ async function handleMessage(msg, env, BASE, CHANNEL_ID, ADMIN_ID) {
       '/clear - پاک‌کردن کل صف\n' +
       '/sources - اعتبار پویای منابع\n' +
       '/feeds - سلامت فیدهای خبری\n' +
+      '/runs - آمار اجراهای اخیر (چند خبر پیدا شد)\n' +
       '/stats - آمار کامل'
     );
   } else if (text === '/status') {
@@ -279,6 +280,8 @@ async function handleMessage(msg, env, BASE, CHANNEL_ID, ADMIN_ID) {
     }
   } else if (text === '/clear') {
     await askClearQueue(env, BASE, ADMIN_ID);
+  } else if (text === '/runs') {
+    await sendMessage(BASE, ADMIN_ID, runsReport(await getJSON(env, 'run_log', []), env));
   } else if (text === '/feeds') {
     await sendMessage(BASE, ADMIN_ID, feedsReport(await getJSON(env, 'feed_health', {})));
   } else if (text === '/sources') {
@@ -487,6 +490,37 @@ async function recordDecision(env, item, action, now = Date.now()) {
   }
 }
 
+function agoText(iso, now = Date.now()) {
+  const t = Date.parse(iso);
+  if (!Number.isFinite(t)) return '؟';
+  const mins = Math.max(0, Math.floor((now - t) / 60000));
+  if (mins < 60) return `${mins} دقیقه پیش`;
+  if (mins < 60 * 48) return `${Math.floor(mins / 60)} ساعت پیش`;
+  return `${Math.floor(mins / 1440)} روز پیش`;
+}
+
+function runsReport(log, env, n = 12) {
+  if (!Array.isArray(log) || !log.length) return '📈 هنوز اجرایی ثبت نشده (بعد از اولین اجرای pipeline پر می‌شود).';
+  const off = (Number(env?.DISPLAY_TZ_OFFSET_MIN) || 210) * 60000;
+  const lines = ['📈 <b>اجراهای اخیر</b> (ساعت محلی)\n'];
+  for (const r of log.slice(-n).reverse()) {
+    const t = Date.parse(r.t);
+    const d = Number.isFinite(t) ? new Date(t + off).toISOString() : null;
+    const hhmm = d ? `${d.slice(5, 10)} ${d.slice(11, 16)}` : '؟';
+    const tag = r.forced ? '🖐' : '⏱';
+    if (r.paused && !r.collected) lines.push(`${tag} ${hhmm} — ⏸ ربات متوقف است`);
+    else if (r.skipped) lines.push(`${tag} ${hhmm} — جمع‌آوری نشد (فاصله از اجرای قبلی کم بود) | منتشر: ${r.published || 0}`);
+    else if (r.collected) {
+      lines.push(`${tag} ${hhmm} — فید ${r.feeds_ok ?? '?'}/${r.feeds_total ?? '?'} | جدید ${r.fetched || 0} → تحلیل ${r.analyzed || 0} ` +
+        `(🤖${r.auto || 0} 👀${r.pending || 0} ❌${(r.low_score || 0) + (r.rejected_keyword || 0)}) | ` +
+        `📤 منتشر ${r.published || 0} | صف: ${r.queue_pending || 0} تایید، ${r.queue_approved || 0} آماده` +
+        (r.untranslated ? ` | 🔤 ${r.untranslated} ترجمه‌نشده` : ''));
+    } else lines.push(`${tag} ${hhmm} — جمع‌آوری انجام نشد | منتشر: ${r.published || 0}`);
+  }
+  lines.push('\n🤖 خودکار | 👀 نیازمند تایید شما | ❌ ردشده (کم‌امتیاز/کلمه مشکوک)');
+  return lines.join('\n');
+}
+
 function feedsReport(health) {
   const entries = Object.entries(health || {});
   if (!entries.length) return '📡 هنوز گزارشی نیست (بعد از اولین جمع‌آوری پر می‌شود).';
@@ -497,7 +531,8 @@ function feedsReport(health) {
     lines.push(`❌ <b>${escapeHtml(n)}</b> — ${escapeHtml(h.err || '?')} (پیاپی: ${h.fails || 0})`);
   }
   for (const [n, h] of good) {
-    lines.push(`✅ ${escapeHtml(n)}: ${h.items || 0} آیتم، ${h.new || 0} جدید` + (h.filtered ? `، ${h.filtered} ردشده با فیلتر` : ''));
+    lines.push(`✅ ${escapeHtml(n)}: ${h.items || 0} آیتم، ${h.new || 0} جدید` + (h.filtered ? `، ${h.filtered} ردشده با فیلتر` : '') +
+      (h.old ? `، ${h.old} کهنه` : '') + (h.newest ? ` | آخرین خبر فید: ${agoText(h.newest)}` : ''));
     for (const t of (h.filtered_titles || []).slice(0, 3)) lines.push(`      🚫 ${escapeHtml(t)}`);
   }
   const checked = entries.map(([, h]) => h.checked || '').sort().pop();

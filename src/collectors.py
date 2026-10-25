@@ -1,33 +1,47 @@
+import calendar
 import feedparser
 import hashlib
 import re
 import requests
-from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timedelta
 from bs4 import BeautifulSoup
 from .classifier import ai_relevance
 from .ai_terms import PASS_SCORE
+from .config import MAX_PER_FEED, MAX_ITEM_AGE_HOURS
+
+# فیدهای trusted=True اختصاصی AI هستند و فیلتر نمی‌شوند (لازم نیست «AI» در متن بیاید).
+# فیدهای trusted=False عمومی‌اند و با امتیاز ارتباط (src/ai_terms.py) فیلتر می‌شوند.
+# وضعیت هر فید در ربات: /feeds — فیدی که خراب شود همان‌جا و با پیام هشدار دیده می‌شود.
+_COMMUNITY = "https://raw.githubusercontent.com/Olshansk/rss-feeds/main/feeds"
 
 FEEDS = [
-    # === منابع رسمی AI (Trust 5) ===
-    {"name": "OpenAI Blog", "url": "https://openai.com/blog/rss.xml", "lang": "en", "trusted": True, "fast_track": False},
-    {"name": "Google AI", "url": "https://blog.google/technology/ai/rss/", "lang": "en", "trusted": True, "fast_track": False},
+    # === سایت رسمی شرکت‌ها و آزمایشگاه‌های AI ===
+    {"name": "OpenAI Blog", "url": "https://openai.com/news/rss.xml", "lang": "en", "trusted": True, "fast_track": False},
+    {"name": "Google AI", "url": "https://blog.google/innovation-and-ai/technology/ai/rss/", "lang": "en", "trusted": True, "fast_track": False},
+    {"name": "Google Research", "url": "https://research.google/blog/rss/", "lang": "en", "trusted": True, "fast_track": False},
     {"name": "DeepMind", "url": "https://deepmind.google/blog/rss.xml", "lang": "en", "trusted": True, "fast_track": False},
-    {"name": "Anthropic", "url": "https://www.anthropic.com/rss.xml", "lang": "en", "trusted": True, "fast_track": False},
-    {"name": "Meta AI", "url": "https://ai.meta.com/blog/rss/", "lang": "en", "trusted": True, "fast_track": False},
     {"name": "HuggingFace", "url": "https://huggingface.co/blog/feed.xml", "lang": "en", "trusted": True, "fast_track": False},
-    {"name": "Microsoft AI", "url": "https://blogs.microsoft.com/ai/feed/", "lang": "en", "trusted": True, "fast_track": False},
+    # Anthropic و Meta فید رسمی ندارند؛ این‌ها فیدهای جامعه‌اند که هر ساعت از سایت رسمی ساخته می‌شوند
+    {"name": "Anthropic", "url": f"{_COMMUNITY}/feed_anthropic_news.xml", "lang": "en", "trusted": True, "fast_track": False},
+    {"name": "Meta AI", "url": f"{_COMMUNITY}/feed_meta_ai.xml", "lang": "en", "trusted": True, "fast_track": False},
+    # بلاگ‌های عمومی شرکت‌ها (همه‌ی موضوع‌ها، پس فیلتر AI دارند)
+    {"name": "Microsoft Research", "url": "https://www.microsoft.com/en-us/research/feed/", "lang": "en", "trusted": False, "fast_track": False},
+    {"name": "NVIDIA Blog", "url": "https://blogs.nvidia.com/feed/", "lang": "en", "trusted": False, "fast_track": False},
+    {"name": "AWS ML Blog", "url": "https://aws.amazon.com/blogs/machine-learning/feed/", "lang": "en", "trusted": True, "fast_track": False},
+    {"name": "Apple ML Research", "url": "https://machinelearning.apple.com/rss.xml", "lang": "en", "trusted": True, "fast_track": False},
 
-    # === منابع معتبر AI (Trust 4) ===
+    # === رسانه‌های اختصاصی AI ===
     {"name": "MIT Tech Review", "url": "https://www.technologyreview.com/topic/artificial-intelligence/feed", "lang": "en", "trusted": True, "fast_track": False},
     {"name": "Ars Technica AI", "url": "https://arstechnica.com/ai/feed/", "lang": "en", "trusted": True, "fast_track": False},
     {"name": "TechCrunch AI", "url": "https://techcrunch.com/category/artificial-intelligence/feed/", "lang": "en", "trusted": True, "fast_track": False},
     {"name": "The Verge AI", "url": "https://www.theverge.com/rss/ai-artificial-intelligence/index.xml", "lang": "en", "trusted": True, "fast_track": False},
     {"name": "Wired AI", "url": "https://www.wired.com/feed/tag/ai/latest/rss", "lang": "en", "trusted": True, "fast_track": False},
+    {"name": "VentureBeat AI", "url": "https://venturebeat.com/category/ai/feed/", "lang": "en", "trusted": True, "fast_track": False},
+    {"name": "The Decoder", "url": "https://the-decoder.com/feed/", "lang": "en", "trusted": True, "fast_track": False},
+    {"name": "MarkTechPost", "url": "https://www.marktechpost.com/feed/", "lang": "en", "trusted": True, "fast_track": False},
 
-    # === منابع تحقیقاتی AI (Trust 4) ===
-    {"name": "Papers with Code", "url": "https://paperswithcode.com/rss.xml", "lang": "en", "trusted": True, "fast_track": False},
-
-    # === منابع عمومی معتبر (Trust 3) ===
+    # === رسانه‌های عمومی (فیلتر AI دارند) ===
     {"name": "TechCrunch", "url": "https://techcrunch.com/feed/", "lang": "en", "trusted": False, "fast_track": False},
     {"name": "The Verge", "url": "https://www.theverge.com/rss/index.xml", "lang": "en", "trusted": False, "fast_track": False},
     {"name": "Ars Technica", "url": "https://arstechnica.com/feed/", "lang": "en", "trusted": False, "fast_track": False},
@@ -45,8 +59,7 @@ FEED_HEADERS = {
     "Accept": "application/rss+xml, application/xml, text/xml;q=0.9, */*;q=0.8",
 }
 
-# حداکثر آیتم از هر فید (بقیه در اجرای بعدی دیده می‌شوند)
-MAX_PER_FEED = 8
+FETCH_WORKERS = 8
 
 
 def _normalize_url(url: str) -> str:
@@ -76,6 +89,31 @@ def _entry_tags(entry) -> str:
     return " ".join(t.get("term", "") for t in tags if isinstance(t, dict))
 
 
+def _entry_date(entry):
+    """تاریخ انتشار خبر (UTC naive) یا None اگر فید تاریخ نداده باشد"""
+    t = entry.get("published_parsed") or entry.get("updated_parsed")
+    if not t:
+        return None
+    try:
+        return datetime.utcfromtimestamp(calendar.timegm(t))
+    except Exception:
+        return None
+
+
+def _newest_first(entries):
+    """
+    مرتب‌سازی بر اساس تاریخ انتشار (جدیدترین اول).
+    فیدهایی مثل OpenAI (۱۳۰۰+ آیتم) یا HuggingFace (۹۰۰+) کل آرشیو را برمی‌گردانند و ترتیبشان
+    تضمین‌شده «جدیدترین اول» نیست؛ بدون مرتب‌سازی، «۸ آیتم اول» ممکن است همیشه خبرهای قدیمی باشد.
+    آیتم بدون تاریخ جای خودش را (به‌ترتیب فید) حفظ می‌کند.
+    """
+    dated = [(e, _entry_date(e)) for e in entries]
+    if not any(d for _, d in dated):
+        return list(entries)
+    far_past = datetime(1970, 1, 1)
+    return [e for e, _ in sorted(dated, key=lambda x: x[1] or far_past, reverse=True)]
+
+
 def interleave_by_source(articles: list) -> list:
     """
     ترتیب نوبتی بین منابع (هر منبع یکی، به‌ترتیب). وقتی سقف MAX_ARTICLES_PER_RUN اعمال می‌شود،
@@ -96,78 +134,100 @@ def interleave_by_source(articles: list) -> list:
     return out
 
 
+def _fetch(feed_cfg):
+    """دریافت یک فید (در thread). برمی‌گرداند (entries, None) یا (None, خطا)"""
+    try:
+        response = requests.get(feed_cfg["url"], timeout=10, headers=FEED_HEADERS)
+        response.raise_for_status()
+        return feedparser.parse(response.content).entries, None
+    except Exception as e:
+        return None, e
+
+
 def collect(seen: set) -> list:
     """
-    جمع‌آوری از همهٔ فیدها. وضعیت هر فید در collect.health ثبت می‌شود:
+    جمع‌آوری از همهٔ فیدها (موازی). وضعیت هر فید در collect.health ثبت می‌شود:
       {نام: {"ok", "items" (کل آیتم‌های فید), "new" (جدید و پذیرفته‌شده),
-             "filtered" (ردشده با فیلتر AI), "err"}}
+             "filtered" (ردشده با فیلتر AI), "filtered_titles", "old" (قدیمی‌تر از سقف سن),
+             "newest" (تاریخ جدیدترین خبر فید), "err"}}
     فیدی که خطا بدهد یا صفر آیتم داشته باشد ok=False می‌شود.
     """
     articles = []
     collected_ids = set()
     health = {}
-    for feed_cfg in FEEDS:
+    now = datetime.utcnow()
+    oldest_ok = now - timedelta(hours=MAX_ITEM_AGE_HOURS)
+
+    with ThreadPoolExecutor(max_workers=FETCH_WORKERS) as pool:
+        fetched = list(pool.map(_fetch, FEEDS))
+
+    for feed_cfg, (entries, error) in zip(FEEDS, fetched):
         name = feed_cfg["name"]
-        h = {"ok": False, "items": 0, "new": 0, "filtered": 0, "filtered_titles": [], "err": None}
+        h = {"ok": False, "items": 0, "new": 0, "filtered": 0, "filtered_titles": [],
+             "old": 0, "newest": None, "err": None}
         health[name] = h
-        try:
-            response = requests.get(
-                feed_cfg["url"],
-                timeout=10,
-                headers=FEED_HEADERS,
-            )
-            response.raise_for_status()
-            d = feedparser.parse(response.content)
-            h["items"] = len(d.entries)
-            if not d.entries:
-                # صفحه‌ای که RSS نیست (مثلاً HTML یا ۴۰۴ نرم) → آیتمی ندارد
-                h["err"] = "فید خالی یا نامعتبر (RSS نیست)"
-                print(f"[WARN] {name}: no entries")
+        if error is not None:
+            h["err"] = f"{type(error).__name__}: {str(error)[:120]}"
+            print(f"[WARN] {name}: {error}")
+            continue
+        h["items"] = len(entries)
+        if not entries:
+            # صفحه‌ای که RSS نیست (مثلاً HTML یا ۴۰۴ نرم) → آیتمی ندارد
+            h["err"] = "فید خالی یا نامعتبر (RSS نیست)"
+            print(f"[WARN] {name}: no entries")
+            continue
+        h["ok"] = True
+
+        entries = _newest_first(entries)
+        newest = _entry_date(entries[0])
+        h["newest"] = newest.isoformat() + "Z" if newest else None
+
+        for entry in entries[:MAX_PER_FEED]:
+            title = entry.get("title", "").strip()
+            link = entry.get("link", "")
+            if not title or not link:
                 continue
-            h["ok"] = True
-            for entry in d.entries[:MAX_PER_FEED]:
-                title = entry.get("title", "").strip()
-                link = entry.get("link", "")
-                if not title or not link:
-                    continue
 
-                summary = entry.get("summary", "")
-                content = entry.get("content", [])
-                if content and isinstance(content, list):
-                    summary = content[0].get("value", summary)
-                summary = _clean_html(summary)
+            published = _entry_date(entry)
+            if published and published < oldest_ok:
+                h["old"] += 1
+                continue
 
-                # فیدهای عمومی (مثل TechCrunch/The Verge/دیجیاتو) فقط اگر خبر مرتبط با AI باشد.
-                # فیدهای اختصاصی AI (trusted=True) فیلتر نمی‌شوند: لازم نیست «AI» در متن بیاید.
-                # امتیاز: واژه‌های وزن‌دار + تگ‌های RSS (src/ai_terms.py)
-                if not feed_cfg["trusted"] and ai_relevance(title, summary, _entry_tags(entry)) < PASS_SCORE:
-                    h["filtered"] += 1
-                    if len(h["filtered_titles"]) < 3:
-                        h["filtered_titles"].append(title[:80])
-                    continue
+            summary = entry.get("summary", "")
+            content = entry.get("content", [])
+            if content and isinstance(content, list):
+                summary = content[0].get("value", summary)
+            summary = _clean_html(summary)
 
-                news_id = _generate_id(title, link)
-                if news_id in seen or news_id in collected_ids:
-                    continue
-                collected_ids.add(news_id)
-                h["new"] += 1
+            # فیدهای عمومی فقط اگر خبر مرتبط با AI باشد؛ فیدهای اختصاصی AI فیلتر نمی‌شوند.
+            # امتیاز: واژه‌های وزن‌دار + تگ‌های RSS (src/ai_terms.py)
+            if not feed_cfg["trusted"] and ai_relevance(title, summary, _entry_tags(entry)) < PASS_SCORE:
+                h["filtered"] += 1
+                if len(h["filtered_titles"]) < 3:
+                    h["filtered_titles"].append(title[:80])
+                continue
 
-                articles.append({
-                    "id": news_id,
-                    "source": name,
-                    "lang": feed_cfg["lang"],
-                    "trusted": feed_cfg["trusted"],
-                    "fast_track": feed_cfg["fast_track"],
-                    "title": title,
-                    "link": link,
-                    "summary": summary,
-                    "collected_at": datetime.utcnow().isoformat() + "Z",
-                    "status": "new",
-                    "published": False
-                })
-        except Exception as e:
-            h["err"] = f"{type(e).__name__}: {str(e)[:120]}"
-            print(f"[WARN] {name}: {e}")
+            news_id = _generate_id(title, link)
+            if news_id in seen or news_id in collected_ids:
+                continue
+            collected_ids.add(news_id)
+            h["new"] += 1
+
+            articles.append({
+                "id": news_id,
+                "source": name,
+                "lang": feed_cfg["lang"],
+                "trusted": feed_cfg["trusted"],
+                "fast_track": feed_cfg["fast_track"],
+                "title": title,
+                "link": link,
+                "summary": summary,
+                "published_at": published.isoformat() + "Z" if published else None,
+                "collected_at": datetime.utcnow().isoformat() + "Z",
+                "status": "new",
+                "published": False
+            })
+
     collect.health = health
     ok = sum(1 for h in health.values() if h["ok"])
     print(f"[INFO] Feeds OK: {ok}/{len(health)} — Collected {len(articles)} new articles")

@@ -1,5 +1,5 @@
 import requests
-from .config import BOT_TOKEN, ADMIN_ID, AUTO_TRUST_THRESHOLD
+from .config import BOT_TOKEN, ADMIN_ID, AUTO_TRUST_THRESHOLD, DISPLAY_TZ_OFFSET_MIN
 from . import storage, source_trust
 from .formatting import escape_html as _escape_html_fmt, clip, is_untranslated
 
@@ -224,6 +224,7 @@ def _handle_message(msg, state):
             "/clear - پاک‌کردن کل صف\n"
             "/sources - اعتبار پویای منابع\n"
             "/feeds - سلامت فیدهای خبری\n"
+            "/runs - آمار اجراهای اخیر (چند خبر پیدا شد)\n"
             "/stats - آمار"
         )
 
@@ -275,6 +276,9 @@ def _handle_message(msg, state):
     elif text == "/clear":
         _ask_clear(chat_id)
 
+    elif text == "/runs":
+        send_message(chat_id, runs_report(storage.load_run_log()))
+
     elif text == "/feeds":
         send_message(chat_id, feeds_report(storage.load_feed_health()))
 
@@ -323,6 +327,55 @@ def _now():
     from datetime import datetime
     return datetime.utcnow().isoformat() + "Z"
 
+def _parse_iso(iso):
+    from datetime import datetime
+    try:
+        return datetime.fromisoformat(str(iso).replace("Z", ""))
+    except Exception:
+        return None
+
+
+def _ago_text(iso):
+    """«۳ ساعت پیش» / «۱۲ دقیقه پیش» / «۲ روز پیش»"""
+    from datetime import datetime
+    t = _parse_iso(iso)
+    if not t:
+        return "؟"
+    mins = max(0, int((datetime.utcnow() - t).total_seconds() // 60))
+    if mins < 60:
+        return f"{mins} دقیقه پیش"
+    if mins < 60 * 48:
+        return f"{mins // 60} ساعت پیش"
+    return f"{mins // 1440} روز پیش"
+
+
+def runs_report(log, n=12):
+    """گزارش «قیف» اجراهای اخیر: چند خبر پیدا شد و کجا کم شد"""
+    from datetime import timedelta
+    if not log:
+        return "📈 هنوز اجرایی ثبت نشده (بعد از اولین اجرای pipeline پر می‌شود)."
+    lines = ["📈 <b>اجراهای اخیر</b> (ساعت محلی)\n"]
+    for r in log[-n:][::-1]:
+        t = _parse_iso(r.get("t"))
+        hhmm = (t + timedelta(minutes=DISPLAY_TZ_OFFSET_MIN)).strftime("%m-%d %H:%M") if t else "؟"
+        tag = "🖐" if r.get("forced") else "⏱"
+        if r.get("paused") and not r.get("collected"):
+            lines.append(f"{tag} {hhmm} — ⏸ ربات متوقف است")
+        elif r.get("skipped"):
+            lines.append(f"{tag} {hhmm} — جمع‌آوری نشد (فاصله از اجرای قبلی کم بود) | منتشر: {r.get('published', 0)}")
+        elif r.get("collected"):
+            lines.append(
+                f"{tag} {hhmm} — فید {r.get('feeds_ok', '?')}/{r.get('feeds_total', '?')} | "
+                f"جدید {r.get('fetched', 0)} → تحلیل {r.get('analyzed', 0)} "
+                f"(🤖{r.get('auto', 0)} 👀{r.get('pending', 0)} ❌{r.get('low_score', 0) + r.get('rejected_keyword', 0)}) | "
+                f"📤 منتشر {r.get('published', 0)} | صف: {r.get('queue_pending', 0)} تایید، {r.get('queue_approved', 0)} آماده"
+                + (f" | 🔤 {r['untranslated']} ترجمه‌نشده" if r.get("untranslated") else ""))
+        else:
+            lines.append(f"{tag} {hhmm} — جمع‌آوری انجام نشد | منتشر: {r.get('published', 0)}")
+    lines.append("\n🤖 خودکار | 👀 نیازمند تایید شما | ❌ ردشده (کم‌امتیاز/کلمه مشکوک)")
+    return "\n".join(lines)
+
+
 def feeds_report(health):
     """گزارش سلامت فیدها (آخرین جمع‌آوری)"""
     if not health:
@@ -333,8 +386,10 @@ def feeds_report(health):
     for n, h in sorted(bad):
         lines.append(f"❌ <b>{_escape_html(n)}</b> — {_escape_html(h.get('err') or '?')} (پیاپی: {h.get('fails', 0)})")
     for n, h in sorted(good):
+        age = f" | آخرین خبر فید: {_ago_text(h['newest'])}" if h.get("newest") else ""
         lines.append(f"✅ {_escape_html(n)}: {h.get('items', 0)} آیتم، {h.get('new', 0)} جدید"
-                     + (f"، {h.get('filtered')} ردشده با فیلتر" if h.get("filtered") else ""))
+                     + (f"، {h.get('filtered')} ردشده با فیلتر" if h.get("filtered") else "")
+                     + (f"، {h.get('old')} کهنه" if h.get("old") else "") + age)
         for t in (h.get("filtered_titles") or [])[:3]:
             lines.append(f"      🚫 {_escape_html(t)}")
     checked = max((h.get("checked") or "" for h in health.values()), default="")

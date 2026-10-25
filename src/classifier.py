@@ -77,7 +77,7 @@ def is_english(text: str) -> bool:
 
 _RUMOR_RE = re.compile(
     r"\b(rumou?rs?|reportedly|allegedly|leak(?:s|ed)?|according to (?:people|sources)|"
-    r"sources say|said to|claims?)\b|شایعه|ادعا|گزارش‌ها حاکی|به گفتهٔ منابع",
+    r"sources say|said to)\b|شایعه|گزارش‌ها حاکی|به گفتهٔ منابع",
     re.IGNORECASE,
 )
 

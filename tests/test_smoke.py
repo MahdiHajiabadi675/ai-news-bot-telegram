@@ -397,6 +397,43 @@ check("اخبار تکراری (seen) دوباره جمع نمی‌شوند",
       len(collectors.collect({a["id"] for a in got})) == 0)
 collectors.FEEDS = real_feeds
 
+# ── مرتب‌سازی بر اساس تاریخ، سقف سن، فیدهای بزرگ ──
+import time as _time
+_now = datetime.datetime.utcnow()
+
+
+def _ts(hours_ago):
+    return _time.gmtime((_now - datetime.timedelta(hours=hours_ago)).timestamp())
+
+
+# فید بزرگِ «قدیمی‌ترین اول» (مثل آرشیو ۱۳۰۰ آیتمی OpenAI): ۹۰۰ آیتم کهنه + ۳ آیتم تازه در انتها
+big = [{"title": f"Old OpenAI post {i}", "link": f"http://o/{i}", "summary": "s",
+        "published_parsed": _ts(24 * 400 + i)} for i in range(900)]
+big += [{"title": f"Fresh OpenAI post {i}", "link": f"http://n/{i}", "summary": "s",
+         "published_parsed": _ts(i + 1)} for i in range(3)]
+ordered = collectors._newest_first(big)
+check("فید «قدیمی‌ترین اول»: جدیدترین‌ها به ابتدا می‌آیند",
+      [e["title"] for e in ordered[:3]] == ["Fresh OpenAI post 0", "Fresh OpenAI post 1", "Fresh OpenAI post 2"])
+
+collectors.FEEDS = [{"name": "Big", "url": "ub", "lang": "en", "trusted": True, "fast_track": False},
+                    {"name": "NoDate", "url": "ud", "lang": "en", "trusted": True, "fast_track": False}]
+_feeds_data = {b"ub": big,
+               b"ud": [{"title": "A", "link": "http://d/1", "summary": "s"},
+                       {"title": "B", "link": "http://d/2", "summary": "s"}]}
+collectors.feedparser.parse = lambda content: _Parsed(_feeds_data[content])
+got = collectors.collect(set())
+titles = {a["title"] for a in got if a["source"] == "Big"}
+check("از فید ۹۰۳ آیتمی فقط خبرهای تازه جمع می‌شود", titles == {f"Fresh OpenAI post {i}" for i in range(3)})
+check("خبرهای کهنه شمرده می‌شوند (نه جمع)", collectors.collect.health["Big"]["old"] > 0)
+check("سن جدیدترین خبر فید ثبت می‌شود", collectors.collect.health["Big"]["newest"] is not None)
+check("فید بدون تاریخ هم کار می‌کند", collectors.collect.health["NoDate"]["new"] == 2)
+check("تاریخ خبر روی آیتم می‌ماند", any(a["published_at"] for a in got if a["source"] == "Big"))
+
+stats_t = {"Gone": {"pos": 0.0, "neg": 0.0, "prior": 3}, "GoneButJudged": {"pos": 2.0, "neg": 0.0, "prior": 3}}
+source_trust.sync_priors(stats_t, ["OpenAI Blog"])
+check("منبع حذف‌شده بدون سابقه از stats پاک می‌شود", "Gone" not in stats_t)
+check("منبع حذف‌شده با سابقهٔ تصمیم نگه داشته می‌شود", "GoneButJudged" in stats_t)
+
 _store.clear()
 bad = {"Good": {"ok": True, "items": 2, "new": 2, "filtered": 0, "err": None},
        "Broken": {"ok": False, "items": 0, "new": 0, "filtered": 0, "err": "boom"}}
@@ -409,6 +446,19 @@ check("بعد از سالم‌شدن شمارنده صفر می‌شود", _stor
 rep = bot.feeds_report(storage.load_feed_health())
 check("گزارش /feeds", "سلامت فیدها" in rep and "Broken" in rep)
 check("گزارش خالی", "هنوز" in bot.feeds_report({}))
+
+print("Run log:")
+log = [
+    {"t": "2026-10-25T06:17:00Z", "forced": False, "collected": True, "feeds_ok": 22, "feeds_total": 26,
+     "fetched": 6, "processed": 6, "analyzed": 5, "auto": 3, "pending": 2, "low_score": 0,
+     "rejected_keyword": 1, "published": 3, "queue_pending": 2, "queue_approved": 0},
+    {"t": "2026-10-25T05:17:00Z", "forced": False, "skipped": True, "collected": False, "published": 0},
+]
+rr = bot.runs_report(log)
+check("/runs: ساعت محلی (+۳:۳۰)", "10-25 09:47" in rr)
+check("/runs: قیف", "جدید 6 → تحلیل 5" in rr and "🤖3" in rr and "👀2" in rr and "فید 22/26" in rr)
+check("/runs: اجرای بدون جمع‌آوری مشخص است", "جمع‌آوری نشد" in rr)
+check("/runs خالی", "هنوز" in bot.runs_report([]))
 
 
 # ───────────── امتیازدهی و dedup ─────────────

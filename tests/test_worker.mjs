@@ -116,6 +116,24 @@ set('feed_health', {});
 await send(msg('/feeds'));
 check('/feeds خالی', last('sendMessage').body.text.includes('هنوز'));
 
+console.log('Run log:');
+set('run_log', [
+  { t: '2026-10-25T06:17:00Z', collected: true, feeds_ok: 22, feeds_total: 26, fetched: 6, analyzed: 5,
+    auto: 3, pending: 2, low_score: 0, rejected_keyword: 1, published: 3, queue_pending: 2, queue_approved: 0 },
+  { t: '2026-10-25T05:17:00Z', skipped: true, collected: false, published: 0 },
+]);
+await send(msg('/runs'));
+const rn = last('sendMessage').body.text;
+check('/runs: ساعت محلی (+۳:۳۰)', rn.includes('10-25 09:47'));
+check('/runs: قیف', rn.includes('جدید 6 → تحلیل 5') && rn.includes('🤖3') && rn.includes('فید 22/26'));
+check('/runs: اجرای بدون جمع‌آوری', rn.includes('جمع‌آوری نشد'));
+set('run_log', []);
+await send(msg('/runs'));
+check('/runs خالی', last('sendMessage').body.text.includes('هنوز'));
+set('feed_health', { Good: { ok: true, items: 5, new: 0, newest: new Date(Date.now() - 3 * 3600000).toISOString(), checked: '2026-10-25T10:00:00Z' } });
+await send(msg('/feeds'));
+check('/feeds: سن جدیدترین خبر فید', last('sendMessage').body.text.includes('آخرین خبر فید: 3 ساعت پیش'));
+
 console.log('Review message:');
 set('pending', [item('v1', { translated: false, source_trust: 3.4, corroborated_by: 2, score: 55 })]);
 await send(msg('/pending'));
