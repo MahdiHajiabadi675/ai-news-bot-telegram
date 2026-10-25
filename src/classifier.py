@@ -85,7 +85,7 @@ _RUMOR_RE = re.compile(
 _CATEGORY_RULES = [
     ("benchmark", re.compile(r"\b(benchmarks?|leaderboard|sota|state-of-the-art|outperforms?)\b|بنچمارک|محک", re.I)),
     ("funding", re.compile(r"\b(raises?|funding|series [a-e]|valuation|acquires?|acquisition|invests?|ipo|billion)\b|سرمایه|جذب|خرید شرکت", re.I)),
-    ("policy", re.compile(r"\b(regulat\w*|lawsuit|sues?|court|copyright|senate|congress|ban(?:s|ned)?|eu ai act|legislation)\b|قانون|مقررات|دادگاه|ممنوع", re.I)),
+    ("policy", re.compile(r"\b(regulat\w*|lawsuit|sues?|court|copyright|senate|congress|ban(?:s|ned|ning)?|(?:eu\s+)?ai\s+act|legislation)\b|قانون|مقررات|دادگاه|ممنوع", re.I)),
     ("model_release", re.compile(
         r"\b(releas\w+|launch\w*|introduc\w+|unveil\w*|announc\w+|debut\w*|open-?sourc\w+)\b.*"
         r"\b(model|gpt|llama|gemini|claude|mistral|qwen|deepseek|sora|agent)\b|"

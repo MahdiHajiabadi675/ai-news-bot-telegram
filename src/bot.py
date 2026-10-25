@@ -450,6 +450,10 @@ def _send_review(item):
         text += f" — 🔗 تایید شده توسط {item['corroborated_by']} منبع دیگر"
     text += "\n"
     text += f"{score_emoji} اسکور: {score}/100 ({score_label})\n"
+    if "hot" in item:
+        why = "، ".join(item.get("hot_reasons") or [])
+        text += f"🔥 جذابیت: {item['hot']}/100 (حد انتشار خودکار: {item.get('hot_threshold', 0):.0f})"
+        text += (f" — {_escape_html(why)}" if why else "") + "\n"
     text += f"🏷️ {' '.join('#'+_escape_html(h) for h in item['hashtags'])}"
     text += f"\n🔗 {_escape_html(item['link'])}"
 
@@ -484,7 +488,12 @@ def notify_admin_new(item):
     text = f"🔔 خبر جدید (تایید خودکار — در صف انتشار):\n\n"
     text += f"<b>{_escape_html(item['title_fa'])}</b>\n"
     text += f"{_escape_html(item['summary_fa'])}\n\n"
-    text += f"📌 {_escape_html(item['importance'])} | {_escape_html(item['confidence'])}"
+    text += f"📌 {_escape_html(item['importance'])} | {_escape_html(item['confidence'])}\n"
+    via = {"official": "🏛 منبع رسمی", "hot": "🔥 خبر جذاب"}.get(item.get("auto_reason"), "")
+    if via:
+        why = "، ".join(item.get("hot_reasons") or [])
+        text += f"{via}: {_escape_html(item['source'])} — جذابیت {item.get('hot', 0)}/100"
+        text += (f" ({_escape_html(why)})" if why else "")
     send_message(ADMIN_ID, text)
 
 def _escape_html(value):

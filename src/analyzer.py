@@ -11,6 +11,7 @@ Analyzer — تحلیل محلی اخبار (بدون Gemini)
 from . import source_trust
 from .classifier import classify, is_english
 from . import translator
+from .newsworthiness import newsworthiness
 
 _CATEGORY_TAG = {
     "model_release": "مدل_جدید",
@@ -44,6 +45,9 @@ def analyze_articles(articles: list, stats: dict) -> list:
         if cls["category"] in _CATEGORY_TAG:
             tags.append(_CATEGORY_TAG[cls["category"]])
 
+        item_for_hot = {**a, **cls}
+        hot = newsworthiness(item_for_hot, trust)
+
         analyzed.append({
             "id": key,
             "source": a["source"],
@@ -55,6 +59,10 @@ def analyze_articles(articles: list, stats: dict) -> list:
             "source_trust": trust,
             "source_trust_base": base_trust,
             "source_prior": source_trust.prior_of(a["source"]),
+            "official": bool(a.get("official", False)),
+            "hot": hot["score"],
+            "hot_threshold": hot["threshold"],
+            "hot_reasons": hot["reasons"],
             **cls,
             "hashtags": tags,
             "admin_question": _QUESTIONS.get(cls["confidence"], ""),

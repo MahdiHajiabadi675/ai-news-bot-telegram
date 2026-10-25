@@ -393,6 +393,11 @@ async function sendReview(BASE, ADMIN_ID, item) {
   text += `${trustEmoji} منبع: ${escapeHtml(item.source)} (${trust.toFixed(1)}/5)`;
   if (item.corroborated_by) text += ` — 🔗 تایید شده توسط ${item.corroborated_by} منبع دیگر`;
   text += `\n${scoreEmoji} اسکور: ${score}/100 (${scoreLabel})\n`;
+  if (item.hot !== undefined) {
+    const why = (item.hot_reasons || []).join('، ');
+    text += `🔥 جذابیت: ${item.hot}/100 (حد انتشار خودکار: ${Math.round(item.hot_threshold || 0)})`;
+    text += (why ? ` — ${escapeHtml(why)}` : '') + '\n';
+  }
   text += `🏷️ ${(item.hashtags || []).map(h => '#' + escapeHtml(h)).join(' ')}\n`;
   text += `🔗 ${escapeHtml(item.link)}`;
   if (item.admin_question) {

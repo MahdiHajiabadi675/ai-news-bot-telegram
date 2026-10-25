@@ -577,4 +577,55 @@ publisher.publish_approved(pstate_run)
 check("از ۲۰ خبر فقط ۱۵ تا در یک راند منتشر می‌شود", len(sent_run) == 15)
 check("بقیه در صف approved می‌مانند", len(_store["approved"]) == 5)
 
+# ───────────── جذابی خبر و انتشار خودکار (رسمی / جذاب) ─────────────
+print("Newsworthiness:")
+from src.newsworthiness import newsworthiness, hot_threshold
+from src.classifier import classify as _cls
+from src.analyzer import analyze_articles as _analyze
+
+
+def _hot(title, trust=3.0, others=0, summary=""):
+    it = {"title": title, "summary": summary}
+    it.update(_cls(it, trust, others))
+    it["corroborated_by"] = others
+    return newsworthiness(it, trust)
+
+
+check("آستانه با اعتبار بالاتر پایین‌تر می‌شود", hot_threshold(5) < hot_threshold(3) < hot_threshold(1))
+_r = _hot("OpenAI releases GPT-6 with 1M-token context", 4.0)
+check("انتشار مدل بزرگ جذاب است", _r["score"] >= _r["threshold"])
+_r = _hot("Anthropic raises $2 billion at $60 billion valuation")
+check("سرمایهٔ میلیاردی جذاب است", _r["score"] >= _r["threshold"])
+_r = _hot("The best AI chatbots of 2026, ranked", 4.0)
+check("لیست «بهترین‌ها» جذاب نیست", _r["score"] < _r["threshold"])
+_r = _hot("How to use ChatGPT to write emails", 4.0)
+check("آموزش جذاب نیست", _r["score"] < _r["threshold"])
+_r = _hot("Startup raises $20M for AI agents")
+check("سرمایهٔ کوچک استارتاپ ناشناس خودکار نمی‌شود", _r["score"] < _r["threshold"])
+_r = _hot("OpenAI model update", 3.0, others=2)
+check("تایید چندمنبعی جذابیت را بالا می‌برد", _r["score"] >= _r["threshold"])
+_r = _hot("معرفی مدل جدید دیپ‌سیک با رکورد تازه در بنچمارک")
+check("خبر فارسی مهم هم جذاب است", _r["score"] >= _r["threshold"])
+_r = _hot("DeepSeek reportedly working on new model")
+check("شایعه جذاب حساب نمی‌شود", _r["score"] < _r["threshold"])
+check("بازهٔ امتیاز ۰..۱۰۰", all(0 <= _hot(t)["score"] <= 100 for t in ["x", "OpenAI launches GPT-9 $5 trillion"]))
+
+_an = _analyze([{"id": "a1", "source": "OpenAI Blog", "title": "OpenAI releases GPT-6", "link": "http://x",
+                 "summary": "", "official": True, "lang": "en"}], {})
+check("analyzer فیلدهای official/hot را می‌سازد",
+      _an[0]["official"] is True and "hot" in _an[0] and "hot_threshold" in _an[0] and isinstance(_an[0]["hot_reasons"], list))
+import importlib, src.collectors as _col
+_FEEDS = importlib.reload(_col).FEEDS  # تست‌های قبلی FEEDS را موقتاً عوض کرده‌اند
+_off = {f["name"] for f in _FEEDS if f.get("official")}
+check("منابع رسمی: OpenAI/HuggingFace/Anthropic/DeepMind", {"OpenAI Blog", "HuggingFace", "Anthropic", "DeepMind"} <= _off)
+check("رسانه‌ها رسمی نیستند", not ({"TechCrunch AI", "MIT Tech Review", "دیجیاتو"} & _off))
+
+_sent_rv = []
+bot.send_message = lambda chat_id, text, **kw: (_sent_rv.append(text) or {"ok": True})
+bot.ADMIN_ID = bot.ADMIN_ID or "1"
+bot._send_review({"id": "h1", "title_fa": "t", "summary_fa": "s", "importance": "medium", "confidence": "likely",
+                  "source": "x", "link": "http://x", "hashtags": [], "hot": 42, "hot_threshold": 60.0,
+                  "hot_reasons": ["بازیگر بزرگ"]})
+check("پیام بازبینی جذابیت را نشان می‌دهد", any("جذابیت: 42/100" in t for t in _sent_rv))
+
 print(f"\n{_passed} تست با موفقیت گذشت ✅")

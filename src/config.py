@@ -79,6 +79,13 @@ AUTO_TRUST_THRESHOLD = 4.0
 CORROBORATION_BONUS = 0.5
 CORROBORATION_MAX_BONUS = 1.0
 
+# ───────── انتشار خودکار خبرهای «جذاب» از منابع غیررسمی (src/newsworthiness.py) ─────────
+# آستانهٔ جذابیت برای منبعی با اعتبار ۳؛ هر یک واحد اعتبار بیشتر، HOT_TRUST_STEP امتیاز از آستانه کم می‌کند
+HOT_BASE_THRESHOLD = _int_env("HOT_BASE_THRESHOLD", 60)
+HOT_TRUST_STEP = _int_env("HOT_TRUST_STEP", 8)
+# منبع رسمی هم اگر جذابیتش زیر این حد باشد (آموزش/لیست/نقد) خودکار منتشر نمی‌شود
+HOT_OFFICIAL_MIN = _int_env("HOT_OFFICIAL_MIN", 20)
+
 # Auto-publish settings
 AUTO_PUBLISH_ENABLED = os.getenv("AUTO_PUBLISH_ENABLED", "true").lower() == "true"
 

@@ -10,6 +10,7 @@ from .classifier import ai_relevance
 from .ai_terms import PASS_SCORE
 from .config import MAX_PER_FEED, MAX_ITEM_AGE_HOURS
 
+# official=True: منبع رسمی آزمایشگاه/شرکت (انتشار خودکار؛ src/newsworthiness.py)
 # فیدهای trusted=True اختصاصی AI هستند و فیلتر نمی‌شوند (لازم نیست «AI» در متن بیاید).
 # فیدهای trusted=False عمومی‌اند و با امتیاز ارتباط (src/ai_terms.py) فیلتر می‌شوند.
 # وضعیت هر فید در ربات: /feeds — فیدی که خراب شود همان‌جا و با پیام هشدار دیده می‌شود.
@@ -17,14 +18,14 @@ _COMMUNITY = "https://raw.githubusercontent.com/Olshansk/rss-feeds/main/feeds"
 
 FEEDS = [
     # === سایت رسمی شرکت‌ها و آزمایشگاه‌های AI ===
-    {"name": "OpenAI Blog", "url": "https://openai.com/news/rss.xml", "lang": "en", "trusted": True, "fast_track": False},
-    {"name": "Google AI", "url": "https://blog.google/innovation-and-ai/technology/ai/rss/", "lang": "en", "trusted": True, "fast_track": False},
-    {"name": "Google Research", "url": "https://research.google/blog/rss/", "lang": "en", "trusted": True, "fast_track": False},
-    {"name": "DeepMind", "url": "https://deepmind.google/blog/rss.xml", "lang": "en", "trusted": True, "fast_track": False},
-    {"name": "HuggingFace", "url": "https://huggingface.co/blog/feed.xml", "lang": "en", "trusted": True, "fast_track": False},
+    {"name": "OpenAI Blog", "url": "https://openai.com/news/rss.xml", "lang": "en", "trusted": True, "official": True, "fast_track": False},
+    {"name": "Google AI", "url": "https://blog.google/innovation-and-ai/technology/ai/rss/", "lang": "en", "trusted": True, "official": True, "fast_track": False},
+    {"name": "Google Research", "url": "https://research.google/blog/rss/", "lang": "en", "trusted": True, "official": True, "fast_track": False},
+    {"name": "DeepMind", "url": "https://deepmind.google/blog/rss.xml", "lang": "en", "trusted": True, "official": True, "fast_track": False},
+    {"name": "HuggingFace", "url": "https://huggingface.co/blog/feed.xml", "lang": "en", "trusted": True, "official": True, "fast_track": False},
     # Anthropic و Meta فید رسمی ندارند؛ این‌ها فیدهای جامعه‌اند که هر ساعت از سایت رسمی ساخته می‌شوند
-    {"name": "Anthropic", "url": f"{_COMMUNITY}/feed_anthropic_news.xml", "lang": "en", "trusted": True, "fast_track": False},
-    {"name": "Meta AI", "url": f"{_COMMUNITY}/feed_meta_ai.xml", "lang": "en", "trusted": True, "fast_track": False},
+    {"name": "Anthropic", "url": f"{_COMMUNITY}/feed_anthropic_news.xml", "lang": "en", "trusted": True, "official": True, "fast_track": False},
+    {"name": "Meta AI", "url": f"{_COMMUNITY}/feed_meta_ai.xml", "lang": "en", "trusted": True, "official": True, "fast_track": False},
     # بلاگ‌های عمومی شرکت‌ها (همه‌ی موضوع‌ها، پس فیلتر AI دارند)
     {"name": "Microsoft Research", "url": "https://www.microsoft.com/en-us/research/feed/", "lang": "en", "trusted": False, "fast_track": False},
     {"name": "NVIDIA Blog", "url": "https://blogs.nvidia.com/feed/", "lang": "en", "trusted": False, "fast_track": False},
@@ -218,6 +219,7 @@ def collect(seen: set) -> list:
                 "source": name,
                 "lang": feed_cfg["lang"],
                 "trusted": feed_cfg["trusted"],
+                "official": feed_cfg.get("official", False),
                 "fast_track": feed_cfg["fast_track"],
                 "title": title,
                 "link": link,

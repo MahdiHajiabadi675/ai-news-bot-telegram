@@ -15,7 +15,7 @@ from src import storage
 from src.storage import set_stage
 from src.config import (
     COLLECT_INTERVAL_MIN, FAST_TRACK_ENABLED,
-    AUTO_PUBLISH_ENABLED, AUTO_PUBLISH_THRESHOLD, AUTO_REJECT_THRESHOLD, AUTO_TRUST_THRESHOLD,
+    AUTO_PUBLISH_ENABLED, AUTO_PUBLISH_THRESHOLD, AUTO_REJECT_THRESHOLD, AUTO_TRUST_THRESHOLD, HOT_OFFICIAL_MIN,
     MAX_ARTICLES_PER_RUN, MAX_REVIEWS_PER_RUN,
     TRUST_SCORES, REJECT_KEYWORDS, CATEGORY_WEIGHTS, ADMIN_ID,
     SCORE_SOURCE_WEIGHT, SCORE_IMPORTANCE_WEIGHT, SCORE_CONFIDENCE_WEIGHT, SCORE_CATEGORY_WEIGHT
@@ -207,13 +207,17 @@ def run(force=False):
                         translated_ok += 1
 
                     source_trust_now = item["source_trust"]
-                    is_trusted = source_trust_now >= AUTO_TRUST_THRESHOLD
-                    is_confirmed = item["confidence"] == "confirmed"
-                    is_high_score = item["score"] >= AUTO_PUBLISH_THRESHOLD
+                    not_rumor = item["confidence"] != "rumor"
 
                     # انتشار خودکار: هم از config و هم از کلید /auto در ربات پیروی می‌کنه
                     auto_enabled = AUTO_PUBLISH_ENABLED and state.get("auto_publish_enabled", True)
-                    should_auto = auto_enabled and is_trusted and is_confirmed and is_high_score
+                    # ۱) منبع رسمی (آزمایشگاه‌ها) با اعتبار پویای کافی، مگر قالب غیرخبری
+                    by_official = (item.get("official") and source_trust_now >= AUTO_TRUST_THRESHOLD
+                                   and item["hot"] >= HOT_OFFICIAL_MIN)
+                    # ۲) رسانه/منبع عمومی: فقط اگر خود خبر «جذاب» باشد (src/newsworthiness.py)
+                    by_hot = (not item.get("official")) and item["hot"] >= item["hot_threshold"]
+                    should_auto = auto_enabled and not_rumor and (by_official or by_hot)
+                    item["auto_reason"] = "official" if by_official else ("hot" if by_hot else "")
 
                     if should_auto:
                         rl["auto"] += 1
@@ -223,7 +227,7 @@ def run(force=False):
                         if notices_sent < MAX_REVIEWS_PER_RUN:
                             notify_admin_new(item)
                             notices_sent += 1
-                        print(f"[AUTO] Approved: {item['title_fa'][:50]} (score: {item['score']}, trust: {source_trust_now})")
+                        print(f"[AUTO] Approved: {item['title_fa'][:50]} (score: {item['score']}, trust: {source_trust_now}, via: {item['auto_reason']}, hot: {item['hot']})")
                     else:
                         rl["pending"] += 1
                         item["status"] = "pending"
@@ -232,7 +236,7 @@ def run(force=False):
                         if reviews_sent < MAX_REVIEWS_PER_RUN:
                             _send_review(item)
                             reviews_sent += 1
-                        print(f"[PENDING] {item['title_fa'][:50]} (score: {item['score']}, trust: {source_trust_now})")
+                        print(f"[PENDING] {item['title_fa'][:50]} (score: {item['score']}, trust: {source_trust_now}, hot: {item['hot']}/{item['hot_threshold']:.0f})")
 
                 rl["untranslated"] = translated_fail
                 if translated_fail:
