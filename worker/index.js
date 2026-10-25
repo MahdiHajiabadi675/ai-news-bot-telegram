@@ -601,6 +601,47 @@ function formatChannelMessage(item, env) {
   return text.length > 4000 ? text.slice(0, 4000) : text;
 }
 
+// ───────── آینهٔ بله: فقط ارسال؛ شکست = حذف (بدون صف و بدون تلاش مجدد) ─────────
+function formatBaleMessage(item) {
+  const untranslated = item.translated === false;
+  let emoji = item.admin_action === 'featured' ? '⭐️' : item.importance === 'high' ? '🔥' : '🤖';
+  if (item.category === 'fast_track') emoji = '📡';
+  const lines = [`${emoji} ${(item.title_fa || item.title || '').trim()}`, ''];
+  const summary = clip(item.summary_fa, 700);
+  if (summary) lines.push(summary, '');
+  if (item.lang && item.lang !== 'fa' && !untranslated && item.title) lines.push(`🌐 ${clip(item.title, 150)}`, '');
+  lines.push(`📰 منبع: ${item.source || ''}`);
+  if (item.link) lines.push(`🔗 ${item.link}`);
+  const tags = (item.hashtags || []).map(h => '#' + h).join(' ');
+  if (tags) lines.push(tags);
+  if (untranslated) lines.push('', '🔤 ترجمه نشده — متن اصلی');
+  if (item.confidence === 'rumor') lines.push('', '⚠️ این خبر تایید رسمی نشده است');
+  return lines.join('\n').slice(0, 4000);
+}
+
+async function sendBale(env, item) {
+  const token = (env.BALE_BOT_TOKEN || '').trim();
+  const chat = (env.BALE_CHANNEL_ID || '').trim();
+  if (!token || !chat) return false;
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 8000);
+    const res = await fetch(`https://tapi.bale.ai/bot${token}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chat_id: chat, text: formatBaleMessage(item) }),
+      signal: ctrl.signal,
+    });
+    clearTimeout(timer);
+    const data = await res.json().catch(() => ({}));
+    if (!data.ok) console.log('[bale] rejected');
+    return !!data.ok;
+  } catch (e) {
+    console.log('[bale] error');
+    return false;
+  }
+}
+
 async function publishItem(env, BASE, CHANNEL_ID, ADMIN_ID, item) {
   const state = await getJSON(env, 'state', {});
   migrateState(state);
@@ -643,6 +684,8 @@ async function publishItem(env, BASE, CHANNEL_ID, ADMIN_ID, item) {
     const approvedList = await getJSON(env, 'approved', []);
     await saveJSON(env, 'approved', approvedList.filter(i => itemKey(i) !== key));
     console.log('[publishItem] Published:', item.title_fa?.substring(0, 50));
+    // آخرین کار: همهٔ ذخیره‌ها انجام شده؛ شکست بله = حذف، بدون صف و بدون اثر بر تلگرام
+    try { await sendBale(env, item); } catch (e) { /* نادیده */ }
   } else {
     console.log('[publishItem] Failed to publish');
   }

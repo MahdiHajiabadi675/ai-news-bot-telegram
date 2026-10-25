@@ -628,4 +628,58 @@ bot._send_review({"id": "h1", "title_fa": "t", "summary_fa": "s", "importance": 
                   "hot_reasons": ["بازیگر بزرگ"]})
 check("پیام بازبینی جذابیت را نشان می‌دهد", any("جذابیت: 42/100" in t for t in _sent_rv))
 
+# ───────────── آینهٔ بله ─────────────
+print("Bale mirror:")
+import importlib as _il
+from src import bale as _bale
+_il.reload(_bale)
+_posts = []
+
+
+class _R:
+    def __init__(self, ok): self._ok = ok; self.text = "x"
+    def json(self): return {"ok": self._ok}
+
+
+_mode = {"ok": True, "raise": False}
+
+
+def _fake_post(url, json=None, timeout=None):
+    _posts.append((url, json))
+    if _mode["raise"]:
+        raise RuntimeError("blocked")
+    return _R(_mode["ok"])
+
+
+_bale.requests.post = _fake_post
+_bitem = {"title_fa": "عنوان", "summary_fa": "خلاصه", "title": "Orig", "lang": "en", "source": "OpenAI Blog",
+          "link": "http://x/1", "hashtags": ["هوش_مصنوعی"], "confidence": "confirmed"}
+
+for k in ("BALE_BOT_TOKEN", "BALE_CHANNEL_ID"):
+    os.environ.pop(k, None)
+check("بدون توکن: خاموش و بدون درخواست", _bale.mirror(_bitem) is False and not _posts)
+os.environ["BALE_BOT_TOKEN"] = "tok"; os.environ["BALE_CHANNEL_ID"] = "@bc"
+_bale.reset()
+check("با توکن: خبر به بله می‌رود", _bale.mirror(_bitem) is True and "tapi.bale.ai/bottok/sendMessage" in _posts[0][0])
+check("متن ساده بدون parse_mode/HTML", "parse_mode" not in _posts[0][1] and "<" not in _posts[0][1]["text"]
+      and "http://x/1" in _posts[0][1]["text"] and "عنوان" in _posts[0][1]["text"])
+check("حداکثر طول پیام", len(_bale.format_bale_message({**_bitem, "summary_fa": "ا" * 9000})) <= 4000)
+_mode["raise"] = True; _posts.clear(); _bale.reset()
+check("خطای شبکه: False و بدون استثنا", _bale.mirror(_bitem) is False)
+_bale.mirror(_bitem); _bale.mirror(_bitem); _bale.mirror(_bitem)
+check("بعد از ۲ خطای پشت‌سرهم بقیه رد می‌شوند", len(_posts) == 2)
+_bale.reset(); _mode["raise"] = False
+
+_store["approved"] = [dict(_bitem, id="m1"), dict(_bitem, id="m2")]
+_store["published"] = []
+_posts.clear(); _mode["ok"] = False
+publisher.send_message = lambda chat_id, text, **kw: {"ok": True}
+_ps = {"daily_post_count": 0, "daily_post_date": datetime.datetime.utcnow().date().isoformat()}
+publisher.publish_approved(_ps)
+check("رد شدن بله: تلگرام منتشر شد و چیزی در صف نماند", len(_store["published"]) == 2 and _store["approved"] == [])
+check("شکست بله هیچ ردی در published/approved نمی‌گذارد", "bale" not in str(_store["published"]).lower())
+_mode["ok"] = True
+for k in ("BALE_BOT_TOKEN", "BALE_CHANNEL_ID"):
+    os.environ.pop(k, None)
+
 print(f"\n{_passed} تست با موفقیت گذشت ✅")

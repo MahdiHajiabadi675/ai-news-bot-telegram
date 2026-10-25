@@ -6,7 +6,7 @@ Fast-track processor — انتشار فوری بدون تایید
 """
 from datetime import datetime
 from .config import CHANNEL_ID, BOT_TOKEN, MAX_POSTS_PER_RUN
-from . import storage
+from . import storage, bale
 from .classifier import is_ai_related
 from .formatting import format_message
 from .analyzer import localize
@@ -19,6 +19,7 @@ def process_fast_track(articles: list) -> list:
         return []
 
     published = []
+    bale.reset()
     for article in articles:
         combined = article["title"] + " " + article.get("summary", "")
         if not is_ai_related(combined):
@@ -67,6 +68,10 @@ def process_fast_track(articles: list) -> list:
         for item in published:
             log.append({**item, "published": True})
         storage.save_published(log)
+
+    # آینهٔ بله بعد از ذخیرهٔ کامل؛ شکست = حذف، بدون صف
+    for item in published:
+        bale.mirror(dict(item))
 
     return published
 

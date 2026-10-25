@@ -3,6 +3,7 @@ from datetime import datetime, date
 from .config import BOT_TOKEN, CHANNEL_ID, MAX_POSTS_PER_RUN, MAX_POSTS_PER_DAY
 from . import storage
 from .bot import send_message
+from . import bale
 from .formatting import format_message  # noqa: F401  (re-export برای سازگاری)
 
 BASE = f"https://api.telegram.org/bot{BOT_TOKEN}"
@@ -51,6 +52,8 @@ def publish_approved(state, approved_items=None):
         importance_order.get(x.get("importance", "medium"), 2)
     ))
 
+    bale.reset()
+    to_mirror = []
     remaining = []
     for item in approved:
         key = _item_key(item)
@@ -78,6 +81,7 @@ def publish_approved(state, approved_items=None):
             item["status"] = "published"
             item["published_at"] = datetime.utcnow().isoformat() + "Z"
             published_log.append({**item, "published": True})
+            to_mirror.append(dict(item))
             if key:
                 published_keys.add(key)
             print(f"[INFO] Published: {str(item.get('title_fa', ''))[:50]}")
@@ -87,4 +91,8 @@ def publish_approved(state, approved_items=None):
 
     storage.save_approved(remaining)
     storage.save_published(published_log)
+
+    # آینهٔ بله فقط بعد از ذخیرهٔ کامل وضعیت تلگرام؛ شکست = حذف، بدون صف
+    for it in to_mirror:
+        bale.mirror(it)
     return state

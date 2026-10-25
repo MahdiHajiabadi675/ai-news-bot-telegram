@@ -166,4 +166,23 @@ check('پیام بلند از ۴۰۰۰ کاراکتر بیشتر نمی‌شود
 await send(msg('/status'));
 check('/status بدون خطا و بدون Gemini', !last('sendMessage').body.text.includes('Gemini'));
 
+console.log('Bale mirror:');
+env.BALE_BOT_TOKEN = 'bt'; env.BALE_CHANNEL_ID = '@bale_chan';
+set('pending', [item('b1')]); set('approved', []); set('published', []);
+await send(cb('approve:b1'));
+const bale = calls.find(c => c.method === 'sendMessage' && c.body.chat_id === '@bale_chan');
+check('تایید → همان خبر به بله هم می‌رود (متن ساده، بدون parse_mode)', !!bale && !('parse_mode' in bale.body) && !bale.body.text.includes('<b>'));
+delete env.BALE_BOT_TOKEN; delete env.BALE_CHANNEL_ID;
+set('pending', [item('b2')]); set('approved', []); set('published', []);
+await send(cb('approve:b2'));
+check('بدون توکن بله: هیچ درخواستی به بله نمی‌رود', !calls.some(c => c.body.chat_id === '@bale_chan'));
+const realFetch = globalThis.fetch;
+env.BALE_BOT_TOKEN = 'bt'; env.BALE_CHANNEL_ID = '@bale_chan';
+globalThis.fetch = async (url, opts) => { if (String(url).includes('bale.ai')) throw new Error('blocked'); return realFetch(url, opts); };
+set('pending', [item('b3')]); set('approved', []); set('published', []);
+await send(cb('approve:b3'));
+check('خطای بله انتشار تلگرام را مختل نمی‌کند و چیزی ذخیره نمی‌شود', !!calls.find(c => c.body.chat_id === '@chan')
+  && get('published').length === 1 && !JSON.stringify(get('published')).includes('bale'));
+globalThis.fetch = realFetch; delete env.BALE_BOT_TOKEN; delete env.BALE_CHANNEL_ID;
+
 console.log(`\n${passed} تست Worker با موفقیت گذشت ✅`);
