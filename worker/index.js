@@ -77,6 +77,14 @@ async function handleCallback(cb, env, BASE, CHANNEL_ID, ADMIN_ID) {
   const action = parts[0];
   const itemHash = parts[1] || '';
 
+  // دکمه‌های منوی /start → همان دستورها را اجرا می‌کنند
+  const menuCommands = ['status', 'pending', 'sources', 'feeds', 'runs', 'stats', 'clear', 'auto'];
+  if (action === 'cmd' && menuCommands.includes(itemHash)) {
+    await answerCallback(BASE, cbId);
+    await handleMessage({ text: '/' + itemHash, chat: { id: ADMIN_ID } }, env, BASE, CHANNEL_ID, ADMIN_ID);
+    return;
+  }
+
   // دکمه‌های انتشار خودکار (auto_on / auto_off / auto:on / auto:off / ...)
   // قبلاً هیچ handlerی نداشتند و کلیک روی آن‌ها بی‌صدا نادیده گرفته می‌شد.
   const autoChoice = parseAutoChoice(data);
@@ -202,23 +210,63 @@ async function handleMessage(msg, env, BASE, CHANNEL_ID, ADMIN_ID) {
   }
 
   if (text === '/start') {
+    const active = state.paused ? '⏸️ متوقف' : '▶️ فعال';
+    const autoOn = state.auto_publish_enabled !== false;
+    const stageLabel = {
+      idle: 'در انتظار اجرا',
+      collecting: 'در حال جمع‌آوری',
+      analyzing: 'در حال تحلیل',
+      publishing: 'در حال انتشار',
+      waiting: 'در انتظار تایید',
+      error: 'خطا'
+    }[state.current_stage || 'idle'] || 'در انتظار اجرا';
+
     await sendMessage(BASE, ADMIN_ID,
-      '🤖 <b>ربات مدیریت کانال اخبار AI</b>\n\n' +
-      'دستورات:\n' +
-      '/status - وضعیت سیستم\n' +
-      '/pending - اخبار در انتظار تایید\n' +
-      '/pause - توقف انتشار\n' +
-      '/resume - ادامه انتشار\n' +
-      '/auto on|off - انتشار خودکار\n' +
-      '/clear - پاک‌کردن کل صف\n' +
-      '/sources - اعتبار پویای منابع\n' +
-      '/feeds - سلامت فیدهای خبری\n' +
-      '/runs - آمار اجراهای اخیر (چند خبر پیدا شد)\n' +
-      '/stats - آمار کامل',
-      { inline_keyboard: [[
-        { text: '🤖 روشن', callback_data: 'auto_on' },
-        { text: '⏸ خاموش', callback_data: 'auto_off' }
-      ]] }
+      '🤖 <b>ربات مدیریت اخبار AI</b>\n' +
+      '<i>جمع‌آوری، ترجمه و انتشار هوشمند</i>\n\n' +
+      '━━━━━━━━━━━━━━\n' +
+      '📊 <b>وضعیت لحظه‌ای</b>\n' +
+      `├ وضعیت: ${active}\n` +
+      `├ انتشار خودکار: ${autoOn ? 'روشن ✅' : 'خاموش ❌'}\n` +
+      `├ مرحله: ${stageLabel}\n` +
+      `├ 📥 در انتظار تایید: <b>${faNum(pending.length)}</b>\n` +
+      `└ 📤 آماده انتشار: <b>${faNum(approved.length)}</b>\n\n` +
+      '━━━━━━━━━━━━━━\n' +
+      '⌨️ <b>دستورهای پرکاربرد</b>\n' +
+      '<code>/status</code> — وضعیت کامل\n' +
+      '<code>/pending</code> — بررسی صف تایید\n' +
+      '<code>/auto</code> — روشن/خاموش کردن انتشار خودکار\n' +
+      '<code>/pause</code> · <code>/resume</code> — توقف/ادامهٔ انتشار\n' +
+      '<code>/clear</code> — پاک‌کردن صف\n' +
+      '<code>/sources</code> — اعتبار منابع\n' +
+      '<code>/feeds</code> — سلامت فیدها\n' +
+      '<code>/runs</code> — آمار اجراها\n' +
+      '<code>/stats</code> — آمار کلی\n\n' +
+      '━━━━━━━━━━━━━━\n' +
+      '💡 <i>از دکمه‌های زیر هم می‌توانی استفاده کنی.</i>',
+      {
+        inline_keyboard: [
+          [
+            { text: '📊 وضعیت', callback_data: 'cmd:status' },
+            { text: '📋 صف تایید', callback_data: 'cmd:pending' }
+          ],
+          [
+            { text: '📡 منابع', callback_data: 'cmd:sources' },
+            { text: '🩺 فیدها', callback_data: 'cmd:feeds' }
+          ],
+          [
+            { text: '📈 آمار', callback_data: 'cmd:stats' },
+            { text: '🗞 اجراها', callback_data: 'cmd:runs' }
+          ],
+          [
+            { text: '🤖 روشن', callback_data: 'auto_on' },
+            { text: '⏸ خاموش', callback_data: 'auto_off' }
+          ],
+          [
+            { text: '🧹 پاک‌کردن صف', callback_data: 'cmd:clear' }
+          ]
+        ]
+      }
     );
   } else if (text === '/status') {
     const stage = state.current_stage || 'idle';
@@ -590,6 +638,11 @@ function sourcesReport(stats, env) {
 function clip(text, n) {
   const t = String(text ?? '').trim();
   return t.length <= n ? t : t.slice(0, n - 1).trimEnd() + '…';
+}
+
+/** اعداد فارسی برای نمایش زیباتر در پیام‌های مدیریتی */
+function faNum(value) {
+  return String(value ?? 0).replace(/\d/g, d => '۰۱۲۳۴۵۶۷۸۹'[Number(d)]);
 }
 
 function formatChannelMessage(item, env) {

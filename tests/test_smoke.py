@@ -692,5 +692,6 @@ check("auto: /auto@Bot on", bot._parse_auto_choice("/auto@MyBot on") is True)
 check("auto: auto:off", bot._parse_auto_choice("auto:off") is False)
 check("auto: auto_publish:on", bot._parse_auto_choice("auto_publish:on") is True)
 check("auto: bare /auto -> menu", bot._parse_auto_choice("/auto") is None)
+check("auto: اعداد فارسی منو", bot._fa_num(123) == "۱۲۳")
 
 print(f"\n{_passed} تست با موفقیت گذشت ✅")

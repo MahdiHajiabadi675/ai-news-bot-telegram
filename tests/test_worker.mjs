@@ -221,4 +221,31 @@ await send(cb('old_unknown_button'));
 check('دکمهٔ ناشناس: بازخورد به کاربر (نه سکوت)',
   last('answerCallbackQuery').body.text.length > 0);
 
+console.log('Start menu:');
+set('state', { paused: false, auto_publish_enabled: true, current_stage: 'idle' });
+set('pending', [item('s1')]);
+set('approved', [item('s2')]);
+await send(msg('/start'));
+const startMsg = last('sendMessage').body;
+check('/start: عنوان و وضعیت لحظه‌ای',
+  startMsg.text.includes('ربات مدیریت اخبار AI') &&
+  startMsg.text.includes('انتشار خودکار: روشن') &&
+  startMsg.text.includes('مرحله: در انتظار اجرا'));
+check('/start: شمارش فارسی صف',
+  startMsg.text.includes('در انتظار تایید: <b>۱</b>') &&
+  startMsg.text.includes('آماده انتشار: <b>۱</b>'));
+check('/start: طول پیام مجاز', startMsg.text.length < 4096);
+check('/start: همهٔ دکمه‌های منو',
+  ['cmd:status', 'cmd:pending', 'cmd:sources', 'cmd:feeds', 'cmd:stats', 'cmd:runs', 'cmd:clear', 'auto_on', 'auto_off']
+    .every(d => startMsg.reply_markup.inline_keyboard.flat().some(b => b.callback_data === d)));
+
+await send(cb('cmd:status'));
+check('دکمهٔ «وضعیت»: گزارش وضعیت باز می‌شود',
+  last('sendMessage').body.text.includes('وضعیت ربات'));
+
+await send(cb('cmd:clear'));
+check('دکمهٔ «پاک‌کردن صف»: صفحهٔ تایید باز می‌شود',
+  last('sendMessage').body.reply_markup.inline_keyboard.flat()
+    .some(b => b.callback_data === 'clrp'));
+
 console.log(`\n${passed} تست Worker با موفقیت گذشت ✅`);

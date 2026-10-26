@@ -102,6 +102,14 @@ def _do_clear(include_approved):
     return n_p, n_a
 
 
+_FA_DIGITS = str.maketrans("0123456789", "۰۱۲۳۴۵۶۷۸۹")
+
+
+def _fa_num(value):
+    """اعداد فارسی برای نمایش زیباتر در پیام‌های مدیریتی."""
+    return str(value).translate(_FA_DIGITS)
+
+
 def _parse_auto_choice(raw):
     """تفسیر «انتشار خودکار» از متن دستور یا callback_data.
 
@@ -144,6 +152,13 @@ def _handle_callback(cb, state):
     parts = data.split(":")
     action = parts[0]
     item_hash = parts[1] if len(parts) > 1 else ""
+
+    # دکمه‌های منوی /start → همان دستورها را اجرا می‌کنند
+    menu_commands = {"status", "pending", "sources", "feeds", "runs", "stats", "clear", "auto"}
+    if action == "cmd" and item_hash in menu_commands:
+        answer_callback(cb_id)
+        _handle_message({"text": "/" + item_hash, "chat": {"id": ADMIN_ID}}, state)
+        return
 
     pending = storage.load_pending()
     approved = storage.load_approved()
@@ -247,19 +262,63 @@ def _handle_message(msg, state):
         return
 
     if text == "/start":
-        send_message(chat_id,
-            "🤖 <b>ربات مدیریت کانال اخبار AI</b>\n\n"
-            "دستورات:\n"
-            "/status - وضعیت سیستم\n"
-            "/pending - اخبار در انتظار تایید\n"
-            "/pause - توقف انتشار\n"
-            "/resume - ادامه انتشار\n"
-            "/auto on|off - انتشار خودکار اخبار مهم\n"
-            "/clear - پاک‌کردن کل صف\n"
-            "/sources - اعتبار پویای منابع\n"
-            "/feeds - سلامت فیدهای خبری\n"
-            "/runs - آمار اجراهای اخیر (چند خبر پیدا شد)\n"
-            "/stats - آمار"
+        active = "⏸️ متوقف" if state.get("paused") else "▶️ فعال"
+        auto_on = state.get("auto_publish_enabled", True)
+        stage_label = {
+            "idle": "در انتظار اجرا",
+            "collecting": "در حال جمع‌آوری",
+            "analyzing": "در حال تحلیل",
+            "publishing": "در حال انتشار",
+            "waiting": "در انتظار تایید",
+            "error": "خطا",
+        }.get(state.get("current_stage", "idle"), "در انتظار اجرا")
+        send_message(
+            chat_id,
+            "🤖 <b>ربات مدیریت اخبار AI</b>\n"
+            "<i>جمع‌آوری، ترجمه و انتشار هوشمند</i>\n\n"
+            "━━━━━━━━━━━━━━\n"
+            "📊 <b>وضعیت لحظه‌ای</b>\n"
+            f"├ وضعیت: {active}\n"
+            f"├ انتشار خودکار: {'روشن ✅' if auto_on else 'خاموش ❌'}\n"
+            f"├ مرحله: {stage_label}\n"
+            f"├ 📥 در انتظار تایید: <b>{_fa_num(len(pending))}</b>\n"
+            f"└ 📤 آماده انتشار: <b>{_fa_num(len(storage.load_approved()))}</b>\n\n"
+            "━━━━━━━━━━━━━━\n"
+            "⌨️ <b>دستورهای پرکاربرد</b>\n"
+            "<code>/status</code> — وضعیت کامل\n"
+            "<code>/pending</code> — بررسی صف تایید\n"
+            "<code>/auto</code> — روشن/خاموش کردن انتشار خودکار\n"
+            "<code>/pause</code> · <code>/resume</code> — توقف/ادامهٔ انتشار\n"
+            "<code>/clear</code> — پاک‌کردن صف\n"
+            "<code>/sources</code> — اعتبار منابع\n"
+            "<code>/feeds</code> — سلامت فیدها\n"
+            "<code>/runs</code> — آمار اجراها\n"
+            "<code>/stats</code> — آمار کلی\n\n"
+            "━━━━━━━━━━━━━━\n"
+            "💡 <i>از دکمه‌های زیر هم می‌توانی استفاده کنی.</i>",
+            reply_markup={
+                "inline_keyboard": [
+                    [
+                        {"text": "📊 وضعیت", "callback_data": "cmd:status"},
+                        {"text": "📋 صف تایید", "callback_data": "cmd:pending"},
+                    ],
+                    [
+                        {"text": "📡 منابع", "callback_data": "cmd:sources"},
+                        {"text": "🩺 فیدها", "callback_data": "cmd:feeds"},
+                    ],
+                    [
+                        {"text": "📈 آمار", "callback_data": "cmd:stats"},
+                        {"text": "🗞 اجراها", "callback_data": "cmd:runs"},
+                    ],
+                    [
+                        {"text": "🤖 روشن", "callback_data": "auto_on"},
+                        {"text": "⏸ خاموش", "callback_data": "auto_off"},
+                    ],
+                    [
+                        {"text": "🧹 پاک‌کردن صف", "callback_data": "cmd:clear"},
+                    ],
+                ]
+            },
         )
 
     elif text == "/status":
