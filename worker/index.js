@@ -77,6 +77,14 @@ async function handleCallback(cb, env, BASE, CHANNEL_ID, ADMIN_ID) {
   const action = parts[0];
   const itemHash = parts[1] || '';
 
+  // دکمه‌های انتشار خودکار (auto_on / auto_off / auto:on / auto:off / ...)
+  // قبلاً هیچ handlerی نداشتند و کلیک روی آن‌ها بی‌صدا نادیده گرفته می‌شد.
+  const autoChoice = parseAutoChoice(data);
+  if (autoChoice !== null) {
+    await setAutoPublish(env, BASE, ADMIN_ID, cbId, autoChoice);
+    return;
+  }
+
   const pending = await getJSON(env, 'pending', []);
   const approved = await getJSON(env, 'approved', []);
 
@@ -149,6 +157,9 @@ async function handleCallback(cb, env, BASE, CHANNEL_ID, ADMIN_ID) {
   } else if (action === 'resume') {
     await updateState(env, { paused: false });
     await answerCallback(BASE, cbId, '▶️ فعال');
+  } else {
+    // دکمهٔ قدیمی/ناشناس: به‌جای سکوت، به کاربر بازخورد بده
+    await answerCallback(BASE, cbId, 'این دکمه دیگر فعال نیست', true);
   }
 }
 
@@ -203,7 +214,11 @@ async function handleMessage(msg, env, BASE, CHANNEL_ID, ADMIN_ID) {
       '/sources - اعتبار پویای منابع\n' +
       '/feeds - سلامت فیدهای خبری\n' +
       '/runs - آمار اجراهای اخیر (چند خبر پیدا شد)\n' +
-      '/stats - آمار کامل'
+      '/stats - آمار کامل',
+      { inline_keyboard: [[
+        { text: '🤖 روشن', callback_data: 'auto_on' },
+        { text: '⏸ خاموش', callback_data: 'auto_off' }
+      ]] }
     );
   } else if (text === '/status') {
     const stage = state.current_stage || 'idle';
@@ -263,7 +278,11 @@ async function handleMessage(msg, env, BASE, CHANNEL_ID, ADMIN_ID) {
       `🕐 آخرین جمع‌آوری: ${lastCollect}\n` +
       `🔎 خبرهای دیده‌شده: ${Array.isArray(seenList) ? seenList.length : 0}\n` +
       (state.last_error ? `⚠️ خطای آخر: ${state.last_error}\n` : '') +
-      (topSources ? `━━━━━━━━━━━━━━\n🏆 برترین منابع:\n${topSources}` : '')
+      (topSources ? `━━━━━━━━━━━━━━\n🏆 برترین منابع:\n${topSources}` : ''),
+      { inline_keyboard: [[
+        { text: '🤖 روشن', callback_data: 'auto_on' },
+        { text: '⏸ خاموش', callback_data: 'auto_off' }
+      ]] }
     );
   } else if (text === '/pending') {
     if (pending.length === 0) {
@@ -292,14 +311,20 @@ async function handleMessage(msg, env, BASE, CHANNEL_ID, ADMIN_ID) {
   } else if (text === '/resume') {
     await updateState(env, { paused: false });
     await sendMessage(BASE, ADMIN_ID, '▶️ انتشار ادامه یافت');
-  } else if (text.startsWith('/auto')) {
-    const parts = text.split(/\s+/);
-    if (parts.length > 1 && ['on', 'off'].includes(parts[1])) {
-      const val = parts[1] === 'on';
-      await updateState(env, { auto_publish_enabled: val, auto_publish_set_by_admin: true });
-      await sendMessage(BASE, ADMIN_ID, `انتشار خودکار: ${val ? 'روشن ✅' : 'خاموش ❌'}`);
+  } else if (/^\/auto/i.test(text) || /^auto[\s_-]*(on|off)$/i.test(text)) {
+    const val = parseAutoChoice(text);
+    if (val === null) {
+      // بدون آرگومان (مثلاً دکمهٔ منوی فرمان‌های تلگرام): وضعیت + دکمه‌های شیشه‌ای
+      const current = state.auto_publish_enabled !== false;
+      await sendMessage(BASE, ADMIN_ID,
+        `انتشار خودکار الان: ${current ? 'روشن ✅' : 'خاموش ❌'}\nیکی را انتخاب کن:`,
+        { inline_keyboard: [[
+          { text: '🤖 روشن', callback_data: 'auto_on' },
+          { text: '⏸ خاموش', callback_data: 'auto_off' }
+        ]] }
+      );
     } else {
-      await sendMessage(BASE, ADMIN_ID, 'استفاده: /auto on یا /auto off');
+      await setAutoPublish(env, BASE, ADMIN_ID, null, val);
     }
   } else if (text === '/stats') {
     const published = await getJSON(env, 'published', []);
@@ -841,6 +866,37 @@ async function updateState(env, updates) {
   migrateState(state);
   Object.assign(state, updates);
   await saveJSON(env, 'state', state);
+}
+
+/**
+ * تفسیر ورودی «انتشار خودکار» از متن دستور یا callback_data.
+ * true = روشن، false = خاموش، null = نامشخص (باید دکمه نشان داده شود).
+ * پشتیبانی: /auto on|off، /auto_on، /auto-off، /autoon، auto:on، auto_publish:off، ...
+ */
+function parseAutoChoice(raw) {
+  const s = String(raw || '').trim().toLowerCase();
+  if (!s) return null;
+  if (s.includes('روشن') && !s.includes('خاموش')) return true;
+  if (s.includes('خاموش') && !s.includes('روشن')) return false;
+  // حذف @نام_ربات و همهٔ جداکننده‌ها: /auto@MyBot on → autoon
+  const cleaned = s.replace(/@[a-z0-9_]+/g, '').replace(/[^a-z0-9]+/g, '');
+  if (['autoon', 'autopublishon', 'enableauto', 'autoenable', 'autotrue', 'auto1'].includes(cleaned)) {
+    return true;
+  }
+  if (['autooff', 'autopublishoff', 'disableauto', 'autodisable', 'autofalse', 'auto0'].includes(cleaned)) {
+    return false;
+  }
+  return null;
+}
+
+async function setAutoPublish(env, BASE, ADMIN_ID, cbId, enabled) {
+  await updateState(env, {
+    auto_publish_enabled: enabled,
+    auto_publish_set_by_admin: true
+  });
+  const label = enabled ? 'روشن ✅' : 'خاموش ❌';
+  if (cbId) await answerCallback(BASE, cbId, `انتشار خودکار: ${label}`);
+  await sendMessage(BASE, ADMIN_ID, `انتشار خودکار: ${label}`);
 }
 
 function migrateState(state) {

@@ -2,11 +2,11 @@
  * تست Worker (Node ≥ 20) — بدون شبکه و بدون Cloudflare
  * اجرا:  node tests/test_worker.mjs
  */
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import path from 'node:path';
 import assert from 'node:assert/strict';
 
-const workerPath = path.resolve(new URL('.', import.meta.url).pathname, '../worker/index.js');
+const workerPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../worker/index.js');
 const worker = (await import(pathToFileURL(workerPath).href)).default;
 
 const ADMIN = 42;
@@ -184,5 +184,41 @@ await send(cb('approve:b3'));
 check('خطای بله انتشار تلگرام را مختل نمی‌کند و چیزی ذخیره نمی‌شود', !!calls.find(c => c.body.chat_id === '@chan')
   && get('published').length === 1 && !JSON.stringify(get('published')).includes('bale'));
 globalThis.fetch = realFetch; delete env.BALE_BOT_TOKEN; delete env.BALE_CHANNEL_ID;
+
+console.log('Auto publish:');
+set('state', { paused: false, auto_publish_enabled: true });
+await send(msg('/status'));
+check('/status: دکمه‌های روشن/خاموش انتشار خودکار',
+  last('sendMessage').body.reply_markup.inline_keyboard.flat()
+    .some(b => b.callback_data === 'auto_on') &&
+  last('sendMessage').body.reply_markup.inline_keyboard.flat()
+    .some(b => b.callback_data === 'auto_off'));
+
+await send(cb('auto_off'));
+check('کلیک «خاموش»: state خاموش + ثبت توسط ادمین',
+  get('state').auto_publish_enabled === false && get('state').auto_publish_set_by_admin === true);
+check('کلیک «خاموش»: پاسخ callback',
+  last('answerCallbackQuery').body.text.includes('خاموش'));
+
+await send(cb('auto_on'));
+check('کلیک «روشن»: state روشن', get('state').auto_publish_enabled === true);
+
+for (const [cmd, expected] of [
+  ['/auto off', false], ['/auto_on', true], ['/auto-off', false],
+  ['/auto@MyBot on', true], ['/autoon', true], ['auto_off', false],
+]) {
+  await send(msg(cmd));
+  check(`دستور ${cmd}`, get('state').auto_publish_enabled === expected);
+}
+
+set('state', { paused: false, auto_publish_enabled: true });
+await send(msg('/auto'));
+check('دستور /auto بدون آرگومان: منوی انتخاب',
+  last('sendMessage').body.reply_markup.inline_keyboard.flat()
+    .some(b => b.callback_data === 'auto_off'));
+
+await send(cb('old_unknown_button'));
+check('دکمهٔ ناشناس: بازخورد به کاربر (نه سکوت)',
+  last('answerCallbackQuery').body.text.length > 0);
 
 console.log(`\n${passed} تست Worker با موفقیت گذشت ✅`);

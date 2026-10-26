@@ -682,4 +682,15 @@ _mode["ok"] = True
 for k in ("BALE_BOT_TOKEN", "BALE_CHANNEL_ID"):
     os.environ.pop(k, None)
 
+# ───────────── Auto-publish command variants ─────────────
+print("Auto command parsing:")
+check("auto: /auto on", bot._parse_auto_choice("/auto on") is True)
+check("auto: /auto off", bot._parse_auto_choice("/auto off") is False)
+check("auto: /auto_on", bot._parse_auto_choice("/auto_on") is True)
+check("auto: /auto-off", bot._parse_auto_choice("/auto-off") is False)
+check("auto: /auto@Bot on", bot._parse_auto_choice("/auto@MyBot on") is True)
+check("auto: auto:off", bot._parse_auto_choice("auto:off") is False)
+check("auto: auto_publish:on", bot._parse_auto_choice("auto_publish:on") is True)
+check("auto: bare /auto -> menu", bot._parse_auto_choice("/auto") is None)
+
 print(f"\n{_passed} تست با موفقیت گذشت ✅")

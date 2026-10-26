@@ -1,3 +1,4 @@
+import re
 import requests
 from .config import BOT_TOKEN, ADMIN_ID, AUTO_TRUST_THRESHOLD, DISPLAY_TZ_OFFSET_MIN
 from . import storage, source_trust
@@ -101,12 +102,45 @@ def _do_clear(include_approved):
     return n_p, n_a
 
 
+def _parse_auto_choice(raw):
+    """تفسیر «انتشار خودکار» از متن دستور یا callback_data.
+
+    true = روشن، false = خاموش، None = نامشخص.
+    پشتیبانی: /auto on|off، /auto_on، /auto-off، /autoon، auto:on، ...
+    """
+    s = str(raw or "").strip().lower()
+    if not s:
+        return None
+    if "روشن" in s and "خاموش" not in s:
+        return True
+    if "خاموش" in s and "روشن" not in s:
+        return False
+    cleaned = re.sub(r"@[a-z0-9_]+", "", s)
+    cleaned = re.sub(r"[^a-z0-9]+", "", cleaned)
+    if cleaned in {"autoon", "autopublishon", "enableauto", "autoenable", "autotrue", "auto1"}:
+        return True
+    if cleaned in {"autooff", "autopublishoff", "disableauto", "autodisable", "autofalse", "auto0"}:
+        return False
+    return None
+
+
 def _handle_callback(cb, state):
     data = cb.get("data", "")
     cb_id = cb.get("id", "")
     if ADMIN_ID and cb.get("from", {}).get("id") != ADMIN_ID:
         answer_callback(cb_id, "⛔️ دسترسی ندارید", show_alert=True)
         return
+
+    # دکمه‌های انتشار خودکار (auto_on / auto_off / auto:on / ...)
+    auto_choice = _parse_auto_choice(data)
+    if auto_choice is not None:
+        state["auto_publish_enabled"] = auto_choice
+        state["auto_publish_set_by_admin"] = True
+        label = "روشن ✅" if auto_choice else "خاموش ❌"
+        answer_callback(cb_id, f"انتشار خودکار: {label}")
+        send_message(ADMIN_ID, f"انتشار خودکار: {label}")
+        return
+
     parts = data.split(":")
     action = parts[0]
     item_hash = parts[1] if len(parts) > 1 else ""
@@ -293,15 +327,24 @@ def _handle_message(msg, state):
         state["paused"] = False
         send_message(chat_id, "▶️ انتشار ادامه یافت")
 
-    elif text.startswith("/auto"):
-        parts = text.split()
-        if len(parts) > 1 and parts[1] in ["on", "off"]:
-            state["auto_publish_enabled"] = parts[1] == "on"
-            state["auto_publish_set_by_admin"] = True
-            status = "روشن ✅" if state["auto_publish_enabled"] else "خاموش ❌"
-            send_message(chat_id, f"انتشار خودکار: {status}")
+    elif text.lower().startswith("/auto") or re.match(r"^auto[\s_-]*(on|off)$", text, re.I):
+        val = _parse_auto_choice(text)
+        if val is None:
+            # بدون آرگومان (دکمهٔ منوی فرمان‌های تلگرام): وضعیت + دکمه‌های شیشه‌ای
+            current = state.get("auto_publish_enabled", True)
+            send_message(
+                chat_id,
+                f"انتشار خودکار الان: {'روشن ✅' if current else 'خاموش ❌'}\nیکی را انتخاب کن:",
+                reply_markup={"inline_keyboard": [[
+                    {"text": "🤖 روشن", "callback_data": "auto_on"},
+                    {"text": "⏸ خاموش", "callback_data": "auto_off"},
+                ]]},
+            )
         else:
-            send_message(chat_id, "استفاده: /auto on یا /auto off")
+            state["auto_publish_enabled"] = val
+            state["auto_publish_set_by_admin"] = True
+            status = "روشن ✅" if val else "خاموش ❌"
+            send_message(chat_id, f"انتشار خودکار: {status}")
 
     elif text == "/stats":
         pub = storage.load_published()
