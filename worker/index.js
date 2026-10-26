@@ -65,6 +65,9 @@ export default {
   }
 };
 
+// بنر منوی /start — داخل مخزن GitHub میزبانی می‌شود تا به هاست بیرونی وابسته نباشد.
+const START_BANNER_URL = 'https://raw.githubusercontent.com/MahdiHajiabadi675/ai-news-bot-telegram/main/assets/banner.jpg?v=1';
+
 async function handleCallback(cb, env, BASE, CHANNEL_ID, ADMIN_ID) {
   // Never trust callback data without checking the Telegram user who clicked it.
   if (Number(cb.from?.id) !== ADMIN_ID) {
@@ -221,7 +224,7 @@ async function handleMessage(msg, env, BASE, CHANNEL_ID, ADMIN_ID) {
       error: 'خطا'
     }[state.current_stage || 'idle'] || 'در انتظار اجرا';
 
-    await sendMessage(BASE, ADMIN_ID,
+    await sendStartMessage(BASE, ADMIN_ID,
       '🤖 <b>ربات مدیریت اخبار AI</b>\n' +
       '<i>جمع‌آوری، ترجمه و انتشار هوشمند</i>\n\n' +
       '━━━━━━━━━━━━━━\n' +
@@ -266,7 +269,8 @@ async function handleMessage(msg, env, BASE, CHANNEL_ID, ADMIN_ID) {
             { text: '🧹 پاک‌کردن صف', callback_data: 'cmd:clear' }
           ]
         ]
-      }
+      },
+      env.START_BANNER_URL || START_BANNER_URL
     );
   } else if (text === '/status') {
     const stage = state.current_stage || 'idle';
@@ -858,6 +862,30 @@ async function sendMessage(BASE, chatId, text, replyMarkup = null) {
     console.error('sendMessage error:', e);
     return null;
   }
+}
+
+/**
+ * منوی /start را با بنر می‌فرستد؛ اگر تلگرام نتوانست عکس را بگیرد،
+ * به پیام متنی ساده برمی‌گردد تا منو هرگز از دست نرود.
+ */
+async function sendStartMessage(BASE, chatId, text, replyMarkup = null, bannerUrl = START_BANNER_URL) {
+  if (bannerUrl) {
+    try {
+      const payload = { chat_id: chatId, photo: bannerUrl, caption: text, parse_mode: 'HTML' };
+      if (replyMarkup) payload.reply_markup = replyMarkup;
+      const resp = await fetch(`${BASE}/sendPhoto`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      const data = await resp.json().catch(() => null);
+      if (data && data.ok) return data;
+      console.error('[start] sendPhoto failed:', (data && data.description) || resp.status);
+    } catch (e) {
+      console.error('[start] sendPhoto error:', e);
+    }
+  }
+  return sendMessage(BASE, chatId, text, replyMarkup);
 }
 
 function escapeHtml(value) {

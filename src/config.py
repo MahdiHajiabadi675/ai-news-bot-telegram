@@ -18,6 +18,12 @@ BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 CHANNEL_ID = os.getenv("TELEGRAM_CHANNEL_ID", "")
 ADMIN_ID = _int_env("TELEGRAM_ADMIN_ID", 0)
 
+# بنر منوی /start — داخل مخزن GitHub میزبانی می‌شود (قابل تغییر با START_BANNER_URL)
+START_BANNER_URL = os.getenv(
+    "START_BANNER_URL",
+    "https://raw.githubusercontent.com/MahdiHajiabadi675/ai-news-bot-telegram/main/assets/banner.jpg?v=1",
+)
+
 # Gemini — فعلاً کنار گذاشته شده (در پایپ‌لاین استفاده نمی‌شود).
 # ترجمه کاملاً با src/translator.py انجام می‌شود. این تنظیمات فقط برای
 # src/gemini_parked.py و src/gemini_budget.py نگه داشته شده‌اند تا ایدهٔ بعدی

@@ -1,6 +1,8 @@
 import re
 import requests
-from .config import BOT_TOKEN, ADMIN_ID, AUTO_TRUST_THRESHOLD, DISPLAY_TZ_OFFSET_MIN
+from .config import (
+    BOT_TOKEN, ADMIN_ID, AUTO_TRUST_THRESHOLD, DISPLAY_TZ_OFFSET_MIN, START_BANNER_URL
+)
 from . import storage, source_trust
 from .formatting import escape_html as _escape_html_fmt, clip, is_untranslated
 
@@ -19,6 +21,22 @@ def send_message(chat_id, text, parse_mode="HTML", reply_markup=None):
         return resp.json()
     except Exception as e:
         print(f"[ERROR] send_message: {e}")
+        return None
+
+def send_photo(chat_id, photo, caption, parse_mode="HTML", reply_markup=None):
+    data = {
+        "chat_id": chat_id,
+        "photo": photo,
+        "caption": caption,
+        "parse_mode": parse_mode,
+    }
+    if reply_markup:
+        data["reply_markup"] = reply_markup
+    try:
+        resp = requests.post(f"{BASE}/sendPhoto", json=data, timeout=20)
+        return resp.json()
+    except Exception as e:
+        print(f"[ERROR] send_photo: {e}")
         return None
 
 def answer_callback(callback_query_id, text=None, show_alert=False):
@@ -272,8 +290,7 @@ def _handle_message(msg, state):
             "waiting": "در انتظار تایید",
             "error": "خطا",
         }.get(state.get("current_stage", "idle"), "در انتظار اجرا")
-        send_message(
-            chat_id,
+        menu_text = (
             "🤖 <b>ربات مدیریت اخبار AI</b>\n"
             "<i>جمع‌آوری، ترجمه و انتشار هوشمند</i>\n\n"
             "━━━━━━━━━━━━━━\n"
@@ -295,31 +312,35 @@ def _handle_message(msg, state):
             "<code>/runs</code> — آمار اجراها\n"
             "<code>/stats</code> — آمار کلی\n\n"
             "━━━━━━━━━━━━━━\n"
-            "💡 <i>از دکمه‌های زیر هم می‌توانی استفاده کنی.</i>",
-            reply_markup={
-                "inline_keyboard": [
-                    [
-                        {"text": "📊 وضعیت", "callback_data": "cmd:status"},
-                        {"text": "📋 صف تایید", "callback_data": "cmd:pending"},
-                    ],
-                    [
-                        {"text": "📡 منابع", "callback_data": "cmd:sources"},
-                        {"text": "🩺 فیدها", "callback_data": "cmd:feeds"},
-                    ],
-                    [
-                        {"text": "📈 آمار", "callback_data": "cmd:stats"},
-                        {"text": "🗞 اجراها", "callback_data": "cmd:runs"},
-                    ],
-                    [
-                        {"text": "🤖 روشن", "callback_data": "auto_on"},
-                        {"text": "⏸ خاموش", "callback_data": "auto_off"},
-                    ],
-                    [
-                        {"text": "🧹 پاک‌کردن صف", "callback_data": "cmd:clear"},
-                    ],
-                ]
-            },
+            "💡 <i>از دکمه‌های زیر هم می‌توانی استفاده کنی.</i>"
         )
+        menu_keyboard = {
+            "inline_keyboard": [
+                [
+                    {"text": "📊 وضعیت", "callback_data": "cmd:status"},
+                    {"text": "📋 صف تایید", "callback_data": "cmd:pending"},
+                ],
+                [
+                    {"text": "📡 منابع", "callback_data": "cmd:sources"},
+                    {"text": "🩺 فیدها", "callback_data": "cmd:feeds"},
+                ],
+                [
+                    {"text": "📈 آمار", "callback_data": "cmd:stats"},
+                    {"text": "🗞 اجراها", "callback_data": "cmd:runs"},
+                ],
+                [
+                    {"text": "🤖 روشن", "callback_data": "auto_on"},
+                    {"text": "⏸ خاموش", "callback_data": "auto_off"},
+                ],
+                [
+                    {"text": "🧹 پاک‌کردن صف", "callback_data": "cmd:clear"},
+                ],
+            ]
+        }
+        sent = send_photo(chat_id, START_BANNER_URL, menu_text, reply_markup=menu_keyboard)
+        if not (isinstance(sent, dict) and sent.get("ok")):
+            # اگر تلگرام نتوانست بنر را بگیرد، منو بدون عکس ارسال می‌شود
+            send_message(chat_id, menu_text, reply_markup=menu_keyboard)
 
     elif text == "/status":
         pending_count = len(storage.load_pending())
