@@ -18,6 +18,7 @@
 """
 import json
 import re
+import time
 from datetime import datetime, timedelta
 
 import requests
@@ -209,29 +210,96 @@ def _extract_json(text: str):
     return json.loads(text[start:end + 1])
 
 
+RETRY_STATUS = (0, 429, 500, 502, 503, 504)  # خطاهای موقتی سمت سرور/شبکه
+BACKOFF_SECONDS = (6, 15)                     # فاصلهٔ تلاش‌های مجدد روی همان مدل
+MAX_TOTAL_SECONDS = 120                       # سقف کل زمان ساخت یک پست (همهٔ تلاش‌ها)
+CALL_TIMEOUT = 40
+_sleep = time.sleep
+
+
+def _call(model: str, payload: dict, timeout: float = CALL_TIMEOUT):
+    """یک درخواست؛ (dict یا None، کد وضعیت). کد ۰ = خطای شبکه/timeout/پاسخ نامعتبر"""
+    try:
+        resp = requests.post(f"{GEMINI_API_BASE}/models/{model}:generateContent",
+                             params={"key": GEMINI_API_KEY}, json=payload, timeout=timeout)
+        if resp.status_code != 200:
+            return None, resp.status_code
+        text = resp.json()["candidates"][0]["content"]["parts"][0]["text"]
+        return _extract_json(text), 200
+    except Exception as e:  # noqa: BLE001
+        print(f"[EDU] Gemini error: {type(e).__name__}")
+        return None, 0
+
+
+def _alternatives(exclude: str, limit: int = 2) -> list:
+    """مدل‌های flash دیگر (جدیدترین اول) برای وقتی مدل اصلی شلوغ/خراب است"""
+    try:
+        resp = requests.get(f"{GEMINI_API_BASE}/models", params={"key": GEMINI_API_KEY, "pageSize": 200}, timeout=15)
+        if resp.status_code != 200:
+            return []
+        names = [m.get("name", "").replace("models/", "") for m in resp.json().get("models", [])
+                 if "generateContent" in m.get("supportedGenerationMethods", [])]
+        bad = ("thinking", "lite", "8b", "embedding", "aqa", "tts", "image", "live", "vision", "audio", "robotics")
+
+        def ver(n):
+            m = re.search(r"gemini-(\d+)(?:\.(\d+))?", n)
+            return (int(m.group(1)), int(m.group(2) or 0)) if m else (0, 0)
+
+        flash = sorted((n for n in names if "flash" in n and n != exclude and not any(x in n for x in bad)),
+                       key=ver, reverse=True)
+        return flash[:limit]
+    except Exception as e:  # noqa: BLE001
+        print(f"[EDU] model list failed: {type(e).__name__}")
+        return []
+
+
 def generate(category_desc: str, recent_titles: list):
-    """یک درخواست به Gemini → JSON خام (dict) یا None"""
+    """
+    درخواست به Gemini → JSON خام (dict) یا None.
+    خطای موقتی (۵۰۳/۴۲۹/…): روی همان مدل با فاصله دوباره تلاش می‌کند؛ اگر باز هم نشد
+    یک یا دو مدل flash دیگر را امتحان می‌کند و مدلِ جواب‌داده را برای اجراهای بعد ذخیره می‌کند.
+    """
     model = _resolve_model()
     recent = "\n".join(f"- {t}" for t in recent_titles[-15:]) or "(none yet)"
     payload = {
         "contents": [{"parts": [{"text": PROMPT.format(topic=category_desc, recent=recent)}]}],
         "generationConfig": {"temperature": 0.9, "maxOutputTokens": 2048, "responseMimeType": "application/json"},
     }
-    try:
-        resp = requests.post(f"{GEMINI_API_BASE}/models/{model}:generateContent",
-                             params={"key": GEMINI_API_KEY}, json=payload, timeout=60)
-        resp.raise_for_status()
-        text = resp.json()["candidates"][0]["content"]["parts"][0]["text"]
-        return _extract_json(text)
-    except requests.exceptions.HTTPError as e:
-        code = e.response.status_code if e.response is not None else 0
-        print(f"[EDU] Gemini HTTP {code}")
-        if code in (400, 404):
-            _invalidate_model()  # مدل منقضی → اجرای بعد مدل تازه پیدا کند
+
+    t0 = time.monotonic()
+
+    def left():
+        return MAX_TOTAL_SECONDS - (time.monotonic() - t0)
+
+    code = 0
+    for delay in (0,) + BACKOFF_SECONDS:
+        if left() <= 5:
+            break
+        if delay:
+            _sleep(delay)
+        data, code = _call(model, payload, min(CALL_TIMEOUT, max(5, left())))
+        if code == 200:
+            return data
+        print(f"[EDU] Gemini {model}: HTTP {code}")
+        if code not in RETRY_STATUS:
+            break
+
+    if code in (400, 404):
+        _invalidate_model()  # مدل منقضی → اجرای بعد مدل تازه پیدا کند
         return None
-    except Exception as e:  # noqa: BLE001
-        print(f"[EDU] Gemini error: {type(e).__name__}")
-        return None
+    if code in RETRY_STATUS:
+        for alt in _alternatives(model):
+            if left() <= 5:
+                break
+            data, c = _call(alt, payload, min(CALL_TIMEOUT, max(5, left())))
+            print(f"[EDU] Gemini fallback {alt}: HTTP {c}")
+            if c == 200:
+                try:
+                    cloudflare_kv.put("gemini_model", alt)  # اجراهای بعد از همین شروع کنند
+                except Exception:  # noqa: BLE001
+                    pass
+                return data
+    return None
 
 
 # ───────────── نقطهٔ ورود ─────────────

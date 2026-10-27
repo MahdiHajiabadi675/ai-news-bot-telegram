@@ -732,6 +732,73 @@ check("دو اجرای یک اسلات = یک شناسه", _a[0] == _b[0] and _a
 _cats = {_edu.pick_category(_edu.current_slot(_dt.datetime(2026, 10, 27, 0, 17) + _dt.timedelta(hours=2 * i))[1])[0] for i in range(12)}
 check("۱۲ اسلات پشت‌سرهم همهٔ ۱۲ دسته را می‌پوشاند", len(_cats) == 12)
 
+import json as _json
+# تاب‌آوری Gemini: ۵۰۳ → تلاش مجدد → مدل جایگزین
+_orig_post, _orig_get = _edu.requests.post, _edu.requests.get
+_edu._sleep = lambda s: None
+_edu.GEMINI_API_KEY = "k"
+_edu._resolve_model = lambda: "gemini-9-flash"
+_saved_kv = {}
+_edu.cloudflare_kv.put = lambda k, v: _saved_kv.__setitem__(k, v) or True
+
+
+class _Resp:
+    def __init__(self, code, body=None): self.status_code = code; self._b = body or {}; self.text = ""
+    def json(self): return self._b
+
+
+_OK_BODY = {"candidates": [{"content": {"parts": [{"text": _json.dumps(_good)}]}}]}
+_models_body = {"models": [{"name": "models/gemini-9-flash", "supportedGenerationMethods": ["generateContent"]},
+                           {"name": "models/gemini-8-flash", "supportedGenerationMethods": ["generateContent"]},
+                           {"name": "models/gemini-8-flash-lite", "supportedGenerationMethods": ["generateContent"]}]}
+_seq = {"calls": []}
+
+
+def _mk_post(plan):
+    def _post(url, json=None, params=None, timeout=None):
+        model = url.split("/models/")[1].split(":")[0]
+        _seq["calls"].append(model)
+        code = plan.get(model, [200])
+        c = code.pop(0) if len(code) > 1 else code[0]
+        return _Resp(c, _OK_BODY if c == 200 else {})
+    return _post
+
+
+_edu.requests.get = lambda url, params=None, timeout=None: _Resp(200, _models_body)
+_edu.requests.post = _mk_post({"gemini-9-flash": [503, 200]})
+_seq["calls"].clear()
+check("۵۰۳ موقتی: تلاش مجدد روی همان مدل موفق می‌شود", _edu.generate("x", [])["title"] == _good["title"] and _seq["calls"] == ["gemini-9-flash"] * 2)
+_edu.requests.post = _mk_post({"gemini-9-flash": [503], "gemini-8-flash": [200]})
+_seq["calls"].clear(); _saved_kv.clear()
+_r = _edu.generate("x", [])
+check("۵۰۳ پایدار: مدل جایگزین (غیر lite) جواب می‌دهد و ذخیره می‌شود",
+      _r is not None and _seq["calls"][:3] == ["gemini-9-flash"] * 3 and _seq["calls"][-1] == "gemini-8-flash"
+      and _saved_kv.get("gemini_model") == "gemini-8-flash" and "gemini-8-flash-lite" not in _seq["calls"])
+_edu.requests.post = _mk_post({"gemini-9-flash": [503], "gemini-8-flash": [503]})
+check("همه ۵۰۳: None بدون استثنا", _edu.generate("x", []) is None)
+_edu.requests.post = _mk_post({"gemini-9-flash": [404]})
+_seq["calls"].clear()
+check("۴۰۴: بدون تلاش مجدد/جایگزین، None", _edu.generate("x", []) is None and _seq["calls"] == ["gemini-9-flash"])
+# سقف زمانی: حتی اگر هر درخواست آویزان بماند، کل کار از MAX_TOTAL_SECONDS فراتر نمی‌رود
+import time as _time
+_clock = {"t": 0.0}
+_real_mono = _edu.time.monotonic
+_edu.time.monotonic = lambda: _clock["t"]
+_edu._sleep = lambda s: _clock.__setitem__("t", _clock["t"] + s)
+
+
+def _slow_post(url, json=None, params=None, timeout=None):
+    _clock["t"] += timeout
+    return _Resp(503)
+
+
+_edu.requests.post = _slow_post
+_edu.generate("x", [])
+check("سقف کل زمان ساخت پست رعایت می‌شود", _clock["t"] <= _edu.MAX_TOTAL_SECONDS + _edu.CALL_TIMEOUT)
+_edu.time.monotonic = _real_mono
+_edu._sleep = lambda s: None
+_edu.requests.post, _edu.requests.get = _orig_post, _orig_get
+
 # جریان کامل با Gemini و تلگرام جعلی
 import json as _json
 _kvstore = {}
