@@ -53,6 +53,7 @@ import src.source_trust as source_trust  # noqa: E402
 import src.translator as translator  # noqa: E402
 import src.publisher as publisher  # noqa: E402
 import src.storage as storage  # noqa: E402
+import src.ai_post as ai_post  # noqa: E402
 
 _passed = 0
 
@@ -693,5 +694,126 @@ check("auto: auto:off", bot._parse_auto_choice("auto:off") is False)
 check("auto: auto_publish:on", bot._parse_auto_choice("auto_publish:on") is True)
 check("auto: bare /auto -> menu", bot._parse_auto_choice("/auto") is None)
 check("auto: اعداد فارسی منو", bot._fa_num(123) == "۱۲۳")
+
+# ───────────── پست آموزشی AI (Gemini → OpenRouter رایگان) ─────────────
+print("AI educational post:")
+
+ai_post.AI_POST_ENABLED = True
+ai_post.AI_POST_INTERVAL_HOURS = 24
+ai_post.AI_POST_RETRY_MINUTES = 180
+ai_post.CHANNEL_ID = "@test_channel"
+ai_post.GEMINI_API_KEY = "test"
+ai_post.GEMINI_MODEL = "gemini-2.0-flash"
+ai_post.OPENROUTER_API_KEY = "or-test"
+ai_post.OPENROUTER_MODELS = []
+
+_posted = []
+ai_post.send_message = lambda chat_id, text, **kw: (
+    _posted.append((chat_id, text)) or {"ok": True}
+)
+
+
+class _Resp:
+    def __init__(self, status, payload=None):
+        self.status_code = status
+        self._payload = payload or {}
+
+    def json(self):
+        return self._payload
+
+
+_topic = ai_post.TOPICS[0]
+_html = ai_post.format_post(_topic, "متن <b>خطرناک</b> **تست**")
+check("ai_post: محتوای HTML امن است",
+      "&lt;b&gt;خطرناک&lt;/b&gt;" in _html and "**" not in _html)
+check("ai_post: عنوان و هشتگ دارد",
+      _topic["title"] in _html and "#آموزش_هوش_مصنوعی" in _html)
+check("ai_post: بدون تگ ناامن", "<script" not in _html)
+
+_now = datetime.datetime.utcnow()
+check("ai_post: اولین پست مجاز است", ai_post.should_run(data={}, now=_now))
+check("ai_post: داخل بازهٔ ۲۴ ساعته مسدود",
+      not ai_post.should_run(
+          data={"last_post_at": (_now - datetime.timedelta(hours=2)).isoformat() + "Z"},
+          now=_now))
+check("ai_post: بعد از ۲۵ ساعت مجاز",
+      ai_post.should_run(
+          data={"last_post_at": (_now - datetime.timedelta(hours=25)).isoformat() + "Z"},
+          now=_now))
+check("ai_post: بعد از شکست تا پایان retry صبر می‌کند",
+      not ai_post.should_run(
+          data={"last_attempt_at": (_now - datetime.timedelta(minutes=20)).isoformat() + "Z"},
+          now=_now))
+check("ai_post: بعد از پایان retry مجاز",
+      ai_post.should_run(
+          data={"last_attempt_at": (_now - datetime.timedelta(minutes=200)).isoformat() + "Z"},
+          now=_now))
+check("ai_post: حالت paused مسدود است",
+      not ai_post.should_run(data={"paused": True}, now=_now))
+
+# فقط مدل رایگان OpenRouter انتخاب شود
+_orig_get = ai_post.requests.get
+ai_post.requests.get = lambda url, **kw: _Resp(200, {"data": [
+    {"id": "vendor/paid-model", "pricing": {"prompt": "0.000001", "completion": "0.000002"}},
+    {"id": "vendor/free-model:free", "pricing": {"prompt": "0", "completion": "0"}},
+    {"id": "vendor/vision-free:free", "pricing": {"prompt": "0", "completion": "0"}},
+    {"id": "vendor/zero-price", "pricing": {"prompt": "0", "completion": "0"}},
+]})
+_picked = ai_post._pick_free_models()
+check("ai_post: مدل پولی انتخاب نمی‌شود",
+      all("paid" not in m for m in _picked) and "vendor/free-model:free" in _picked)
+check("ai_post: مدل تصویری حذف می‌شود", all("vision" not in m for m in _picked))
+ai_post.requests.get = _orig_get
+
+# Gemini موفق → هیچ درخواستی به OpenRouter نمی‌رود
+_or_calls = []
+
+
+def _fake_gemini_ok(url, **kw):
+    if "openrouter" in str(url):
+        _or_calls.append(url)
+    return _Resp(200, {"candidates": [{"content": {"parts": [{"text": "متن آموزشی مفید. " * 12}]}}]})
+
+
+ai_post.requests.post = _fake_gemini_ok
+_store.pop(ai_post.STATE_KEY, None)
+_posted.clear()
+check("ai_post: Gemini اول موفق می‌شود", ai_post.maybe_publish(force=True) is True)
+check("ai_post: provider ثبت شد",
+      str(_store[ai_post.STATE_KEY].get("last_provider", "")).startswith("gemini"))
+check("ai_post: موضوع به بعدی می‌رود",
+      _store[ai_post.STATE_KEY].get("topic_index") == 1)
+check("ai_post: OpenRouter صدا زده نشد", not _or_calls)
+check("ai_post: فقط یک پست متنی ارسال شد", len(_posted) == 1 and _posted[0][0] == "@test_channel")
+
+# Gemini خطای 503 → مدل رایگان OpenRouter
+_openrouter_calls = []
+
+
+def _fake_gemini_503_openrouter_ok(url, **kw):
+    if "generativelanguage" in str(url):
+        return _Resp(503, {"error": {"message": "model overloaded"}})
+    _openrouter_calls.append(url)
+    return _Resp(200, {"choices": [{"message": {"content": "متن جایگزین آموزشی. " * 12}}]})
+
+
+ai_post.requests.post = _fake_gemini_503_openrouter_ok
+_posted.clear()
+check("ai_post: با 503 به OpenRouter می‌رود", ai_post.maybe_publish(force=True) is True)
+check("ai_post: provider برابر openrouter است",
+      _store[ai_post.STATE_KEY].get("last_provider") == "openrouter")
+check("ai_post: درخواست OpenRouter واقعاً زده شد", bool(_openrouter_calls))
+check("ai_post: پست جایگزین ارسال شد", len(_posted) == 1)
+
+# همهٔ مدل‌ها خطا → پست ارسال نمی‌شود و خطا در state می‌ماند
+ai_post.requests.post = lambda url, **kw: _Resp(503, {})
+_posted.clear()
+check("ai_post: وقتی همه خطا می‌دهند پستی نمی‌رود",
+      ai_post.maybe_publish(force=True) is False)
+check("ai_post: خطا در state ثبت می‌شود",
+      _store[ai_post.STATE_KEY].get("last_error") == "generation_failed")
+check("ai_post: زمان تلاش ثبت می‌شود",
+      bool(_store[ai_post.STATE_KEY].get("last_attempt_at")))
+check("ai_post: هیچ پیامی ارسال نشد", not _posted)
 
 print(f"\n{_passed} تست با موفقیت گذشت ✅")

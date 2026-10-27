@@ -27,6 +27,7 @@ from src.fast_track import process_fast_track
 from src.bot import poll_updates, _send_review, notify_admin_new, send_message
 from src.publisher import publish_approved
 from src import translator
+from src import ai_post
 
 
 def calculate_score(item: dict) -> int:
@@ -70,7 +71,7 @@ def _should_collect(force, last_collect, now=None, interval_min=None):
         return True
 
 
-def run(force=False):
+def run(force=False, ai_post_now=False):
     print(f"[{datetime.utcnow().isoformat()}] Pipeline started")
     translator.reset()
     # آمار «قیف» همین اجرا برای /runs: چند خبر پیدا شد و کجا کم شد
@@ -267,6 +268,15 @@ def run(force=False):
     storage.save_state(state)
     state = publish_approved(state, approved_to_publish)
 
+    # 4.5 پست آموزشی هوش مصنوعی (فقط متن) — بازهٔ طولانی، مستقل از جمع‌آوری.
+    # Gemini اول؛ در صورت خطا (مثلاً 503) مدل‌های رایگان OpenRouter.
+    # هر خطایی اینجا نباید پایپ‌لاین خبر را متوقف کند.
+    try:
+        if ai_post.maybe_publish(state, force=ai_post_now):
+            print("[INFO] Educational AI post published")
+    except Exception as e:
+        print(f"[WARN] ai_post skipped: {e}")
+
     # 5. Save state
     state = set_stage(state, "waiting")
     storage.save_state(state)
@@ -309,6 +319,7 @@ def _now():
 if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "run":
         force = "--force" in sys.argv
-        run(force=force)
+        ai_post_now = "--ai-post-now" in sys.argv
+        run(force=force, ai_post_now=ai_post_now)
     else:
-        print("Usage: python main.py run [--force]")
+        print("Usage: python main.py run [--force] [--ai-post-now]")
