@@ -920,7 +920,8 @@ async function dispatchGithubWorkflow(env) {
           'User-Agent': 'ai-news-bot-worker',
           'Content-Type': 'application/json'
         },
-        body: JSON.stringify({ ref: 'main' })
+        // trigger=cron → ورک‌فلو بدون --force اجرا می‌شود و فاصلهٔ جمع‌آوری را رعایت می‌کند (اجرای تکراری بی‌اثر می‌ماند)
+        body: JSON.stringify({ ref: 'main', inputs: { trigger: 'cron' } })
       }
     );
     console.log('[scheduled] GitHub dispatch status:', resp.status);

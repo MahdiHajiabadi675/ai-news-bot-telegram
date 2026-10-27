@@ -263,4 +263,18 @@ check('دکمهٔ «پاک‌کردن صف»: صفحهٔ تایید باز می�
   last('sendMessage').body.reply_markup.inline_keyboard.flat()
     .some(b => b.callback_data === 'clrp'));
 
+console.log('Cron dispatch:');
+{
+  const calls2 = [];
+  const rf = globalThis.fetch;
+  globalThis.fetch = async (url, opts) => { calls2.push({ url: String(url), body: JSON.parse(opts.body) }); return { status: 204 }; };
+  const pend = [];
+  await worker.scheduled({}, { ...env, GITHUB_TOKEN: 'g', GITHUB_REPO: 'o/r' }, { waitUntil: p => pend.push(p) });
+  await Promise.all(pend);
+  globalThis.fetch = rf;
+  check('cron Cloudflare → workflow_dispatch با trigger=cron (بدون force)',
+    calls2.length === 1 && calls2[0].url.includes('/actions/workflows/pipeline.yml/dispatches')
+    && calls2[0].body.inputs.trigger === 'cron');
+}
+
 console.log(`\n${passed} تست Worker با موفقیت گذشت ✅`);
