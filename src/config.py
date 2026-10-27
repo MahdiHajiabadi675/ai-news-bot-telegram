@@ -34,26 +34,26 @@ GEMINI_MIN_INTERVAL_MIN = _int_env("GEMINI_MIN_INTERVAL_MIN", 55)
 GEMINI_MAX_CALLS_PER_DAY = _int_env("GEMINI_MAX_CALLS_PER_DAY", 24)
 GEMINI_BATCH_SIZE = _int_env("GEMINI_BATCH_SIZE", 10)
 
-# ───────── پست آموزشی هوش مصنوعی (فقط متن) ─────────
+# ───────── پست آموزشی هوش مصنوعی (src/edu_post.py) — فقط متن ─────────
 # Gemini اول امتحان می‌شود؛ اگر خطا داد (مثلاً 503) مدل‌های رایگان OpenRouter.
-AI_POST_ENABLED = os.getenv("AI_POST_ENABLED", "true").lower() == "true"
-# فاصلهٔ بین دو پست آموزشی (ساعت) — عمداً طولانی برای کم‌کردن مصرف توکن و GitHub Actions
-AI_POST_INTERVAL_HOURS = _int_env("AI_POST_INTERVAL_HOURS", 24)
-# بعد از شکست، این‌قدر دقیقه صبر می‌کنیم تا دوباره تلاش شود (جلوگیری از مصرف بی‌فایده)
-AI_POST_RETRY_MINUTES = _int_env("AI_POST_RETRY_MINUTES", 180)
-# سقف توکن خروجی مدل (کوچک نگه داشته می‌شود)
-AI_POST_MAX_TOKENS = _int_env("AI_POST_MAX_TOKENS", 450)
-# سقف کاراکتر متن پست (تلگرام ۴۰۹۶ را اجازه می‌دهد؛ این عدد عمداً کمتر است)
-AI_POST_MAX_CHARS = _int_env("AI_POST_MAX_CHARS", 1100)
+EDU_ENABLED = os.getenv("EDU_POST_ENABLED", "true").strip().lower() not in ("0", "false", "no", "off")
+# فاصلهٔ طولانی بین دو پست (ساعت) — پیش‌فرض ۲۴ برای کم‌کردن مصرف توکن و پردازش GitHub
+EDU_EVERY_HOURS = _int_env("EDU_EVERY_HOURS", 24)
+EDU_MAX_TRIES_PER_SLOT = _int_env("EDU_MAX_TRIES_PER_SLOT", 2)
+EDU_RECENT_KEEP = _int_env("EDU_RECENT_KEEP", 40)
+# سقف توکن خروجی مدل (JSON کوتاه است؛ کوچک نگه داشته می‌شود)
+EDU_MAX_OUTPUT_TOKENS = _int_env("EDU_MAX_OUTPUT_TOKENS", 800)
+# چند عنوان اخیر در پرامپت فرستاده شود (کاهش مصرف توکن)
+EDU_RECENT_PROMPT = _int_env("EDU_RECENT_PROMPT", 6)
 
-# OpenRouter — فقط مدل‌های رایگان
+# OpenRouter — فقط مدل‌های رایگان (fallback بعد از Gemini)
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
 # فهرست دستی مدل‌ها (با کاما جدا شود). خالی = کشف خودکار مدل‌های :free
 OPENROUTER_MODELS = [
     m.strip() for m in (os.getenv("OPENROUTER_MODELS") or "").split(",") if m.strip()
 ]
 # حداکثر چند مدل رایگان در هر تلاش امتحان شود
-OPENROUTER_MAX_MODELS = max(1, _int_env("OPENROUTER_MAX_MODELS", 4))
+OPENROUTER_MAX_MODELS = max(1, _int_env("OPENROUTER_MAX_MODELS", 3))
 # سرصفحه‌های معرفی‌کننده (اختیاری، برای رتبه‌بندی بهتر OpenRouter)
 OPENROUTER_SITE_URL = os.getenv(
     "OPENROUTER_SITE_URL",

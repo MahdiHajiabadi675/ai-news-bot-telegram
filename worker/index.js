@@ -239,6 +239,7 @@ async function handleMessage(msg, env, BASE, CHANNEL_ID, ADMIN_ID) {
       '<code>/status</code> — وضعیت کامل\n' +
       '<code>/pending</code> — بررسی صف تایید\n' +
       '<code>/auto</code> — روشن/خاموش کردن انتشار خودکار\n' +
+      '<code>/edu</code> — روشن/خاموش کردن پست آموزشی\n' +
       '<code>/pause</code> · <code>/resume</code> — توقف/ادامهٔ انتشار\n' +
       '<code>/clear</code> — پاک‌کردن صف\n' +
       '<code>/sources</code> — اعتبار منابع\n' +
@@ -377,6 +378,21 @@ async function handleMessage(msg, env, BASE, CHANNEL_ID, ADMIN_ID) {
       );
     } else {
       await setAutoPublish(env, BASE, ADMIN_ID, null, val);
+    }
+  } else if (/^\/edu/i.test(text)) {
+    // پست آموزشی (Gemini + OpenRouter رایگان، بازهٔ طولانی): /edu on | /edu off | /edu (وضعیت)
+    const arg = (text.split(/\s+/)[1] || '').toLowerCase();
+    if (arg === 'on' || arg === 'off') {
+      await updateState(env, { edu_enabled: arg === 'on' });
+      await sendMessage(BASE, ADMIN_ID, `🎓 پست آموزشی: ${arg === 'on' ? 'روشن ✅' : 'خاموش ❌'}`);
+    } else {
+      const est = await getJSON(env, 'edu_state', {});
+      const on = state.edu_enabled !== false;
+      const recent = (est.recent || []).slice(-5).reverse().map(r => `• ${r.title}`).join('\n');
+      await sendMessage(BASE, ADMIN_ID,
+        `🎓 پست آموزشی: ${on ? 'روشن ✅' : 'خاموش ❌'}\n` +
+        'تغییر: <code>/edu on</code> یا <code>/edu off</code>' +
+        (recent ? `\n\nآخرین پست‌ها:\n${escapeHtml(recent)}` : ''));
     }
   } else if (text === '/stats') {
     const published = await getJSON(env, 'published', []);
@@ -920,7 +936,8 @@ async function dispatchGithubWorkflow(env) {
           'User-Agent': 'ai-news-bot-worker',
           'Content-Type': 'application/json'
         },
-        body: JSON.stringify({ ref: 'main' })
+        // trigger=cron → ورک‌فلو بدون --force اجرا می‌شود و فاصلهٔ جمع‌آوری را رعایت می‌کند (اجرای تکراری بی‌اثر می‌ماند)
+        body: JSON.stringify({ ref: 'main', inputs: { trigger: 'cron' } })
       }
     );
     console.log('[scheduled] GitHub dispatch status:', resp.status);

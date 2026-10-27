@@ -5,6 +5,11 @@ on:
     # Avoid the start of the hour, when GitHub Actions is most congested.
     - cron: '17 * * * *'
   workflow_dispatch:
+    inputs:
+      trigger:
+        description: 'cron = فراخوانی خودکار Cloudflare (بدون force)؛ خالی/manual = اجرای دستی با force'
+        required: false
+        default: 'manual'
 
 permissions:
   contents: write
@@ -36,7 +41,7 @@ jobs:
 
       - name: Run pipeline
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.trigger }}" != "cron" ]; then
             python main.py run --force
           else
             python main.py run
@@ -47,6 +52,8 @@ jobs:
           TELEGRAM_ADMIN_ID: ${{ secrets.TELEGRAM_ADMIN_ID }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          BALE_BOT_TOKEN: ${{ secrets.BALE_BOT_TOKEN }}
+          BALE_CHANNEL_ID: ${{ secrets.BALE_CHANNEL_ID }}
           CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
           CF_KV_NAMESPACE: ${{ secrets.CF_KV_NAMESPACE }}
           CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}

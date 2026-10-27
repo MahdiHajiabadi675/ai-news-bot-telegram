@@ -53,7 +53,6 @@ import src.source_trust as source_trust  # noqa: E402
 import src.translator as translator  # noqa: E402
 import src.publisher as publisher  # noqa: E402
 import src.storage as storage  # noqa: E402
-import src.ai_post as ai_post  # noqa: E402
 
 _passed = 0
 
@@ -695,125 +694,227 @@ check("auto: auto_publish:on", bot._parse_auto_choice("auto_publish:on") is True
 check("auto: bare /auto -> menu", bot._parse_auto_choice("/auto") is None)
 check("auto: اعداد فارسی منو", bot._fa_num(123) == "۱۲۳")
 
-# ───────────── پست آموزشی AI (Gemini → OpenRouter رایگان) ─────────────
-print("AI educational post:")
+# ───────────── پست آموزشی (Gemini + OpenRouter رایگان) ─────────────
+print("Edu post:")
+import datetime as _dt
+from src import edu_post as _edu
 
-ai_post.AI_POST_ENABLED = True
-ai_post.AI_POST_INTERVAL_HOURS = 24
-ai_post.AI_POST_RETRY_MINUTES = 180
-ai_post.CHANNEL_ID = "@test_channel"
-ai_post.GEMINI_API_KEY = "test"
-ai_post.GEMINI_MODEL = "gemini-2.0-flash"
-ai_post.OPENROUTER_API_KEY = "or-test"
-ai_post.OPENROUTER_MODELS = []
+# تست‌ها بدون شبکه: کلید OpenRouter را خالی می‌کنیم (تست‌های fallback جداگانه تنظیمش می‌کنند)
+_edu.OPENROUTER_API_KEY = ""
+# پیش‌فرض باید طولانی باشد؛ برای آزمودن ریاضیات اسلات، بعداً موقتاً ۲ می‌کنیم
+from src import config as _cfg
+check("edu: بازهٔ پیش‌فرض طولانی است (۲۴ ساعت)", _cfg.EDU_EVERY_HOURS == 24)
+check("edu: سقف توکن پیش‌فرض کم است", _cfg.EDU_MAX_OUTPUT_TOKENS <= 1000)
+_edu.EDU_EVERY_HOURS = 2
 
-_posted = []
-ai_post.send_message = lambda chat_id, text, **kw: (
-    _posted.append((chat_id, text)) or {"ok": True}
-)
+_good = {"title": "چطور با یک پرامپت ایمیل کاری بهتر بنویسی", "hook": "ایمیل‌های کاری معمولاً طولانی و مبهم‌اند؛ با این روش در چند ثانیه شفاف می‌شوند.",
+         "steps": ["موضوع و مخاطب ایمیل را بنویس", "لحن دلخواه را مشخص کن", "از مدل بخواه دو نسخه بدهد"],
+         "prompt": "برای [مخاطب] یک ایمیل کوتاه و محترمانه دربارهٔ [موضوع] بنویس. لحن: [رسمی/دوستانه].",
+         "tip": "اگر نتیجه کلی بود، یک مثال از لحن خودت بده.", "hashtags": ["ایمیل", "بهره‌وری"]}
+_v = _edu.validate(dict(_good), [])
+check("خروجی خوب معتبر است", _v is not None and len(_v["steps"]) == 3)
+check("بدون عنوان/هوک رد می‌شود", _edu.validate({**_good, "title": ""}, []) is None and _edu.validate({**_good, "hook": ""}, []) is None)
+check("بدون مرحله و بدون پرامپت رد می‌شود", _edu.validate({**_good, "steps": ["x"], "prompt": ""}, []) is None)
+check("متن غیرفارسی رد می‌شود", _edu.validate({**_good, "title": "How to write emails", "hook": "Short english text only here"}, []) is None)
+check("عنوان تکراری/مشابه رد می‌شود", _edu.validate(dict(_good), [_good["title"]]) is None)
+check("غیر dict رد می‌شود", _edu.validate(None, []) is None and _edu.validate("x", []) is None)
+_dirty = _edu.validate({**_good, "hook": "سلام **دنیا** https://evil.example/x ببین `کد`"}, [])
+check("لینک و مارک‌داون پاک می‌شود", "http" not in _dirty["hook"] and "*" not in _dirty["hook"] and "`" not in _dirty["hook"])
+_html = _edu.format_html(_v, "پرامپت_آماده")
+check("قالب HTML: عنوان، pre، هشتگ، برچسب AI", "<b>" in _html and "<pre>" in _html and "#پرامپت_آماده" in _html and "تولیدشده با هوش مصنوعی" in _html)
+_xss = _edu.validate({**_good, "prompt": "<script>alert(1)</script> متن [x] و کافی برای عبور از حداقل طول پرامپت اینجا"}, [])
+check("HTML خطرناک escape می‌شود", "<script>" not in _edu.format_html(_xss, "t") and "&lt;script&gt;" in _edu.format_html(_xss, "t"))
+check("طول پست زیر سقف تلگرام", len(_edu.format_html({**_v, "prompt": "ا" * 750}, "t")) <= 4000)
+check("نسخهٔ متنی بله بدون تگ HTML", "<" not in _edu.format_plain(_v, "t") and "پرامپت آماده" in _edu.format_plain(_v, "t"))
+check("JSON داخل بلاک کد استخراج می‌شود", _edu._extract_json('```json\n{"a": 1}\n```') == {"a": 1})
+check("متن بدون JSON → None", _edu._extract_json("sorry I cannot") is None)
+
+# اسلات‌ها: ۱۲ در روز، چرخش ۱۲ دسته
+_t0 = _dt.datetime(2026, 10, 27, 20, 17)  # = 23:47 تهران
+_s = {_edu.current_slot(_t0 + _dt.timedelta(hours=i))[0] for i in range(24)}
+check("در ۲۴ ساعت دقیقاً ۱۲ اسلات داریم", len(_s) == 12 or len(_s) == 13)
+_a = _edu.current_slot(_dt.datetime(2026, 10, 27, 5, 17))  # 08:47 تهران
+_b = _edu.current_slot(_dt.datetime(2026, 10, 27, 6, 17))  # 09:47 تهران (همان اسلات)
+_c = _edu.current_slot(_dt.datetime(2026, 10, 27, 7, 17))  # 10:47 تهران (اسلات بعد)
+check("دو اجرای یک اسلات = یک شناسه", _a[0] == _b[0] and _a[0] != _c[0])
+_cats = {_edu.pick_category(_edu.current_slot(_dt.datetime(2026, 10, 27, 0, 17) + _dt.timedelta(hours=2 * i))[1])[0] for i in range(12)}
+check("۱۲ اسلات پشت‌سرهم همهٔ ۱۲ دسته را می‌پوشاند", len(_cats) == 12)
+
+# با بازهٔ ۲۴ ساعته، اجراهای همان روز همه یک اسلات‌اند (فقط یک پست در روز)
+_edu.EDU_EVERY_HOURS = 24
+check("بازهٔ ۲۴ ساعته: یک اسلات در روز",
+      _edu.current_slot(_dt.datetime(2026, 10, 27, 0, 17))[0] ==
+      _edu.current_slot(_dt.datetime(2026, 10, 27, 10, 17))[0])
+_edu.EDU_EVERY_HOURS = 2
+
+import json as _json
+# تاب‌آوری Gemini: ۵۰۳ → تلاش مجدد → مدل جایگزین
+_orig_post, _orig_get = _edu.requests.post, _edu.requests.get
+_edu._sleep = lambda s: None
+_edu.GEMINI_API_KEY = "k"
+_edu._resolve_model = lambda: "gemini-9-flash"
+_saved_kv = {}
+_edu.cloudflare_kv.put = lambda k, v: _saved_kv.__setitem__(k, v) or True
 
 
 class _Resp:
-    def __init__(self, status, payload=None):
-        self.status_code = status
-        self._payload = payload or {}
-
-    def json(self):
-        return self._payload
+    def __init__(self, code, body=None): self.status_code = code; self._b = body or {}; self.text = ""
+    def json(self): return self._b
 
 
-_topic = ai_post.TOPICS[0]
-_html = ai_post.format_post(_topic, "متن <b>خطرناک</b> **تست**")
-check("ai_post: محتوای HTML امن است",
-      "&lt;b&gt;خطرناک&lt;/b&gt;" in _html and "**" not in _html)
-check("ai_post: عنوان و هشتگ دارد",
-      _topic["title"] in _html and "#آموزش_هوش_مصنوعی" in _html)
-check("ai_post: بدون تگ ناامن", "<script" not in _html)
+_OK_BODY = {"candidates": [{"content": {"parts": [{"text": _json.dumps(_good)}]}}]}
+_models_body = {"models": [{"name": "models/gemini-9-flash", "supportedGenerationMethods": ["generateContent"]},
+                           {"name": "models/gemini-8-flash", "supportedGenerationMethods": ["generateContent"]},
+                           {"name": "models/gemini-8-flash-lite", "supportedGenerationMethods": ["generateContent"]}]}
+_seq = {"calls": []}
 
-_now = datetime.datetime.utcnow()
-check("ai_post: اولین پست مجاز است", ai_post.should_run(data={}, now=_now))
-check("ai_post: داخل بازهٔ ۲۴ ساعته مسدود",
-      not ai_post.should_run(
-          data={"last_post_at": (_now - datetime.timedelta(hours=2)).isoformat() + "Z"},
-          now=_now))
-check("ai_post: بعد از ۲۵ ساعت مجاز",
-      ai_post.should_run(
-          data={"last_post_at": (_now - datetime.timedelta(hours=25)).isoformat() + "Z"},
-          now=_now))
-check("ai_post: بعد از شکست تا پایان retry صبر می‌کند",
-      not ai_post.should_run(
-          data={"last_attempt_at": (_now - datetime.timedelta(minutes=20)).isoformat() + "Z"},
-          now=_now))
-check("ai_post: بعد از پایان retry مجاز",
-      ai_post.should_run(
-          data={"last_attempt_at": (_now - datetime.timedelta(minutes=200)).isoformat() + "Z"},
-          now=_now))
-check("ai_post: حالت paused مسدود است",
-      not ai_post.should_run(data={"paused": True}, now=_now))
 
-# فقط مدل رایگان OpenRouter انتخاب شود
-_orig_get = ai_post.requests.get
-ai_post.requests.get = lambda url, **kw: _Resp(200, {"data": [
+def _mk_post(plan):
+    def _post(url, json=None, params=None, timeout=None):
+        model = url.split("/models/")[1].split(":")[0]
+        _seq["calls"].append(model)
+        code = plan.get(model, [200])
+        c = code.pop(0) if len(code) > 1 else code[0]
+        return _Resp(c, _OK_BODY if c == 200 else {})
+    return _post
+
+
+_edu.requests.get = lambda url, params=None, timeout=None: _Resp(200, _models_body)
+_edu.requests.post = _mk_post({"gemini-9-flash": [503, 200]})
+_seq["calls"].clear()
+check("۵۰۳ موقتی: تلاش مجدد روی همان مدل موفق می‌شود", _edu.generate("x", [])["title"] == _good["title"] and _seq["calls"] == ["gemini-9-flash"] * 2)
+_edu.requests.post = _mk_post({"gemini-9-flash": [503], "gemini-8-flash": [200]})
+_seq["calls"].clear(); _saved_kv.clear()
+_r = _edu.generate("x", [])
+check("۵۰۳ پایدار: مدل جایگزین (غیر lite) جواب می‌دهد و ذخیره می‌شود",
+      _r is not None and _seq["calls"][:3] == ["gemini-9-flash"] * 3 and _seq["calls"][-1] == "gemini-8-flash"
+      and _saved_kv.get("gemini_model") == "gemini-8-flash" and "gemini-8-flash-lite" not in _seq["calls"])
+_edu.requests.post = _mk_post({"gemini-9-flash": [503], "gemini-8-flash": [503]})
+check("همه ۵۰۳: None بدون استثنا", _edu.generate("x", []) is None)
+_edu.requests.post = _mk_post({"gemini-9-flash": [404]})
+_seq["calls"].clear()
+check("۴۰۴: بدون تلاش مجدد/جایگزین، None", _edu.generate("x", []) is None and _seq["calls"] == ["gemini-9-flash"])
+# سقف زمانی: حتی اگر هر درخواست آویزان بماند، کل کار از MAX_TOTAL_SECONDS فراتر نمی‌رود
+import time as _time
+_clock = {"t": 0.0}
+_real_mono = _edu.time.monotonic
+_edu.time.monotonic = lambda: _clock["t"]
+_edu._sleep = lambda s: _clock.__setitem__("t", _clock["t"] + s)
+
+
+def _slow_post(url, json=None, params=None, timeout=None):
+    _clock["t"] += timeout
+    return _Resp(503)
+
+
+_edu.requests.post = _slow_post
+_edu.generate("x", [])
+check("سقف کل زمان ساخت پست رعایت می‌شود", _clock["t"] <= _edu.MAX_TOTAL_SECONDS + _edu.CALL_TIMEOUT)
+_edu.time.monotonic = _real_mono
+_edu._sleep = lambda s: None
+_edu.requests.post, _edu.requests.get = _orig_post, _orig_get
+
+# ── fallback مدل‌های رایگان OpenRouter ──
+import json as _json
+_edu.OPENROUTER_API_KEY = "or-test"
+_edu.OPENROUTER_MAX_MODELS = 3
+_edu.EDU_MAX_OUTPUT_TOKENS = 700
+_orig_or_post, _orig_or_get = _edu.requests.post, _edu.requests.get
+_orig_alternatives = _edu._alternatives
+
+# فقط مدل‌های :free یا با قیمت صفر انتخاب شوند
+_edu.requests.get = lambda url, params=None, timeout=None: _Resp(200, {"data": [
     {"id": "vendor/paid-model", "pricing": {"prompt": "0.000001", "completion": "0.000002"}},
     {"id": "vendor/free-model:free", "pricing": {"prompt": "0", "completion": "0"}},
     {"id": "vendor/vision-free:free", "pricing": {"prompt": "0", "completion": "0"}},
     {"id": "vendor/zero-price", "pricing": {"prompt": "0", "completion": "0"}},
 ]})
-_picked = ai_post._pick_free_models()
-check("ai_post: مدل پولی انتخاب نمی‌شود",
+_edu.OPENROUTER_MODELS = []
+_picked = _edu._pick_free_models()
+check("edu: OpenRouter فقط مدل رایگان",
       all("paid" not in m for m in _picked) and "vendor/free-model:free" in _picked)
-check("ai_post: مدل تصویری حذف می‌شود", all("vision" not in m for m in _picked))
-ai_post.requests.get = _orig_get
+check("edu: مدل تصویری OpenRouter حذف می‌شود", all("vision" not in m for m in _picked))
+_edu.requests.get = _orig_or_get
 
-# Gemini موفق → هیچ درخواستی به OpenRouter نمی‌رود
+# Gemini 503 → اولین مدل رایگان OpenRouter جواب می‌دهد
+_edu.OPENROUTER_MODELS = ["vendor/free-model:free"]
+_edu._alternatives = lambda model, limit=2: []
 _or_calls = []
 
 
-def _fake_gemini_ok(url, **kw):
-    if "openrouter" in str(url):
-        _or_calls.append(url)
-    return _Resp(200, {"candidates": [{"content": {"parts": [{"text": "متن آموزشی مفید. " * 12}]}}]})
-
-
-ai_post.requests.post = _fake_gemini_ok
-_store.pop(ai_post.STATE_KEY, None)
-_posted.clear()
-check("ai_post: Gemini اول موفق می‌شود", ai_post.maybe_publish(force=True) is True)
-check("ai_post: provider ثبت شد",
-      str(_store[ai_post.STATE_KEY].get("last_provider", "")).startswith("gemini"))
-check("ai_post: موضوع به بعدی می‌رود",
-      _store[ai_post.STATE_KEY].get("topic_index") == 1)
-check("ai_post: OpenRouter صدا زده نشد", not _or_calls)
-check("ai_post: فقط یک پست متنی ارسال شد", len(_posted) == 1 and _posted[0][0] == "@test_channel")
-
-# Gemini خطای 503 → مدل رایگان OpenRouter
-_openrouter_calls = []
-
-
-def _fake_gemini_503_openrouter_ok(url, **kw):
+def _fallback_post(url, headers=None, json=None, params=None, timeout=None):
     if "generativelanguage" in str(url):
-        return _Resp(503, {"error": {"message": "model overloaded"}})
-    _openrouter_calls.append(url)
-    return _Resp(200, {"choices": [{"message": {"content": "متن جایگزین آموزشی. " * 12}}]})
+        return _Resp(503)
+    _or_calls.append((str(url), json))
+    return _Resp(200, {"choices": [{"message": {"content": _json.dumps(_good)}}]})
 
 
-ai_post.requests.post = _fake_gemini_503_openrouter_ok
-_posted.clear()
-check("ai_post: با 503 به OpenRouter می‌رود", ai_post.maybe_publish(force=True) is True)
-check("ai_post: provider برابر openrouter است",
-      _store[ai_post.STATE_KEY].get("last_provider") == "openrouter")
-check("ai_post: درخواست OpenRouter واقعاً زده شد", bool(_openrouter_calls))
-check("ai_post: پست جایگزین ارسال شد", len(_posted) == 1)
+_edu.requests.post = _fallback_post
+_result = _edu.generate("x", [])
+check("edu: با ۵۰۳ از OpenRouter جواب می‌گیرد",
+      isinstance(_result, dict) and _result.get("title") == _good["title"])
+check("edu: فقط مدل رایگان OpenRouter صدا زده شد",
+      bool(_or_calls)
+      and _or_calls[0][1].get("model") == "vendor/free-model:free"
+      and "paid" not in str(_or_calls[0][1].get("model")))
+check("edu: سقف توکن fallback کم است", _or_calls[0][1].get("max_tokens") == 700)
 
-# همهٔ مدل‌ها خطا → پست ارسال نمی‌شود و خطا در state می‌ماند
-ai_post.requests.post = lambda url, **kw: _Resp(503, {})
-_posted.clear()
-check("ai_post: وقتی همه خطا می‌دهند پستی نمی‌رود",
-      ai_post.maybe_publish(force=True) is False)
-check("ai_post: خطا در state ثبت می‌شود",
-      _store[ai_post.STATE_KEY].get("last_error") == "generation_failed")
-check("ai_post: زمان تلاش ثبت می‌شود",
-      bool(_store[ai_post.STATE_KEY].get("last_attempt_at")))
-check("ai_post: هیچ پیامی ارسال نشد", not _posted)
+# هر دو منبع خطا → None (بدون استثنا)
+_edu.requests.post = lambda url, **kw: _Resp(503)
+check("edu: وقتی هر دو منبع خطا دهند None برمی‌گردد", _edu.generate("x", []) is None)
+
+# پاک‌سازی
+_edu.requests.post, _edu.requests.get = _orig_or_post, _orig_or_get
+_edu._alternatives = _orig_alternatives
+_edu.OPENROUTER_API_KEY = ""
+_edu.OPENROUTER_MODELS = []
+_edu.EDU_MAX_OUTPUT_TOKENS = 800
+
+# جریان کامل با Gemini و تلگرام جعلی
+import json as _json
+_kvstore = {}
+_edu.cloudflare_kv.get = lambda k, d=None: _kvstore.get(k, d)
+_edu.cloudflare_kv.put = lambda k, v: _kvstore.__setitem__(k, _json.loads(_json.dumps(v))) or True
+_edu.GEMINI_API_KEY = "k"; _edu.CHANNEL_ID = "@c"; _edu.EDU_ENABLED = True
+_edu.gemini_budget.can_call = lambda: True
+_edu.gemini_budget.mark_called = lambda: None
+_tg = []
+_edu.send_message = lambda chat, text, **kw: (_tg.append(text) or {"ok": True})
+_bl = []
+_edu.bale.send_text = lambda t: (_bl.append(t) or True)
+_edu.bale.reset = lambda: None
+_gem = {"out": dict(_good), "calls": 0}
+_edu.generate = lambda desc, recent: (_gem.__setitem__("calls", _gem["calls"] + 1) or _gem["out"])
+_edu.storage.load_published = lambda: []
+_edu.storage.save_published = lambda items: _kvstore.__setitem__("published", items)
+_T = _dt.datetime(2026, 10, 27, 5, 17)
+_edu.maybe_post({}, _T)
+check("پست در تلگرام و بله منتشر شد", len(_tg) == 1 and len(_bl) == 1 and _kvstore["edu_state"]["last_slot"])
+_edu.maybe_post({}, _T + _dt.timedelta(hours=1))
+check("اجرای دوم همان اسلات: پست تکراری نه", len(_tg) == 1 and _gem["calls"] == 1)
+_gem["out"] = {**_good, "title": "عنوان کاملاً متفاوت دربارهٔ تولید تصویر با هوش مصنوعی"}
+_edu.maybe_post({}, _T + _dt.timedelta(hours=2))
+check("اسلات بعدی: پست دوم", len(_tg) == 2)
+_n = len(_tg)
+_edu.maybe_post({"paused": True}, _T + _dt.timedelta(hours=4))
+_edu.maybe_post({"edu_enabled": False}, _T + _dt.timedelta(hours=4))
+check("pause و /edu off پست نمی‌سازند", len(_tg) == _n)
+_gem["out"] = None
+_edu.maybe_post({}, _T + _dt.timedelta(hours=4))
+_edu.maybe_post({}, _T + _dt.timedelta(hours=5))
+_c1 = _gem["calls"]
+_edu.maybe_post({}, _T + _dt.timedelta(hours=5, minutes=10))
+check("شکست Gemini: حداکثر ۲ تلاش در اسلات و چیزی منتشر نمی‌شود", len(_tg) == _n and _gem["calls"] == _c1)
+_gem["out"] = {**_good, "title": "ترفند چهارم برای نوشتن خلاصهٔ جلسه با هوش مصنوعی"}
+_edu.maybe_post({}, _T + _dt.timedelta(hours=6))
+check("اسلات بعدی بعد از شکست دوباره کار می‌کند", len(_tg) == _n + 1)
+check("عنوان‌های اخیر نگه‌داری می‌شوند", len(_kvstore["edu_state"]["recent"]) == 3)
+_edu.send_message = lambda chat, text, **kw: {"ok": False}
+_gem["out"] = {**_good, "title": "موضوعی کاملاً تازه دربارهٔ برنامه‌ریزی روزانه با چت‌بات"}
+_nb = len(_bl)
+_edu.maybe_post({}, _T + _dt.timedelta(hours=8))
+check("اگر تلگرام نرود: چیزی ثبت یا به بله ارسال نمی‌شود", len(_bl) == _nb and _kvstore["edu_state"]["last_slot"] != _edu.current_slot(_T + _dt.timedelta(hours=8))[0])
+_edu.generate = lambda desc, recent: (_ for _ in ()).throw(RuntimeError("boom"))
+check("استثنای غیرمنتظره بیرون نمی‌آید", _edu.maybe_post({}, _T + _dt.timedelta(hours=10)) == {})
 
 print(f"\n{_passed} تست با موفقیت گذشت ✅")
