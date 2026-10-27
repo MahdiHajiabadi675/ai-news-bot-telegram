@@ -34,6 +34,12 @@ GEMINI_MIN_INTERVAL_MIN = _int_env("GEMINI_MIN_INTERVAL_MIN", 55)
 GEMINI_MAX_CALLS_PER_DAY = _int_env("GEMINI_MAX_CALLS_PER_DAY", 24)
 GEMINI_BATCH_SIZE = _int_env("GEMINI_BATCH_SIZE", 10)
 
+# پست آموزشی هوش مصنوعی با Gemini (src/edu_post.py) — هر EDU_EVERY_HOURS ساعت یک پست
+EDU_ENABLED = os.getenv("EDU_POST_ENABLED", "true").strip().lower() not in ("0", "false", "no", "off")
+EDU_EVERY_HOURS = _int_env("EDU_EVERY_HOURS", 2)
+EDU_MAX_TRIES_PER_SLOT = _int_env("EDU_MAX_TRIES_PER_SLOT", 2)
+EDU_RECENT_KEEP = _int_env("EDU_RECENT_KEEP", 40)
+
 # Paths
 BASE_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = BASE_DIR / "data"

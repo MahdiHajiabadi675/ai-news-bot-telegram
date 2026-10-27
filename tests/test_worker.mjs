@@ -277,4 +277,13 @@ console.log('Cron dispatch:');
     && calls2[0].body.inputs.trigger === 'cron');
 }
 
+console.log('Edu toggle:');
+set('state', { paused: false });
+await send(msg('/edu off'));
+check('/edu off در state ذخیره می‌شود', get('state').edu_enabled === false);
+await send(msg('/edu'));
+check('/edu وضعیت خاموش را نشان می‌دهد', last('sendMessage').body.text.includes('خاموش'));
+await send(msg('/edu on'));
+check('/edu on دوباره روشن می‌کند', get('state').edu_enabled === true);
+
 console.log(`\n${passed} تست Worker با موفقیت گذشت ✅`);

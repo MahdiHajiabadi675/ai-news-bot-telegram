@@ -26,6 +26,7 @@ from src import source_trust
 from src.fast_track import process_fast_track
 from src.bot import poll_updates, _send_review, notify_admin_new, send_message
 from src.publisher import publish_approved
+from src import edu_post
 from src import translator
 
 
@@ -266,6 +267,9 @@ def run(force=False):
     state = set_stage(state, "publishing")
     storage.save_state(state)
     state = publish_approved(state, approved_to_publish)
+
+    # پست آموزشی هر ۲ ساعت (Gemini) — هیچ خطایی از آن بیرون نمی‌آید
+    state = edu_post.maybe_post(state)
 
     # 5. Save state
     state = set_stage(state, "waiting")

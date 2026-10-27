@@ -694,4 +694,89 @@ check("auto: auto_publish:on", bot._parse_auto_choice("auto_publish:on") is True
 check("auto: bare /auto -> menu", bot._parse_auto_choice("/auto") is None)
 check("auto: اعداد فارسی منو", bot._fa_num(123) == "۱۲۳")
 
+# ───────────── پست آموزشی Gemini ─────────────
+print("Edu post:")
+import datetime as _dt
+from src import edu_post as _edu
+
+_good = {"title": "چطور با یک پرامپت ایمیل کاری بهتر بنویسی", "hook": "ایمیل‌های کاری معمولاً طولانی و مبهم‌اند؛ با این روش در چند ثانیه شفاف می‌شوند.",
+         "steps": ["موضوع و مخاطب ایمیل را بنویس", "لحن دلخواه را مشخص کن", "از مدل بخواه دو نسخه بدهد"],
+         "prompt": "برای [مخاطب] یک ایمیل کوتاه و محترمانه دربارهٔ [موضوع] بنویس. لحن: [رسمی/دوستانه].",
+         "tip": "اگر نتیجه کلی بود، یک مثال از لحن خودت بده.", "hashtags": ["ایمیل", "بهره‌وری"]}
+_v = _edu.validate(dict(_good), [])
+check("خروجی خوب معتبر است", _v is not None and len(_v["steps"]) == 3)
+check("بدون عنوان/هوک رد می‌شود", _edu.validate({**_good, "title": ""}, []) is None and _edu.validate({**_good, "hook": ""}, []) is None)
+check("بدون مرحله و بدون پرامپت رد می‌شود", _edu.validate({**_good, "steps": ["x"], "prompt": ""}, []) is None)
+check("متن غیرفارسی رد می‌شود", _edu.validate({**_good, "title": "How to write emails", "hook": "Short english text only here"}, []) is None)
+check("عنوان تکراری/مشابه رد می‌شود", _edu.validate(dict(_good), [_good["title"]]) is None)
+check("غیر dict رد می‌شود", _edu.validate(None, []) is None and _edu.validate("x", []) is None)
+_dirty = _edu.validate({**_good, "hook": "سلام **دنیا** https://evil.example/x ببین `کد`"}, [])
+check("لینک و مارک‌داون پاک می‌شود", "http" not in _dirty["hook"] and "*" not in _dirty["hook"] and "`" not in _dirty["hook"])
+_html = _edu.format_html(_v, "پرامپت_آماده")
+check("قالب HTML: عنوان، pre، هشتگ، برچسب AI", "<b>" in _html and "<pre>" in _html and "#پرامپت_آماده" in _html and "تولیدشده با هوش مصنوعی" in _html)
+_xss = _edu.validate({**_good, "prompt": "<script>alert(1)</script> متن [x] و کافی برای عبور از حداقل طول پرامپت اینجا"}, [])
+check("HTML خطرناک escape می‌شود", "<script>" not in _edu.format_html(_xss, "t") and "&lt;script&gt;" in _edu.format_html(_xss, "t"))
+check("طول پست زیر سقف تلگرام", len(_edu.format_html({**_v, "prompt": "ا" * 750}, "t")) <= 4000)
+check("نسخهٔ متنی بله بدون تگ HTML", "<" not in _edu.format_plain(_v, "t") and "پرامپت آماده" in _edu.format_plain(_v, "t"))
+check("JSON داخل بلاک کد استخراج می‌شود", _edu._extract_json('```json\n{"a": 1}\n```') == {"a": 1})
+check("متن بدون JSON → None", _edu._extract_json("sorry I cannot") is None)
+
+# اسلات‌ها: ۱۲ در روز، چرخش ۱۲ دسته
+_t0 = _dt.datetime(2026, 10, 27, 20, 17)  # = 23:47 تهران
+_s = {_edu.current_slot(_t0 + _dt.timedelta(hours=i))[0] for i in range(24)}
+check("در ۲۴ ساعت دقیقاً ۱۲ اسلات داریم", len(_s) == 12 or len(_s) == 13)
+_a = _edu.current_slot(_dt.datetime(2026, 10, 27, 5, 17))  # 08:47 تهران
+_b = _edu.current_slot(_dt.datetime(2026, 10, 27, 6, 17))  # 09:47 تهران (همان اسلات)
+_c = _edu.current_slot(_dt.datetime(2026, 10, 27, 7, 17))  # 10:47 تهران (اسلات بعد)
+check("دو اجرای یک اسلات = یک شناسه", _a[0] == _b[0] and _a[0] != _c[0])
+_cats = {_edu.pick_category(_edu.current_slot(_dt.datetime(2026, 10, 27, 0, 17) + _dt.timedelta(hours=2 * i))[1])[0] for i in range(12)}
+check("۱۲ اسلات پشت‌سرهم همهٔ ۱۲ دسته را می‌پوشاند", len(_cats) == 12)
+
+# جریان کامل با Gemini و تلگرام جعلی
+import json as _json
+_kvstore = {}
+_edu.cloudflare_kv.get = lambda k, d=None: _kvstore.get(k, d)
+_edu.cloudflare_kv.put = lambda k, v: _kvstore.__setitem__(k, _json.loads(_json.dumps(v))) or True
+_edu.GEMINI_API_KEY = "k"; _edu.CHANNEL_ID = "@c"; _edu.EDU_ENABLED = True
+_edu.gemini_budget.can_call = lambda: True
+_edu.gemini_budget.mark_called = lambda: None
+_tg = []
+_edu.send_message = lambda chat, text, **kw: (_tg.append(text) or {"ok": True})
+_bl = []
+_edu.bale.send_text = lambda t: (_bl.append(t) or True)
+_edu.bale.reset = lambda: None
+_gem = {"out": dict(_good), "calls": 0}
+_edu.generate = lambda desc, recent: (_gem.__setitem__("calls", _gem["calls"] + 1) or _gem["out"])
+_edu.storage.load_published = lambda: []
+_edu.storage.save_published = lambda items: _kvstore.__setitem__("published", items)
+_T = _dt.datetime(2026, 10, 27, 5, 17)
+_edu.maybe_post({}, _T)
+check("پست در تلگرام و بله منتشر شد", len(_tg) == 1 and len(_bl) == 1 and _kvstore["edu_state"]["last_slot"])
+_edu.maybe_post({}, _T + _dt.timedelta(hours=1))
+check("اجرای دوم همان اسلات: پست تکراری نه", len(_tg) == 1 and _gem["calls"] == 1)
+_gem["out"] = {**_good, "title": "عنوان کاملاً متفاوت دربارهٔ تولید تصویر با هوش مصنوعی"}
+_edu.maybe_post({}, _T + _dt.timedelta(hours=2))
+check("اسلات بعدی: پست دوم", len(_tg) == 2)
+_n = len(_tg)
+_edu.maybe_post({"paused": True}, _T + _dt.timedelta(hours=4))
+_edu.maybe_post({"edu_enabled": False}, _T + _dt.timedelta(hours=4))
+check("pause و /edu off پست نمی‌سازند", len(_tg) == _n)
+_gem["out"] = None
+_edu.maybe_post({}, _T + _dt.timedelta(hours=4))
+_edu.maybe_post({}, _T + _dt.timedelta(hours=5))
+_c1 = _gem["calls"]
+_edu.maybe_post({}, _T + _dt.timedelta(hours=5, minutes=10))
+check("شکست Gemini: حداکثر ۲ تلاش در اسلات و چیزی منتشر نمی‌شود", len(_tg) == _n and _gem["calls"] == _c1)
+_gem["out"] = {**_good, "title": "ترفند چهارم برای نوشتن خلاصهٔ جلسه با هوش مصنوعی"}
+_edu.maybe_post({}, _T + _dt.timedelta(hours=6))
+check("اسلات بعدی بعد از شکست دوباره کار می‌کند", len(_tg) == _n + 1)
+check("عنوان‌های اخیر نگه‌داری می‌شوند", len(_kvstore["edu_state"]["recent"]) == 3)
+_edu.send_message = lambda chat, text, **kw: {"ok": False}
+_gem["out"] = {**_good, "title": "موضوعی کاملاً تازه دربارهٔ برنامه‌ریزی روزانه با چت‌بات"}
+_nb = len(_bl)
+_edu.maybe_post({}, _T + _dt.timedelta(hours=8))
+check("اگر تلگرام نرود: چیزی ثبت یا به بله ارسال نمی‌شود", len(_bl) == _nb and _kvstore["edu_state"]["last_slot"] != _edu.current_slot(_T + _dt.timedelta(hours=8))[0])
+_edu.generate = lambda desc, recent: (_ for _ in ()).throw(RuntimeError("boom"))
+check("استثنای غیرمنتظره بیرون نمی‌آید", _edu.maybe_post({}, _T + _dt.timedelta(hours=10)) == {})
+
 print(f"\n{_passed} تست با موفقیت گذشت ✅")
