@@ -1,9 +1,10 @@
 """
-پست آموزشی هوش مصنوعی — فقط متن، با بازهٔ طولانی (پیش‌فرض ۲۴ ساعت)
+پست آموزشی هوش مصنوعی — فقط متن؛ ساخت هر ۶ ساعت، انتشار در ساعت‌های پربازدید
 
 چطور کار می‌کند:
-  • پایپ‌لاین هر ساعت اجرا می‌شود؛ روز به «اسلات‌های EDU_EVERY_HOURS ساعته» (به وقت نمایش)
-    تقسیم شده است. اولین اجرایی که در یک اسلات جدید می‌رسد، یک پست می‌سازد و منتشر می‌کند.
+  • ساخت و انتشار جداست: روز به «اسلات‌های EDU_EVERY_HOURS ساعته» (پیش‌فرض ۶ → ۴ پست) تقسیم
+    شده و اولین اجرا در هر اسلات جدید یک پست می‌سازد و در صف می‌گذارد؛ انتشار فقط در
+    ساعت‌های پربازدید EDU_PUBLISH_HOURS (پیش‌فرض ۱۹ تا ۲۲ به وقت ایران، هر ساعت یک پست) انجام می‌شود.
     اگر ساخت شکست بخورد (Gemini خطا داد / خروجی بی‌کیفیت بود)، اجرای بعدی (ساعت بعد، همان
     اسلات) یک‌بار دیگر تلاش می‌کند؛ بعد از EDU_MAX_TRIES_PER_SLOT شکست آن اسلات رد می‌شود.
     پست ناقص هرگز منتشر نمی‌شود.
@@ -32,7 +33,8 @@ from . import bale, cloudflare_kv, gemini_budget, storage
 from .bot import send_message
 from .config import (
     CHANNEL_ID, DISPLAY_TZ_OFFSET_MIN, EDU_ENABLED, EDU_EVERY_HOURS,
-    EDU_MAX_OUTPUT_TOKENS, EDU_MAX_TRIES_PER_SLOT, EDU_RECENT_KEEP, EDU_RECENT_PROMPT, EDU_RETRY_GAP_MIN,
+    EDU_MAX_OUTPUT_TOKENS, EDU_MAX_TRIES_PER_SLOT, EDU_PUBLISH_HOURS, EDU_QUEUE_MAX,
+    EDU_RECENT_KEEP, EDU_RECENT_PROMPT, EDU_RETRY_GAP_MIN,
     GEMINI_API_KEY, OPENROUTER_API_KEY, OPENROUTER_APP_NAME, OPENROUTER_MAX_MODELS,
     OPENROUTER_MODELS, OPENROUTER_SITE_URL,
 )
@@ -223,7 +225,7 @@ def format_html(post: dict, category_tag: str) -> str:
     div = "─" * 20
 
     def build(prompt_text):
-        parts = [f"🎓 <b>{e(post['title'])}</b>", div, "", e(post["hook"])]
+        parts = [f"🎓 <b>آموزش | {e(post['title'])}</b>", div, "", e(post["hook"])]
         if post["steps"]:
             parts += ["", "📌 <b>چطور؟</b>"]
             parts += [f"{_NUMS[i]}. {e(st)}" for i, st in enumerate(post["steps"])]
@@ -243,7 +245,7 @@ def format_html(post: dict, category_tag: str) -> str:
 
 def format_plain(post: dict, category_tag: str) -> str:
     """نسخهٔ متن ساده برای بله"""
-    lines = [f"🎓 {post['title']}", "", post["hook"]]
+    lines = [f"🎓 آموزش | {post['title']}", "", post["hook"]]
     if post["steps"]:
         lines += ["", "📌 چطور؟"] + [f"{_NUMS[i]}. {s}" for i, s in enumerate(post["steps"])]
     if post["prompt"]:
@@ -546,35 +548,55 @@ def generate(category_desc: str, recent_titles: list, accept=None, use_gemini: b
 
 def maybe_post(state: dict, now=None, force: bool = False) -> dict:
     """
-    اگر وقتش است یک پست آموزشی بساز و منتشر کن. state را برمی‌گرداند (تغییر نمی‌دهد).
-    force=True (اجرای دستی از Actions): فاصلهٔ بین تلاش‌ها نادیده گرفته می‌شود و شکست
-    از تلاش‌های اسلات کم نمی‌کند؛ ولی اگر پست این اسلات قبلاً رفته باشد، تکرار نمی‌شود.
+    هر اجرای ساعتی دو کار می‌کند (به‌ترتیب، هر دو بی‌خطر):
+      ۱) ساخت: اگر اسلات ۶ ساعته جدید است، یک پست با مدل بساز و در «صف انتشار» بگذار.
+      ۲) انتشار: اگر ساعت (وقت ایران) جزو EDU_PUBLISH_HOURS است و در این ساعت پستی نرفته،
+         اولین پست صف را منتشر کن.
+    state را برمی‌گرداند (تغییر نمی‌دهد).
+    force=True (اجرای دستی): فقط ساخت، با نادیده‌گرفتن فاصلهٔ تلاش‌ها و بدون سوزاندن تلاش؛
+    انتشار خارج از ساعت‌های تعیین‌شده هرگز انجام نمی‌شود.
     """
     try:
-        _run(state, now, force)
+        if not _enabled(state):
+            return state
+        now_utc = now or datetime.utcnow()
+        est = cloudflare_kv.get(KEY, {})
+        est = est if isinstance(est, dict) else {}
+        try:
+            _generate(est, now_utc, force)
+        except Exception as e:  # noqa: BLE001
+            print(f"[EDU] generate error: {type(e).__name__}: {e}")
+        try:
+            _publish_due(est, now_utc)
+        except Exception as e:  # noqa: BLE001
+            print(f"[EDU] publish error: {type(e).__name__}: {e}")
     except Exception as e:  # noqa: BLE001
         print(f"[EDU] unexpected error: {type(e).__name__}: {e}")
     return state
 
 
-def _run(state, now, force=False):
+def _enabled(state) -> bool:
     if not EDU_ENABLED or state.get("edu_enabled") is False:
-        return
+        return False
     if state.get("paused"):
-        return
-    if not CHANNEL_ID:
-        return
+        return False
+    return bool(CHANNEL_ID)
 
-    slot, ordinal = current_slot(now)
-    est = cloudflare_kv.get(KEY, {})
-    est = est if isinstance(est, dict) else {}
+
+def _generate(est, now_utc, force=False):
+    """ساخت یک پست برای اسلات فعلی و گذاشتن در صف (نه انتشار)"""
+    slot, ordinal = current_slot(now_utc)
+    queue = est.get("queue") if isinstance(est.get("queue"), list) else []
     if est.get("last_slot") == slot:
         return
+    if len(queue) >= max(1, EDU_QUEUE_MAX):
+        print(f"[EDU] Queue full ({len(queue)}) — not generating")
+        return
+
     same_slot = est.get("tries_slot") == slot
     tries = (est.get("tries") or 0) if same_slot else 0
     if tries >= EDU_MAX_TRIES_PER_SLOT:
         return
-    now_utc = now or datetime.utcnow()
     last_try = est.get("last_try_at") if same_slot else None
     if not force and tries and last_try:
         try:
@@ -585,47 +607,71 @@ def _run(state, now, force=False):
         except Exception:  # noqa: BLE001
             pass
 
-    def _count_try():
-        if force:
+    # Gemini فقط با کلید و سقف روزانهٔ مجاز؛ فاصلهٔ تلاش‌ها را خود پست آموزشی کنترل می‌کند
+    gemini_ok = bool(GEMINI_API_KEY) and gemini_budget.can_call(min_interval_min=0)
+    if not gemini_ok:
+        print("[EDU] Gemini not available" + ("" if GEMINI_API_KEY else " (no key)") + " — using OpenRouter only")
+        if not OPENROUTER_API_KEY:
             return
-        est.update({"tries_slot": slot, "tries": tries + 1, "last_try_at": now_utc.isoformat() + "Z"})
-        cloudflare_kv.put(KEY, est)
-
-    # Gemini فقط وقتی کلید دارد و بودجه‌اش اجازه می‌دهد؛ در غیر این صورت مستقیم OpenRouter
-    gemini_ok = bool(GEMINI_API_KEY) and gemini_budget.can_call()
-    if not gemini_ok and not OPENROUTER_API_KEY:
-        return
 
     tag, desc = pick_category(ordinal)
     recent = [r.get("title", "") for r in est.get("recent", []) if isinstance(r, dict)]
-
     raw = generate(desc, recent, accept=lambda r: _validate_logged(r, recent), use_gemini=gemini_ok)
     if gemini_ok and _RUN.get("gemini_calls"):
         gemini_budget.mark_called()
     post = validate(_unwrap(raw), recent) if raw is not None else None
 
     if post is None:
-        _count_try()
-        print(f"[EDU] No valid post for slot {slot} (try {tries + 1}/{EDU_MAX_TRIES_PER_SLOT}" + (", force: not counted)" if force else ")"))
+        if not force:
+            est.update({"tries_slot": slot, "tries": tries + 1, "last_try_at": now_utc.isoformat() + "Z"})
+            cloudflare_kv.put(KEY, est)
+        print(f"[EDU] No valid post for slot {slot} (try {tries + 1}/{EDU_MAX_TRIES_PER_SLOT}"
+              + (", force: not counted)" if force else ")"))
+        return
+
+    via = f"{_RUN.get('provider') or '?'}/{_RUN.get('model') or '?'}"
+    queue.append({"post": post, "tag": tag, "slot": slot, "via": via, "made_at": now_utc.isoformat() + "Z"})
+    est["queue"] = queue
+    est["last_slot"] = slot
+    est["tries_slot"], est["tries"], est["last_try_at"] = slot, 0, None
+    est["recent"] = (est.get("recent", []) + [{"title": post["title"], "tag": tag, "via": via,
+                                               "at": now_utc.isoformat() + "Z"}])[-EDU_RECENT_KEEP:]
+    cloudflare_kv.put(KEY, est)
+    print(f"[EDU] Generated: {post['title'][:50]} ({tag}) via {via} — queue={len(queue)}")
+
+
+def _publish_due(est, now_utc):
+    """اگر ساعت انتشار است و در این ساعت چیزی نرفته، اولین پست صف را منتشر کن"""
+    queue = est.get("queue") if isinstance(est.get("queue"), list) else []
+    loc = local_now(now_utc)
+    if loc.hour not in EDU_PUBLISH_HOURS or not queue:
+        return
+    key = f"{loc.date().isoformat()}#{loc.hour}"
+    if est.get("last_pub_key") == key:
+        return
+
+    item = queue[0]
+    post, tag = item.get("post"), item.get("tag", "")
+    if not isinstance(post, dict):
+        est["queue"] = queue[1:]  # آیتم خراب
+        cloudflare_kv.put(KEY, est)
         return
 
     result = send_message(CHANNEL_ID, format_html(post, tag))
     if not (result and result.get("ok")):
-        _count_try()
-        print(f"[EDU] Telegram send failed: {result}")
+        print(f"[EDU] Telegram send failed: {result} — stays in queue")
         return
 
-    est["last_slot"] = slot
-    est["tries_slot"], est["tries"], est["last_try_at"] = slot, 0, None
-    est["recent"] = (est.get("recent", []) + [{"title": post["title"], "tag": tag, "via": f"{_RUN.get('provider', '')}/{_RUN.get('model', '')}", "at": datetime.utcnow().isoformat() + "Z"}])[-EDU_RECENT_KEEP:]
+    est["queue"] = queue[1:]
+    est["last_pub_key"] = key
     cloudflare_kv.put(KEY, est)
-    print(f"[EDU] Published: {post['title'][:50]} ({tag}) via {_RUN.get('provider') or '?'}/{_RUN.get('model') or '?'}")
+    print(f"[EDU] Published: {post['title'][:50]} ({tag}) at {loc.hour}:00 — left in queue: {len(est['queue'])}")
 
     # لاگ انتشار (برای /stats) — خطا نباید چیزی را خراب کند
     try:
         log = storage.load_published()
-        log.append({"id": f"edu-{slot}", "title_fa": post["title"], "source": "آموزش AI", "category": "edu",
-                    "published": True, "published_at": datetime.utcnow().isoformat() + "Z"})
+        log.append({"id": f"edu-{item.get('slot', key)}", "title_fa": post["title"], "source": "آموزش AI",
+                    "category": "edu", "published": True, "published_at": datetime.utcnow().isoformat() + "Z"})
         storage.save_published(log)
     except Exception as e:  # noqa: BLE001
         print(f"[EDU] log failed: {type(e).__name__}")

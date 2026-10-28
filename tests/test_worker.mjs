@@ -283,6 +283,9 @@ await send(msg('/edu off'));
 check('/edu off در state ذخیره می‌شود', get('state').edu_enabled === false);
 await send(msg('/edu'));
 check('/edu وضعیت خاموش را نشان می‌دهد', last('sendMessage').body.text.includes('خاموش'));
+set('edu_state', { queue: [{ post: { title: 'x' } }, { post: { title: 'y' } }], recent: [] });
+await send(msg('/edu'));
+check('/edu تعداد صف انتشار را نشان می‌دهد', last('sendMessage').body.text.includes('در صف انتشار') && last('sendMessage').body.text.includes('2'));
 await send(msg('/edu on'));
 check('/edu on دوباره روشن می‌کند', get('state').edu_enabled === true);
 

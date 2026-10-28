@@ -703,9 +703,11 @@ from src import edu_post as _edu
 _edu.OPENROUTER_API_KEY = ""
 # پیش‌فرض باید طولانی باشد؛ برای آزمودن ریاضیات اسلات، بعداً موقتاً ۲ می‌کنیم
 from src import config as _cfg
-check("edu: بازهٔ پیش‌فرض طولانی است (۲۴ ساعت)", _cfg.EDU_EVERY_HOURS == 24)
+check("edu: ساخت هر ۶ ساعت و انتشار ۱۹ تا ۲۲", _cfg.EDU_EVERY_HOURS == 6 and _cfg.EDU_PUBLISH_HOURS == (19, 20, 21, 22))
+_DEFAULT_PUB_HOURS = _cfg.EDU_PUBLISH_HOURS
 check("edu: سقف توکن پیش‌فرض کم است", _cfg.EDU_MAX_OUTPUT_TOKENS <= 1000)
 _edu.EDU_EVERY_HOURS = 2
+_edu.EDU_PUBLISH_HOURS = tuple(range(24))  # تست‌های جریان ساده: انتشار هر ساعتی مجاز؛ زمان‌بندی واقعی پایین‌تر تست می‌شود
 
 _good = {"title": "چطور با یک پرامپت ایمیل کاری بهتر بنویسی", "hook": "ایمیل‌های کاری معمولاً طولانی و مبهم‌اند؛ با این روش در چند ثانیه شفاف می‌شوند.",
          "steps": ["موضوع و مخاطب ایمیل را بنویس", "لحن دلخواه را مشخص کن", "از مدل بخواه دو نسخه بدهد"],
@@ -942,7 +944,7 @@ _edu.maybe_post({}, _dt.datetime(2026, 10, 27, 5, 17))
 check("بدون GEMINI_API_KEY: پست از OpenRouter منتشر می‌شود", len(_sent2) == 1 and _s["g"] == 0
       and _k2["edu_state"]["recent"][-1]["via"] == "openrouter/a/m1:free")
 _edu.GEMINI_API_KEY = "k"
-_edu.gemini_budget.can_call = lambda: False
+_edu.gemini_budget.can_call = lambda **kw: False
 _k2.clear(); _sent2.clear()
 _edu.maybe_post({}, _dt.datetime(2026, 10, 27, 5, 17))
 check("بودجهٔ Gemini تمام شده: باز هم از OpenRouter پست می‌شود", len(_sent2) == 1 and _s["g"] == 0)
@@ -1000,7 +1002,7 @@ _kvstore = {}
 _edu.cloudflare_kv.get = lambda k, d=None: _kvstore.get(k, d)
 _edu.cloudflare_kv.put = lambda k, v: _kvstore.__setitem__(k, _json.loads(_json.dumps(v))) or True
 _edu.GEMINI_API_KEY = "k"; _edu.CHANNEL_ID = "@c"; _edu.EDU_ENABLED = True
-_edu.gemini_budget.can_call = lambda: True
+_edu.gemini_budget.can_call = lambda **kw: True
 _edu.gemini_budget.mark_called = lambda: None
 _tg = []
 _edu.send_message = lambda chat, text, **kw: (_tg.append(text) or {"ok": True})
@@ -1037,7 +1039,7 @@ _edu.send_message = lambda chat, text, **kw: {"ok": False}
 _gem["out"] = {**_good, "title": "موضوعی کاملاً تازه دربارهٔ برنامه‌ریزی روزانه با چت‌بات"}
 _nb = len(_bl)
 _edu.maybe_post({}, _T + _dt.timedelta(hours=8))
-check("اگر تلگرام نرود: چیزی ثبت یا به بله ارسال نمی‌شود", len(_bl) == _nb and _kvstore["edu_state"]["last_slot"] != _edu.current_slot(_T + _dt.timedelta(hours=8))[0])
+check("اگر تلگرام نرود: به بله نمی‌رود، در صف می‌ماند و منتشرشده ثبت نمی‌شود", len(_bl) == _nb and len(_kvstore["edu_state"]["queue"]) >= 1)
 _edu.generate = lambda desc, recent, **kw: (_ for _ in ()).throw(RuntimeError("boom"))
 check("استثنای غیرمنتظره بیرون نمی‌آید", _edu.maybe_post({}, _T + _dt.timedelta(hours=10)) == {})
 
@@ -1048,7 +1050,7 @@ _kg = {}
 _edu.cloudflare_kv.get = lambda k, d=None: _kg.get(k, d)
 _edu.cloudflare_kv.put = lambda k, v: _kg.__setitem__(k, _json.loads(_json.dumps(v))) or True
 _edu.GEMINI_API_KEY = "k"; _edu.OPENROUTER_API_KEY = ""; _edu.CHANNEL_ID = "@c"; _edu.EDU_ENABLED = True
-_edu.gemini_budget.can_call = lambda: True
+_edu.gemini_budget.can_call = lambda **kw: True
 _edu.gemini_budget.mark_called = lambda: None
 _gn = {"n": 0}
 _edu.generate = lambda desc, recent, **kw: (_gn.__setitem__("n", _gn["n"] + 1) or None)
@@ -1062,5 +1064,104 @@ check("force فاصله را نادیده می‌گیرد ولی تلاش اسل
 _edu.maybe_post({}, _G + _dt.timedelta(minutes=61))
 check("بعد از فاصله تلاش بعدی انجام می‌شود", _gn["n"] == 3 and _kg["edu_state"]["tries"] == 2)
 check("پیش‌فرض تلاش در اسلات ≥ ۶ و فاصله ≥ ۵۰ دقیقه", _cfg.EDU_MAX_TRIES_PER_SLOT >= 6 and _cfg.EDU_RETRY_GAP_MIN >= 50)
+
+# ── ساخت هر ۶ ساعت، انتشار فقط ۱۹ تا ۲۲ (به وقت ایران) ──
+print("Edu schedule (generate 6h, publish 19-22):")
+_edu.EDU_EVERY_HOURS = 6
+_edu.EDU_PUBLISH_HOURS = _DEFAULT_PUB_HOURS
+_ks = {}
+_edu.cloudflare_kv.get = lambda k, d=None: _ks.get(k, d)
+_edu.cloudflare_kv.put = lambda k, v: _ks.__setitem__(k, _json.loads(_json.dumps(v))) or True
+_sent3, _bl3 = [], []
+_edu.send_message = lambda c, tx, **kw: (_sent3.append(tx) or {"ok": True})
+_edu.bale.send_text = lambda tx: (_bl3.append(tx) or True)
+_edu.storage.load_published = lambda: []
+_edu.storage.save_published = lambda items: None
+_edu.GEMINI_API_KEY = "k"; _edu.OPENROUTER_API_KEY = ""; _edu.CHANNEL_ID = "@c"; _edu.EDU_ENABLED = True
+_titles = ["ترفند اول برای نوشتن ایمیل با هوش مصنوعی", "اشتباه رایج دوم در پرامپت‌نویسی چت‌بات", "مفهوم سوم یعنی توکن در مدل‌های زبانی", "تولید چهارم تصویر با توضیح دقیق صحنه"]
+_gi = {"i": 0}
+
+
+def _gen_stub(desc, recent, **kw):
+    _gi["i"] += 1
+    return {**_good, "title": _titles[(_gi["i"] - 1) % 4]}
+
+
+_edu.generate = _gen_stub
+_edu._RUN.update(provider="stub", model="m", gemini_calls=0)
+
+
+def _tehran(h, m=47, day=28):  # ساعت محلی تهران → UTC naive
+    return _dt.datetime(2026, 10, day, h, m) - _dt.timedelta(minutes=210)
+
+
+# روز ۲۸ اکتبر: اجرای ساعتی از ۰۰:۴۷ تا ۲۳:۴۷
+for _h in range(24):
+    _edu.maybe_post({}, _tehran(_h))
+_pub_hours = []
+check("در یک روز دقیقاً ۴ پست ساخته شد (هر ۶ ساعت یکی) و ۴ پست منتشر شد", _gi["i"] == 4 and len(_sent3) == 4)
+check("همهٔ پست‌ها برچسب «آموزش» در تیتر دارند", all(x.splitlines()[0].startswith("🎓 <b>آموزش |") for x in _sent3))
+check("نسخهٔ بله هم همان ۴ پست را با برچسب دارد", len(_bl3) == 4 and all("آموزش |" in x.splitlines()[0] for x in _bl3))
+check("صف پس از انتشار خالی است", _ks["edu_state"]["queue"] == [])
+
+# زمان دقیق انتشار: بازسازی با روز تازه
+_ks.clear(); _sent3.clear(); _bl3.clear(); _gi["i"] = 0
+_when = []
+_orig_send = _edu.send_message
+_edu.send_message = lambda c, tx, **kw: (_when.append(_cur["h"]) or _sent3.append(tx) or {"ok": True})
+_cur = {"h": 0}
+for _h in range(24):
+    _cur["h"] = _h
+    _edu.maybe_post({}, _tehran(_h, day=29))
+check("انتشار فقط در ساعت‌های ۱۹، ۲۰، ۲۱ و ۲۲ است", _when == [19, 20, 21, 22])
+_edu.send_message = _orig_send
+
+# اجرای دوم در همان ساعت (cron دوبل / دستی) پست تکراری نمی‌سازد
+_ks.clear(); _sent3.clear(); _gi["i"] = 0
+_edu.send_message = lambda c, tx, **kw: (_sent3.append(tx) or {"ok": True})
+for _h in (0, 6, 12, 18):
+    _edu.maybe_post({}, _tehran(_h, day=30))
+check("قبل از ساعت ۱۹: ۴ پست در صف و هیچ‌کدام منتشر نشده", len(_ks["edu_state"]["queue"]) == 4 and _sent3 == [])
+_edu.maybe_post({}, _tehran(19, 47, day=30))
+_edu.maybe_post({}, _tehran(19, 59, day=30))
+_edu.maybe_post({}, _tehran(19, 10, day=30), force=True)
+check("در یک ساعت فقط یک پست (حتی با اجرای دوباره و force)", len(_sent3) == 1 and len(_ks["edu_state"]["queue"]) == 3)
+check("اولین پست صف اول می‌رود (FIFO)", _titles[0] in _sent3[0])
+
+# force خارج از ساعت انتشار منتشر نمی‌کند
+_ks.clear(); _sent3.clear(); _gi["i"] = 0
+_edu.maybe_post({}, _tehran(10, day=30), force=True)
+check("force ساخت می‌کند ولی خارج از ساعت پربازدید منتشر نمی‌کند", _sent3 == [] and len(_ks["edu_state"]["queue"]) == 1)
+
+# صف پر → ساخت متوقف
+_edu.EDU_QUEUE_MAX = 1
+_n0 = _gi["i"]
+_edu.maybe_post({}, _tehran(12, day=30))
+check("صف پر باشد ساخت جدید انجام نمی‌شود (صرفه‌جویی در مصرف مدل)", _gi["i"] == _n0)
+_edu.EDU_QUEUE_MAX = 8
+
+# pause / خاموش: نه ساخت نه انتشار
+_n0 = _gi["i"]; _s0 = len(_sent3)
+_edu.maybe_post({"paused": True}, _tehran(20, day=30))
+_edu.maybe_post({"edu_enabled": False}, _tehran(20, day=30))
+check("pause و /edu off هم ساخت و هم انتشار را متوقف می‌کنند", _gi["i"] == _n0 and len(_sent3) == _s0)
+
+# شکست تلگرام: در صف می‌ماند و ساعت بعد منتشر می‌شود
+_edu.send_message = lambda c, tx, **kw: {"ok": False}
+_edu.maybe_post({}, _tehran(20, day=30))
+_q = len(_ks["edu_state"]["queue"])
+_edu.send_message = lambda c, tx, **kw: (_sent3.append(tx) or {"ok": True})
+_edu.maybe_post({}, _tehran(21, day=30))
+check("شکست ارسال: پست در صف می‌ماند و ساعت بعد می‌رود", len(_ks["edu_state"]["queue"]) == _q - 1 and len(_sent3) == _s0 + 1)
+
+# Gemini: فاصلهٔ ۵۵ دقیقه‌ای بودجه برای پست آموزشی اعمال نمی‌شود
+import src.gemini_budget as _gb
+_seen_kw = {}
+_orig_cc = _edu.gemini_budget.can_call
+_edu.gemini_budget.can_call = lambda **kw: (_seen_kw.update(kw) or True)
+_ks.clear(); _gi["i"] = 0
+_edu.maybe_post({}, _tehran(0, day=31))
+check("پست آموزشی can_call را با min_interval_min=0 صدا می‌زند", _seen_kw.get("min_interval_min") == 0)
+_edu.gemini_budget.can_call = _orig_cc
 
 print(f"\n{_passed} تست با موفقیت گذشت ✅")

@@ -37,8 +37,13 @@ def status() -> dict:
     }
 
 
-def can_call() -> bool:
-    """آیا اجازه داریم الان به Gemini درخواست بزنیم؟"""
+def can_call(min_interval_min=None) -> bool:
+    """
+    آیا اجازه داریم الان به Gemini درخواست بزنیم؟
+    min_interval_min: فاصلهٔ حداقل بین دو درخواست؛ None = مقدار config، ۰ = بدون محدودیت فاصله
+    (سقف روزانه همیشه رعایت می‌شود). پست آموزشی فاصلهٔ تلاش‌های خودش را دارد و ۰ می‌دهد.
+    """
+    interval = GEMINI_MIN_INTERVAL_MIN if min_interval_min is None else min_interval_min
     if _called_this_process:
         return False
 
@@ -49,13 +54,13 @@ def can_call() -> bool:
         return False
 
     last = data.get("last_call_at")
-    if last:
+    if last and interval > 0:
         try:
             last_dt = datetime.fromisoformat(str(last).replace("Z", ""))
             elapsed_min = (datetime.utcnow() - last_dt).total_seconds() / 60
-            if elapsed_min < GEMINI_MIN_INTERVAL_MIN:
+            if elapsed_min < interval:
                 print(f"[BUDGET] Only {elapsed_min:.0f}m since last Gemini call "
-                      f"(min {GEMINI_MIN_INTERVAL_MIN}m) — skipping")
+                      f"(min {interval}m) — skipping")
                 return False
         except Exception:
             pass

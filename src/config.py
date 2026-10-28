@@ -37,10 +37,24 @@ GEMINI_BATCH_SIZE = _int_env("GEMINI_BATCH_SIZE", 10)
 # ───────── پست آموزشی هوش مصنوعی (src/edu_post.py) — فقط متن ─────────
 # Gemini اول امتحان می‌شود؛ اگر خطا داد (مثلاً 503) مدل‌های رایگان OpenRouter.
 EDU_ENABLED = os.getenv("EDU_POST_ENABLED", "true").strip().lower() not in ("0", "false", "no", "off")
-# فاصلهٔ طولانی بین دو پست (ساعت) — پیش‌فرض ۲۴ برای کم‌کردن مصرف توکن و پردازش GitHub
-EDU_EVERY_HOURS = _int_env("EDU_EVERY_HOURS", 24)
+# ساخت پست‌ها هر EDU_EVERY_HOURS ساعت؛ «انتشار» در ساعت‌های پربازدید (EDU_PUBLISH_HOURS) انجام می‌شود
+EDU_EVERY_HOURS = _int_env("EDU_EVERY_HOURS", 6)  # هر چند ساعت یک پست «ساخته» شود (۶ → ۴ پست در روز)
 # تعداد تلاش در هر اسلات و حداقل فاصلهٔ بین دو تلاش (دقیقه). فاصله باعث می‌شود تلاش‌ها در
 # چند ساعت پخش شوند و اجرای دستی پشت‌سرهم همهٔ تلاش‌های اسلات را نسوزاند.
+def _hours_env(name: str, default: str) -> tuple:
+    raw = (os.getenv(name) or default).strip()
+    out = []
+    for part in raw.split(","):
+        part = part.strip()
+        if part.isdigit() and 0 <= int(part) <= 23:
+            out.append(int(part))
+    return tuple(out) or tuple(int(x) for x in default.split(","))
+
+
+# ساعت‌های انتشار (به وقت نمایش/ایران، ۰ تا ۲۳)؛ در هر ساعت حداکثر یک پست آموزشی
+EDU_PUBLISH_HOURS = _hours_env("EDU_PUBLISH_HOURS", "19,20,21,22")
+# حداکثر پست ساخته‌شده و منتظر انتشار (اگر پر باشد ساخت متوقف می‌شود)
+EDU_QUEUE_MAX = _int_env("EDU_QUEUE_MAX", 8)
 EDU_MAX_TRIES_PER_SLOT = _int_env("EDU_MAX_TRIES_PER_SLOT", 6)
 EDU_RETRY_GAP_MIN = _int_env("EDU_RETRY_GAP_MIN", 56)
 EDU_RECENT_KEEP = _int_env("EDU_RECENT_KEEP", 40)

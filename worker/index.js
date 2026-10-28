@@ -391,6 +391,7 @@ async function handleMessage(msg, env, BASE, CHANNEL_ID, ADMIN_ID) {
       const recent = (est.recent || []).slice(-5).reverse().map(r => `• ${r.title}`).join('\n');
       await sendMessage(BASE, ADMIN_ID,
         `🎓 پست آموزشی: ${on ? 'روشن ✅' : 'خاموش ❌'}\n` +
+        `📥 در صف انتشار (ساعت ۱۹ تا ۲۲): ${(est.queue || []).length}\n` +
         'تغییر: <code>/edu on</code> یا <code>/edu off</code>' +
         (recent ? `\n\nآخرین پست‌ها:\n${escapeHtml(recent)}` : ''));
     }
