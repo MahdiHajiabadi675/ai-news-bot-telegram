@@ -952,6 +952,18 @@ _edu.maybe_post({}, _dt.datetime(2026, 10, 27, 5, 17))
 check("نه بودجهٔ Gemini نه کلید OpenRouter: هیچ‌کاری نمی‌کند", _sent2 == [])
 _edu.OPENROUTER_API_KEY = "or-test"
 
+# ── عیب‌یابی: پیچیده‌شدن خروجی و دلیل رد ──
+check("خروجی لیست [ {…} ] باز می‌شود", _edu.validate([_good], []) is not None)
+check("خروجی {post: {…}} باز می‌شود", _edu.validate({"post": _good}, []) is not None)
+_ds = {**_good, "steps": [{"step": "اول کار را توضیح بده"}, {"text": "بعد نتیجه را بخواه"}]}
+check("مرحله‌ها به‌صورت دیکشنری هم پذیرفته می‌شود", len(_edu.validate(_ds, [])["steps"]) == 2)
+_ss = {**_good, "steps": "اول کار را توضیح بده\nبعد نتیجه را بخواه"}
+check("مرحله‌ها به‌صورت یک رشتهٔ چندخطی هم پذیرفته می‌شود", len(_edu.validate(_ss, [])["steps"]) == 2)
+check("دلیل رد: غیرفارسی", "not_persian" in _edu.check_post(_bad_en, [])[1])
+check("دلیل رد: عنوان مشابه", _edu.check_post(_good, [_good["title"]])[1] == "similar_to_recent_title")
+check("دلیل رد: خیلی کم‌محتوا", _edu.check_post({**_good, "steps": ["یک"], "prompt": ""}, [])[1].startswith("too_thin"))
+check("دلیل رد: غیر آبجکت", _edu.check_post("متن", [])[1] == "not_an_object")
+
 # پاک‌سازی
 _edu.requests.post, _edu.requests.get = _orig_or_post, _orig_or_get
 _edu._alternatives = _orig_alternatives

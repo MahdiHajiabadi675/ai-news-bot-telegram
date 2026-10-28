@@ -53,7 +53,7 @@ OPENROUTER_MODELS = [
     m.strip() for m in (os.getenv("OPENROUTER_MODELS") or "").split(",") if m.strip()
 ]
 # حداکثر چند مدل رایگان در هر تلاش امتحان شود
-OPENROUTER_MAX_MODELS = max(1, _int_env("OPENROUTER_MAX_MODELS", 3))
+OPENROUTER_MAX_MODELS = max(1, _int_env("OPENROUTER_MAX_MODELS", 5))
 # سرصفحه‌های معرفی‌کننده (اختیاری، برای رتبه‌بندی بهتر OpenRouter)
 OPENROUTER_SITE_URL = os.getenv(
     "OPENROUTER_SITE_URL",

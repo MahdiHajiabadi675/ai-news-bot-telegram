@@ -141,28 +141,81 @@ def too_similar(title, recent_titles, threshold=0.6) -> bool:
     return False
 
 
-def validate(data, recent_titles):
-    """خروجی Gemini را پاک‌سازی و اعتبارسنجی می‌کند. None = بی‌کیفیت"""
-    if not isinstance(data, dict):
-        return None
+def _unwrap(data):
+    """بعضی مدل‌ها JSON را در لیست یا کلید بیرونی می‌پیچند: [{...}] یا {"post": {...}}"""
+    for _ in range(3):
+        if isinstance(data, list):
+            data = next((x for x in data if isinstance(x, dict)), None)
+        elif isinstance(data, dict) and "title" not in data:
+            inner = [v for v in data.values() if isinstance(v, (dict, list))]
+            if len(inner) != 1:
+                break
+            data = inner[0]
+        else:
+            break
+    return data if isinstance(data, dict) else None
+
+
+def _step_text(item):
+    """مرحله ممکن است رشته یا دیکشنری ({"step": "..."}) باشد"""
+    if isinstance(item, str):
+        return item
+    if isinstance(item, dict):
+        for k in ("text", "step", "description", "title", "content"):
+            if isinstance(item.get(k), str):
+                return item[k]
+        return next((v for v in item.values() if isinstance(v, str)), "")
+    return ""
+
+
+def check_post(data, recent_titles):
+    """(post یا None، دلیل رد) — دلیل برای لاگ است تا بدانیم چرا خروجی مدل قبول نشد"""
+    data = _unwrap(data)
+    if data is None:
+        return None, "not_an_object"
     title = _clean(data.get("title"), 80)
     hook = _clean(data.get("hook"), 240)
     tip = _clean(data.get("tip"), 200)
     prompt = str(data.get("prompt") or "")
     prompt = _URL_RE.sub("", prompt).replace("```", "").strip()[:750]
-    steps = [_clean(s, 220) for s in (data.get("steps") or []) if isinstance(s, str) and s.strip()][:5]
-    tags = [re.sub(r"[^\w؀-ۿ‌]", "", str(t)).strip("_") for t in (data.get("hashtags") or [])][:2]
+    raw_steps = data.get("steps") or []
+    if isinstance(raw_steps, str):
+        raw_steps = [x for x in re.split(r"\n+", raw_steps) if x.strip()]
+    steps = [_clean(_step_text(x), 220) for x in raw_steps if _step_text(x).strip()][:5]
+    raw_tags = data.get("hashtags") or []
+    raw_tags = [raw_tags] if isinstance(raw_tags, str) else raw_tags
+    tags = [re.sub(r"[^\w\u0600-\u06FF\u200c]", "", str(t)).strip("_") for t in raw_tags][:2]
     tags = [t for t in tags if t]
 
-    if not title or not hook:
-        return None
+    if not title:
+        return None, "missing_title"
+    if not hook:
+        return None, "missing_hook"
     if len(steps) < 2 and len(prompt) < 40:
-        return None
-    if _persian_ratio(title + " " + hook) < 0.5:
-        return None
+        return None, f"too_thin(steps={len(steps)},prompt={len(prompt)})"
+    ratio = _persian_ratio(title + " " + hook)
+    if ratio < 0.5:
+        return None, f"not_persian({ratio:.2f})"
     if too_similar(title, recent_titles):
-        return None
-    return {"title": title, "hook": hook, "steps": steps, "prompt": prompt, "tip": tip, "hashtags": tags}
+        return None, "similar_to_recent_title"
+    return {"title": title, "hook": hook, "steps": steps, "prompt": prompt, "tip": tip, "hashtags": tags}, ""
+
+
+def validate(data, recent_titles):
+    """خروجی مدل را پاک‌سازی و اعتبارسنجی می‌کند. None = بی‌کیفیت"""
+    return check_post(data, recent_titles)[0]
+
+
+def _validate_logged(data, recent_titles):
+    """مثل validate ولی دلیل رد را چاپ می‌کند (برای عیب‌یابی لاگ Actions)"""
+    post, why = check_post(data, recent_titles)
+    if post is None:
+        sample = ""
+        d = _unwrap(data)
+        if d:
+            sample = f" title={str(d.get('title', ''))[:50]!r}"
+        print(f"[EDU] output rejected: {why}{sample}")
+    return post
 
 
 def format_html(post: dict, category_tag: str) -> str:
@@ -497,10 +550,10 @@ def _run(state, now):
     tag, desc = pick_category(ordinal)
     recent = [r.get("title", "") for r in est.get("recent", []) if isinstance(r, dict)]
 
-    raw = generate(desc, recent, accept=lambda r: validate(r, recent), use_gemini=gemini_ok)
+    raw = generate(desc, recent, accept=lambda r: _validate_logged(r, recent), use_gemini=gemini_ok)
     if gemini_ok and _RUN.get("gemini_calls"):
         gemini_budget.mark_called()
-    post = validate(raw, recent) if raw is not None else None
+    post = validate(_unwrap(raw), recent) if raw is not None else None
 
     if post is None:
         est.update({"tries_slot": slot, "tries": (tries or 0) + 1})
