@@ -32,7 +32,7 @@ from . import bale, cloudflare_kv, gemini_budget, storage
 from .bot import send_message
 from .config import (
     CHANNEL_ID, DISPLAY_TZ_OFFSET_MIN, EDU_ENABLED, EDU_EVERY_HOURS,
-    EDU_MAX_OUTPUT_TOKENS, EDU_MAX_TRIES_PER_SLOT, EDU_RECENT_KEEP, EDU_RECENT_PROMPT,
+    EDU_MAX_OUTPUT_TOKENS, EDU_MAX_TRIES_PER_SLOT, EDU_RECENT_KEEP, EDU_RECENT_PROMPT, EDU_RETRY_GAP_MIN,
     GEMINI_API_KEY, OPENROUTER_API_KEY, OPENROUTER_APP_NAME, OPENROUTER_MAX_MODELS,
     OPENROUTER_MODELS, OPENROUTER_SITE_URL,
 )
@@ -273,6 +273,7 @@ def _extract_json(text: str):
 # ───────────── OpenRouter (فقط مدل رایگان، fallback) ─────────────
 
 OPENROUTER_BASE = "https://openrouter.ai/api/v1"
+POOL = 10  # اندازهٔ فهرست کاندید؛ تعداد درخواست واقعی با OPENROUTER_MAX_MODELS محدود است
 
 # اگر فهرست زندهٔ مدل‌ها نیامد، این‌ها امتحان می‌شوند (شناسه‌ها ممکن است عوض شوند).
 DEFAULT_FREE_MODELS = [
@@ -331,17 +332,20 @@ def _pick_free_models() -> list:
             cloudflare_kv.put("openrouter_free_models", free[:10])
         except Exception:  # noqa: BLE001
             pass
-        return free[:max(1, OPENROUTER_MAX_MODELS)]
+        return free[:POOL]
 
     cached = cloudflare_kv.get("openrouter_free_models")
     if isinstance(cached, list) and cached:
-        return [m for m in cached if isinstance(m, str)][:max(1, OPENROUTER_MAX_MODELS)]
+        return [m for m in cached if isinstance(m, str)][:POOL]
 
-    return DEFAULT_FREE_MODELS[:max(1, OPENROUTER_MAX_MODELS)]
+    return DEFAULT_FREE_MODELS[:POOL]
 
 
 def _call_openrouter(model: str, prompt: str, timeout: float = None):
-    """یک درخواست به مدل رایگان OpenRouter؛ JSON معتبر یا None"""
+    """
+    یک درخواست به مدل رایگان OpenRouter → (JSON یا None، کد وضعیت، دلیل).
+    دلیل "daily" یعنی سقف روزانهٔ مدل‌های رایگان حساب پر شده (امتحان مدل دیگر بی‌فایده است).
+    """
     headers = {
         "Authorization": f"Bearer {OPENROUTER_API_KEY}",
         "Content-Type": "application/json",
@@ -358,29 +362,53 @@ def _call_openrouter(model: str, prompt: str, timeout: float = None):
         resp = requests.post(f"{OPENROUTER_BASE}/chat/completions",
                              headers=headers, json=payload, timeout=timeout or CALL_TIMEOUT)
         if resp.status_code != 200:
-            print(f"[EDU] OpenRouter {model}: HTTP {resp.status_code}")
-            return None
+            body = str(getattr(resp, "text", "") or "")
+            low = body.lower()
+            reason = "daily" if ("free-models-per-day" in low or "per-day" in low or "per day" in low) else ""
+            msg = re.sub(r"\s+", " ", body)[:110]
+            print(f"[EDU] OpenRouter {model}: HTTP {resp.status_code}" + (f" — {msg}" if msg else ""))
+            return None, resp.status_code, reason
         choices = resp.json().get("choices") or []
         text = (choices[0].get("message") or {}).get("content") if choices else ""
-        return _extract_json(text)
+        return _extract_json(text), 200, ""
     except Exception as e:  # noqa: BLE001
         print(f"[EDU] OpenRouter {model}: {type(e).__name__}")
-        return None
+        return None, 0, ""
+
+
+def _vendor(model_id: str) -> str:
+    return str(model_id).split("/", 1)[0].lower()
 
 
 def _openrouter_generate(prompt: str, good=None, left=None):
     """
     اولین مدل رایگان OpenRouter که خروجی «قابل‌قبول» بدهد برنده است؛ بقیه صدا زده نمی‌شوند.
     good(data) → آیا خروجی قابل‌قبول است؟  left() → ثانیهٔ باقی‌ماندهٔ بودجهٔ زمانی.
+    • اگر مدلی ۴۲۹/۵xx داد، مدل‌های هم‌خانواده (همان vendor، مثل دو Gemma گوگل که سهمیهٔ مشترک
+      دارند) رد می‌شوند و مدل vendor دیگر امتحان می‌شود.
+    • اگر سقف روزانهٔ رایگان حساب پر شده باشد، فوراً متوقف می‌شود.
+    • حداکثر OPENROUTER_MAX_MODELS درخواست.
     """
     if not OPENROUTER_API_KEY:
         print("[EDU] OpenRouter key missing — fallback skipped")
         return None
+    attempts = 0
+    blocked = set()
     for model in _pick_free_models():
+        if attempts >= max(1, OPENROUTER_MAX_MODELS):
+            break
         if left is not None and left() <= 5:
             break
+        if _vendor(model) in blocked:
+            continue
         timeout = CALL_TIMEOUT if left is None else min(CALL_TIMEOUT, max(5, left()))
-        data = _call_openrouter(model, prompt, timeout)
+        attempts += 1
+        data, code, reason = _call_openrouter(model, prompt, timeout)
+        if reason == "daily":
+            print("[EDU] OpenRouter daily free limit reached — stopping")
+            break
+        if code in RETRY_STATUS and code != 200:
+            blocked.add(_vendor(model))
         if data is None:
             continue
         if good is not None and not good(data):
@@ -516,16 +544,20 @@ def generate(category_desc: str, recent_titles: list, accept=None, use_gemini: b
 
 # ───────────── نقطهٔ ورود ─────────────
 
-def maybe_post(state: dict, now=None) -> dict:
-    """اگر وقتش است یک پست آموزشی بساز و منتشر کن. state را برمی‌گرداند (تغییر نمی‌دهد)."""
+def maybe_post(state: dict, now=None, force: bool = False) -> dict:
+    """
+    اگر وقتش است یک پست آموزشی بساز و منتشر کن. state را برمی‌گرداند (تغییر نمی‌دهد).
+    force=True (اجرای دستی از Actions): فاصلهٔ بین تلاش‌ها نادیده گرفته می‌شود و شکست
+    از تلاش‌های اسلات کم نمی‌کند؛ ولی اگر پست این اسلات قبلاً رفته باشد، تکرار نمی‌شود.
+    """
     try:
-        _run(state, now)
+        _run(state, now, force)
     except Exception as e:  # noqa: BLE001
         print(f"[EDU] unexpected error: {type(e).__name__}: {e}")
     return state
 
 
-def _run(state, now):
+def _run(state, now, force=False):
     if not EDU_ENABLED or state.get("edu_enabled") is False:
         return
     if state.get("paused"):
@@ -538,9 +570,26 @@ def _run(state, now):
     est = est if isinstance(est, dict) else {}
     if est.get("last_slot") == slot:
         return
-    tries = est.get("tries") if est.get("tries_slot") == slot else 0
-    if (tries or 0) >= EDU_MAX_TRIES_PER_SLOT:
+    same_slot = est.get("tries_slot") == slot
+    tries = (est.get("tries") or 0) if same_slot else 0
+    if tries >= EDU_MAX_TRIES_PER_SLOT:
         return
+    now_utc = now or datetime.utcnow()
+    last_try = est.get("last_try_at") if same_slot else None
+    if not force and tries and last_try:
+        try:
+            gap_min = (now_utc - datetime.fromisoformat(str(last_try).replace("Z", ""))).total_seconds() / 60
+            if 0 <= gap_min < EDU_RETRY_GAP_MIN:
+                print(f"[EDU] Last try {gap_min:.0f}m ago (gap {EDU_RETRY_GAP_MIN}m) — waiting")
+                return
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _count_try():
+        if force:
+            return
+        est.update({"tries_slot": slot, "tries": tries + 1, "last_try_at": now_utc.isoformat() + "Z"})
+        cloudflare_kv.put(KEY, est)
 
     # Gemini فقط وقتی کلید دارد و بودجه‌اش اجازه می‌دهد؛ در غیر این صورت مستقیم OpenRouter
     gemini_ok = bool(GEMINI_API_KEY) and gemini_budget.can_call()
@@ -556,20 +605,18 @@ def _run(state, now):
     post = validate(_unwrap(raw), recent) if raw is not None else None
 
     if post is None:
-        est.update({"tries_slot": slot, "tries": (tries or 0) + 1})
-        cloudflare_kv.put(KEY, est)
-        print(f"[EDU] No valid post for slot {slot} (try {(tries or 0) + 1}/{EDU_MAX_TRIES_PER_SLOT})")
+        _count_try()
+        print(f"[EDU] No valid post for slot {slot} (try {tries + 1}/{EDU_MAX_TRIES_PER_SLOT}" + (", force: not counted)" if force else ")"))
         return
 
     result = send_message(CHANNEL_ID, format_html(post, tag))
     if not (result and result.get("ok")):
-        est.update({"tries_slot": slot, "tries": (tries or 0) + 1})
-        cloudflare_kv.put(KEY, est)
+        _count_try()
         print(f"[EDU] Telegram send failed: {result}")
         return
 
     est["last_slot"] = slot
-    est["tries_slot"], est["tries"] = slot, 0
+    est["tries_slot"], est["tries"], est["last_try_at"] = slot, 0, None
     est["recent"] = (est.get("recent", []) + [{"title": post["title"], "tag": tag, "via": f"{_RUN.get('provider', '')}/{_RUN.get('model', '')}", "at": datetime.utcnow().isoformat() + "Z"}])[-EDU_RECENT_KEEP:]
     cloudflare_kv.put(KEY, est)
     print(f"[EDU] Published: {post['title'][:50]} ({tag}) via {_RUN.get('provider') or '?'}/{_RUN.get('model') or '?'}")

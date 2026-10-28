@@ -270,7 +270,7 @@ def run(force=False):
 
     # پست آموزشی (فقط متن) با بازهٔ طولانی — Gemini اول، در صورت خطا مدل‌های
     # رایگان OpenRouter. هیچ خطایی از آن بیرون نمی‌آید.
-    state = edu_post.maybe_post(state)
+    state = edu_post.maybe_post(state, force=force)
 
     # 5. Save state
     state = set_stage(state, "waiting")

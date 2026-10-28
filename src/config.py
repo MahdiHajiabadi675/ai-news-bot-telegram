@@ -39,7 +39,10 @@ GEMINI_BATCH_SIZE = _int_env("GEMINI_BATCH_SIZE", 10)
 EDU_ENABLED = os.getenv("EDU_POST_ENABLED", "true").strip().lower() not in ("0", "false", "no", "off")
 # فاصلهٔ طولانی بین دو پست (ساعت) — پیش‌فرض ۲۴ برای کم‌کردن مصرف توکن و پردازش GitHub
 EDU_EVERY_HOURS = _int_env("EDU_EVERY_HOURS", 24)
-EDU_MAX_TRIES_PER_SLOT = _int_env("EDU_MAX_TRIES_PER_SLOT", 2)
+# تعداد تلاش در هر اسلات و حداقل فاصلهٔ بین دو تلاش (دقیقه). فاصله باعث می‌شود تلاش‌ها در
+# چند ساعت پخش شوند و اجرای دستی پشت‌سرهم همهٔ تلاش‌های اسلات را نسوزاند.
+EDU_MAX_TRIES_PER_SLOT = _int_env("EDU_MAX_TRIES_PER_SLOT", 6)
+EDU_RETRY_GAP_MIN = _int_env("EDU_RETRY_GAP_MIN", 56)
 EDU_RECENT_KEEP = _int_env("EDU_RECENT_KEEP", 40)
 # سقف توکن خروجی مدل (JSON کوتاه است؛ کوچک نگه داشته می‌شود)
 EDU_MAX_OUTPUT_TOKENS = _int_env("EDU_MAX_OUTPUT_TOKENS", 800)
