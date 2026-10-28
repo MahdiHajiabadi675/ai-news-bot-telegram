@@ -15,7 +15,9 @@
   • قالب‌بندی را خودِ کد می‌سازد (نه مدل): خروجی JSON ساختاریافته، همه‌چیز escape می‌شود،
     پرامپت آماده داخل بلوک <pre> می‌آید تا با یک لمس کپی شود. هیچ عکس/ویدیو/فایلی تولید نمی‌شود.
   • کلید خاموش/روشن: دستور /edu on|off در ربات (state.edu_enabled) یا EDU_POST_ENABLED=false.
-  • بودجهٔ Gemini از src/gemini_budget.py رعایت می‌شود.
+  • بودجهٔ Gemini از src/gemini_budget.py رعایت می‌شود؛ اگر Gemini کلید/بودجه ندارد مستقیم OpenRouter.
+  • اولویت ثابت: Gemini ← مدل‌های flash دیگر ← OpenRouter رایگان. اولین مدلی که خروجی
+    قابل‌قبول (validate) داد برنده است و بقیه صدا زده نمی‌شوند.
   • نسخهٔ متنی همان پست به کانال بله هم می‌رود (src/bale.py، فقط ارسال).
 هیچ خطایی از این ماژول بیرون نمی‌آید و انتشار اخبار را مختل نمی‌کند.
 """
@@ -285,7 +287,7 @@ def _pick_free_models() -> list:
     return DEFAULT_FREE_MODELS[:max(1, OPENROUTER_MAX_MODELS)]
 
 
-def _call_openrouter(model: str, prompt: str):
+def _call_openrouter(model: str, prompt: str, timeout: float = None):
     """یک درخواست به مدل رایگان OpenRouter؛ JSON معتبر یا None"""
     headers = {
         "Authorization": f"Bearer {OPENROUTER_API_KEY}",
@@ -301,7 +303,7 @@ def _call_openrouter(model: str, prompt: str):
     }
     try:
         resp = requests.post(f"{OPENROUTER_BASE}/chat/completions",
-                             headers=headers, json=payload, timeout=CALL_TIMEOUT)
+                             headers=headers, json=payload, timeout=timeout or CALL_TIMEOUT)
         if resp.status_code != 200:
             print(f"[EDU] OpenRouter {model}: HTTP {resp.status_code}")
             return None
@@ -313,24 +315,36 @@ def _call_openrouter(model: str, prompt: str):
         return None
 
 
-def _openrouter_generate(prompt: str):
-    """اولین مدل رایگان OpenRouter که JSON معتبر بدهد"""
+def _openrouter_generate(prompt: str, good=None, left=None):
+    """
+    اولین مدل رایگان OpenRouter که خروجی «قابل‌قبول» بدهد برنده است؛ بقیه صدا زده نمی‌شوند.
+    good(data) → آیا خروجی قابل‌قبول است؟  left() → ثانیهٔ باقی‌ماندهٔ بودجهٔ زمانی.
+    """
     if not OPENROUTER_API_KEY:
         print("[EDU] OpenRouter key missing — fallback skipped")
         return None
     for model in _pick_free_models():
-        data = _call_openrouter(model, prompt)
-        if data is not None:
-            print(f"[EDU] OpenRouter success: {model}")
-            return data
+        if left is not None and left() <= 5:
+            break
+        timeout = CALL_TIMEOUT if left is None else min(CALL_TIMEOUT, max(5, left()))
+        data = _call_openrouter(model, prompt, timeout)
+        if data is None:
+            continue
+        if good is not None and not good(data):
+            print(f"[EDU] OpenRouter {model}: output rejected — next model")
+            continue
+        _RUN.update(provider="openrouter", model=model)
+        print(f"[EDU] OpenRouter success: {model}")
+        return data
     return None
 
 
 RETRY_STATUS = (0, 429, 500, 502, 503, 504)  # خطاهای موقتی سمت سرور/شبکه
 BACKOFF_SECONDS = (6, 15)                     # فاصلهٔ تلاش‌های مجدد روی همان مدل
-MAX_TOTAL_SECONDS = 120                       # سقف کل زمان ساخت یک پست (همهٔ تلاش‌ها)
+MAX_TOTAL_SECONDS = 150                       # سقف کل زمان ساخت یک پست (Gemini + OpenRouter، همهٔ تلاش‌ها)
 CALL_TIMEOUT = 40
 _sleep = time.sleep
+_RUN = {"gemini_calls": 0, "provider": "", "model": ""}  # گزارش آخرین generate
 
 
 def _call(model: str, payload: dict, timeout: float = CALL_TIMEOUT):
@@ -369,60 +383,82 @@ def _alternatives(exclude: str, limit: int = 2) -> list:
         return []
 
 
-def generate(category_desc: str, recent_titles: list):
+def generate(category_desc: str, recent_titles: list, accept=None, use_gemini: bool = True):
     """
-    ساخت JSON خام: اول Gemini، اگر در دسترس نبود مدل‌های رایگان OpenRouter.
-
-    خطای موقتی Gemini (۵۰۳/۴۲۹/…): روی همان مدل با فاصله دوباره تلاش می‌کند؛ اگر باز هم نشد
-    یک یا دو مدل flash دیگر را امتحان می‌کند. در نهایت اگر Gemini جواب نداد، OpenRouter.
+    ساخت JSON خام. ترتیب اولویت (ثابت):
+      ۱) Gemini (مدل اصلی؛ روی خطای موقتی چند بار با فاصله)
+      ۲) مدل‌های flash دیگر Gemini
+      ۳) مدل‌های رایگان OpenRouter (به ترتیب رتبه)
+    اولین مدلی که خروجی «قابل‌قبول» بدهد برنده است و بقیه اصلاً صدا زده نمی‌شوند.
+    «قابل‌قبول» یعنی accept(data) (در _run همان validate) None برنگرداند. خروجی ناخوانا یا
+    بی‌کیفیت یعنی مدل بعدی. کل زمان از MAX_TOTAL_SECONDS بیشتر نمی‌شود.
     """
-    model = _resolve_model()
+    _RUN.update(gemini_calls=0, provider="", model="")
     recent = "\n".join(f"- {t}" for t in recent_titles[-max(1, EDU_RECENT_PROMPT):]) or "(none yet)"
     prompt = PROMPT.format(topic=category_desc, recent=recent)
-    payload = {
-        "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {
-            "temperature": 0.9,
-            "maxOutputTokens": EDU_MAX_OUTPUT_TOKENS,
-            "responseMimeType": "application/json",
-        },
-    }
-
     t0 = time.monotonic()
 
     def left():
         return MAX_TOTAL_SECONDS - (time.monotonic() - t0)
 
-    code = 0
-    for delay in (0,) + BACKOFF_SECONDS:
-        if left() <= 5:
-            break
-        if delay:
-            _sleep(delay)
-        data, code = _call(model, payload, min(CALL_TIMEOUT, max(5, left())))
-        if code == 200:
-            return data
-        print(f"[EDU] Gemini {model}: HTTP {code}")
-        if code not in RETRY_STATUS:
-            break
+    def good(data):
+        if data is None:
+            return False
+        if accept is None:
+            return True
+        try:
+            return accept(data) is not None
+        except Exception:  # noqa: BLE001
+            return False
 
-    if code in (400, 404):
-        _invalidate_model()  # مدل منقضی → اجرای بعد مدل تازه پیدا کند
-    elif code in RETRY_STATUS:
-        for alt in _alternatives(model):
+    if use_gemini and GEMINI_API_KEY:
+        model = _resolve_model()
+        payload = {
+            "contents": [{"parts": [{"text": prompt}]}],
+            "generationConfig": {
+                "temperature": 0.9,
+                "maxOutputTokens": EDU_MAX_OUTPUT_TOKENS,
+                "responseMimeType": "application/json",
+            },
+        }
+        code = 0
+        for delay in (0,) + BACKOFF_SECONDS:
             if left() <= 5:
                 break
-            data, c = _call(alt, payload, min(CALL_TIMEOUT, max(5, left())))
-            print(f"[EDU] Gemini fallback {alt}: HTTP {c}")
-            if c == 200:
-                try:
-                    cloudflare_kv.put("gemini_model", alt)  # اجراهای بعد از همین شروع کنند
-                except Exception:  # noqa: BLE001
-                    pass
-                return data
+            if delay:
+                _sleep(delay)
+            _RUN["gemini_calls"] += 1
+            data, code = _call(model, payload, min(CALL_TIMEOUT, max(5, left())))
+            if code == 200:
+                if good(data):
+                    _RUN.update(provider="gemini", model=model)
+                    return data
+                print(f"[EDU] Gemini {model}: output rejected")
+                break  # جواب داد ولی قابل‌قبول نبود؛ تکرار روی همان مدل فایده ندارد
+            print(f"[EDU] Gemini {model}: HTTP {code}")
+            if code not in RETRY_STATUS:
+                break
 
-    print("[EDU] Gemini unavailable — trying free OpenRouter models")
-    return _openrouter_generate(prompt)
+        if code in (400, 404):
+            _invalidate_model()  # مدل منقضی → اجرای بعد مدل تازه پیدا کند
+        elif code in RETRY_STATUS or code == 200:
+            for alt in _alternatives(model):
+                if left() <= 5:
+                    break
+                _RUN["gemini_calls"] += 1
+                data, c = _call(alt, payload, min(CALL_TIMEOUT, max(5, left())))
+                print(f"[EDU] Gemini fallback {alt}: HTTP {c}")
+                if c == 200 and good(data):
+                    try:
+                        cloudflare_kv.put("gemini_model", alt)  # اجراهای بعد از همین شروع کنند
+                    except Exception:  # noqa: BLE001
+                        pass
+                    _RUN.update(provider="gemini", model=alt)
+                    return data
+        print("[EDU] Gemini unavailable — trying free OpenRouter models")
+    else:
+        print("[EDU] Gemini skipped — trying free OpenRouter models")
+    return _openrouter_generate(prompt, good=good, left=left)
 
 
 # ───────────── نقطهٔ ورود ─────────────
@@ -441,7 +477,7 @@ def _run(state, now):
         return
     if state.get("paused"):
         return
-    if not GEMINI_API_KEY or not CHANNEL_ID:
+    if not CHANNEL_ID:
         return
 
     slot, ordinal = current_slot(now)
@@ -453,14 +489,17 @@ def _run(state, now):
     if (tries or 0) >= EDU_MAX_TRIES_PER_SLOT:
         return
 
-    if not gemini_budget.can_call():
+    # Gemini فقط وقتی کلید دارد و بودجه‌اش اجازه می‌دهد؛ در غیر این صورت مستقیم OpenRouter
+    gemini_ok = bool(GEMINI_API_KEY) and gemini_budget.can_call()
+    if not gemini_ok and not OPENROUTER_API_KEY:
         return
 
     tag, desc = pick_category(ordinal)
     recent = [r.get("title", "") for r in est.get("recent", []) if isinstance(r, dict)]
 
-    raw = generate(desc, recent)
-    gemini_budget.mark_called()
+    raw = generate(desc, recent, accept=lambda r: validate(r, recent), use_gemini=gemini_ok)
+    if gemini_ok and _RUN.get("gemini_calls"):
+        gemini_budget.mark_called()
     post = validate(raw, recent) if raw is not None else None
 
     if post is None:
@@ -478,9 +517,9 @@ def _run(state, now):
 
     est["last_slot"] = slot
     est["tries_slot"], est["tries"] = slot, 0
-    est["recent"] = (est.get("recent", []) + [{"title": post["title"], "tag": tag, "at": datetime.utcnow().isoformat() + "Z"}])[-EDU_RECENT_KEEP:]
+    est["recent"] = (est.get("recent", []) + [{"title": post["title"], "tag": tag, "via": f"{_RUN.get('provider', '')}/{_RUN.get('model', '')}", "at": datetime.utcnow().isoformat() + "Z"}])[-EDU_RECENT_KEEP:]
     cloudflare_kv.put(KEY, est)
-    print(f"[EDU] Published: {post['title'][:50]} ({tag})")
+    print(f"[EDU] Published: {post['title'][:50]} ({tag}) via {_RUN.get('provider') or '?'}/{_RUN.get('model') or '?'}")
 
     # لاگ انتشار (برای /stats) — خطا نباید چیزی را خراب کند
     try:

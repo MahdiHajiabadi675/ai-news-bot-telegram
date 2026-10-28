@@ -863,6 +863,95 @@ check("edu: سقف توکن fallback کم است", _or_calls[0][1].get("max_toke
 _edu.requests.post = lambda url, **kw: _Resp(503)
 check("edu: وقتی هر دو منبع خطا دهند None برمی‌گردد", _edu.generate("x", []) is None)
 
+# ── اولویت‌بندی و «اولین مدل تاییدشده برنده است» ──
+_edu.GEMINI_API_KEY = "k"
+_edu.OPENROUTER_API_KEY = "or-test"
+_edu.OPENROUTER_MODELS = ["or/m1:free", "or/m2:free", "or/m3:free"]
+_edu._alternatives = lambda model, limit=2: []
+_bad_en = {**_good, "title": "How to write emails", "hook": "english only text here"}
+_acc = lambda d: _edu.validate(d, [])
+
+
+def _router(gemini=None, orouter=None):
+    """gemini: لیست کد/خروجی؛ orouter: {مدل: خروجی یا None}"""
+    seen = {"g": 0, "or": []}
+
+    def post(url, headers=None, json=None, params=None, timeout=None):
+        if "generativelanguage" in str(url):
+            seen["g"] += 1
+            kind = (gemini or [503])[min(seen["g"] - 1, len(gemini or [503]) - 1)]
+            if kind == 200:
+                return _Resp(200, _OK_BODY)
+            if kind == "bad":
+                return _Resp(200, {"candidates": [{"content": {"parts": [{"text": _json.dumps(_bad_en)}]}}]})
+            if kind == "junk":
+                return _Resp(200, {"candidates": [{"content": {"parts": [{"text": "no json here"}]}}]})
+            return _Resp(kind)
+        m = json["model"]
+        seen["or"].append(m)
+        out = (orouter or {}).get(m)
+        if out is None:
+            return _Resp(429)
+        return _Resp(200, {"choices": [{"message": {"content": _json.dumps(out)}}]})
+    return post, seen
+
+
+_edu._sleep = lambda s: None
+_p, _s = _router(gemini=[200], orouter={"or/m1:free": _good})
+_edu.requests.post = _p
+_edu.generate("x", [], accept=_acc)
+check("اولویت: Gemini جواب قابل‌قبول داد → OpenRouter اصلاً صدا زده نمی‌شود", _s["or"] == [] and _edu._RUN["provider"] == "gemini")
+_p, _s = _router(gemini=["bad"], orouter={"or/m1:free": _good})
+_edu.requests.post = _p
+_r = _edu.generate("x", [], accept=_acc)
+check("Gemini جواب بی‌کیفیت (غیرفارسی) داد → مدل بعدی OpenRouter", _r == _good and _s["or"] == ["or/m1:free"] and _s["g"] == 1)
+_p, _s = _router(gemini=["junk"], orouter={"or/m1:free": _good})
+_edu.requests.post = _p
+check("Gemini متن بدون JSON داد → fallback (قبلاً None می‌شد)", _edu.generate("x", [], accept=_acc) == _good and _s["or"] == ["or/m1:free"])
+_p, _s = _router(gemini=[503], orouter={"or/m2:free": _good})
+_edu.requests.post = _p
+_edu.generate("x", [], accept=_acc)
+check("اولین مدل تاییدشده OpenRouter برنده است؛ m3 صدا زده نمی‌شود", _s["or"] == ["or/m1:free", "or/m2:free"] and _edu._RUN["model"] == "or/m2:free")
+_p, _s = _router(gemini=[503], orouter={"or/m1:free": _bad_en, "or/m2:free": _good})
+_edu.requests.post = _p
+_edu.generate("x", [], accept=_acc)
+check("مدل رایگانی که خروجی بی‌کیفیت داد رد می‌شود و بعدی امتحان می‌شود", _s["or"] == ["or/m1:free", "or/m2:free"])
+_p, _s = _router(gemini=[503], orouter={})
+_edu.requests.post = _p
+check("همه شکست خوردند → None، فقط حداکثر ۳ مدل رایگان", _edu.generate("x", [], accept=_acc) is None and len(_s["or"]) == 3)
+_p, _s = _router(gemini=[200], orouter={"or/m1:free": _good})
+_edu.requests.post = _p
+_edu.generate("x", [], accept=_acc, use_gemini=False)
+check("use_gemini=False: مستقیم OpenRouter و بدون تماس با Gemini", _s["g"] == 0 and _s["or"] == ["or/m1:free"])
+
+# _run: بدون کلید Gemini یا با بودجهٔ تمام‌شده، OpenRouter کار می‌کند
+_p, _s = _router(gemini=[200], orouter={"or/m1:free": {**_good, "title": "ترفند تازه برای نوشتن گزارش هفتگی با هوش مصنوعی"}})
+_edu.requests.post = _p
+_k2 = {}
+_edu.cloudflare_kv.get = lambda k, d=None: _k2.get(k, d)
+_edu.cloudflare_kv.put = lambda k, v: _k2.__setitem__(k, _json.loads(_json.dumps(v))) or True
+_edu.CHANNEL_ID = "@c"; _edu.EDU_ENABLED = True
+_sent2 = []
+_edu.send_message = lambda c, t, **kw: (_sent2.append(t) or {"ok": True})
+_edu.bale.send_text = lambda t: True
+_edu.bale.reset = lambda: None
+_edu.storage.load_published = lambda: []
+_edu.storage.save_published = lambda items: None
+_edu.GEMINI_API_KEY = ""
+_edu.maybe_post({}, _dt.datetime(2026, 10, 27, 5, 17))
+check("بدون GEMINI_API_KEY: پست از OpenRouter منتشر می‌شود", len(_sent2) == 1 and _s["g"] == 0
+      and _k2["edu_state"]["recent"][-1]["via"] == "openrouter/or/m1:free")
+_edu.GEMINI_API_KEY = "k"
+_edu.gemini_budget.can_call = lambda: False
+_k2.clear(); _sent2.clear()
+_edu.maybe_post({}, _dt.datetime(2026, 10, 27, 5, 17))
+check("بودجهٔ Gemini تمام شده: باز هم از OpenRouter پست می‌شود", len(_sent2) == 1 and _s["g"] == 0)
+_edu.OPENROUTER_API_KEY = ""
+_k2.clear(); _sent2.clear()
+_edu.maybe_post({}, _dt.datetime(2026, 10, 27, 5, 17))
+check("نه بودجهٔ Gemini نه کلید OpenRouter: هیچ‌کاری نمی‌کند", _sent2 == [])
+_edu.OPENROUTER_API_KEY = "or-test"
+
 # پاک‌سازی
 _edu.requests.post, _edu.requests.get = _orig_or_post, _orig_or_get
 _edu._alternatives = _orig_alternatives
@@ -884,7 +973,7 @@ _bl = []
 _edu.bale.send_text = lambda t: (_bl.append(t) or True)
 _edu.bale.reset = lambda: None
 _gem = {"out": dict(_good), "calls": 0}
-_edu.generate = lambda desc, recent: (_gem.__setitem__("calls", _gem["calls"] + 1) or _gem["out"])
+_edu.generate = lambda desc, recent, **kw: (_gem.__setitem__("calls", _gem["calls"] + 1) or _gem["out"])
 _edu.storage.load_published = lambda: []
 _edu.storage.save_published = lambda items: _kvstore.__setitem__("published", items)
 _T = _dt.datetime(2026, 10, 27, 5, 17)
@@ -914,7 +1003,7 @@ _gem["out"] = {**_good, "title": "موضوعی کاملاً تازه دربار�
 _nb = len(_bl)
 _edu.maybe_post({}, _T + _dt.timedelta(hours=8))
 check("اگر تلگرام نرود: چیزی ثبت یا به بله ارسال نمی‌شود", len(_bl) == _nb and _kvstore["edu_state"]["last_slot"] != _edu.current_slot(_T + _dt.timedelta(hours=8))[0])
-_edu.generate = lambda desc, recent: (_ for _ in ()).throw(RuntimeError("boom"))
+_edu.generate = lambda desc, recent, **kw: (_ for _ in ()).throw(RuntimeError("boom"))
 check("استثنای غیرمنتظره بیرون نمی‌آید", _edu.maybe_post({}, _T + _dt.timedelta(hours=10)) == {})
 
 print(f"\n{_passed} تست با موفقیت گذشت ✅")
