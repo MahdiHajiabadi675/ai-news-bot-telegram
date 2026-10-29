@@ -55,6 +55,10 @@ def _hours_env(name: str, default: str) -> tuple:
 EDU_PUBLISH_HOURS = _hours_env("EDU_PUBLISH_HOURS", "19,20,21,22")
 # حداکثر پست ساخته‌شده و منتظر انتشار (اگر پر باشد ساخت متوقف می‌شود)
 EDU_QUEUE_MAX = _int_env("EDU_QUEUE_MAX", 8)
+# کنترل مصرف توکن: حداکثر خروجی «ردشده» (جواب ۲۰۰ که قبول نشد = توکن خرج‌شده) در هر تلاش،
+# و حداکثر تلاش ساخت در هر روز (همهٔ اسلات‌ها)
+EDU_MAX_REJECTS = _int_env("EDU_MAX_REJECTS", 2)
+EDU_MAX_ATTEMPTS_PER_DAY = _int_env("EDU_MAX_ATTEMPTS_PER_DAY", 10)
 EDU_MAX_TRIES_PER_SLOT = _int_env("EDU_MAX_TRIES_PER_SLOT", 6)
 EDU_RETRY_GAP_MIN = _int_env("EDU_RETRY_GAP_MIN", 56)
 EDU_RECENT_KEEP = _int_env("EDU_RECENT_KEEP", 40)

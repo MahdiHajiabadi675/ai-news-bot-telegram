@@ -389,9 +389,17 @@ async function handleMessage(msg, env, BASE, CHANNEL_ID, ADMIN_ID) {
       const est = await getJSON(env, 'edu_state', {});
       const on = state.edu_enabled !== false;
       const recent = (est.recent || []).slice(-5).reverse().map(r => `• ${r.title}`).join('\n');
+      // آمار مصرف مدل‌ها: امروز و دیروز (به وقت ایران)
+      const dayKey = (offset) => new Date(Date.now() + 210 * 60000 - offset * 86400000).toISOString().slice(0, 10);
+      const usageLine = (label, u) => !u ? '' :
+        `${label}: ساخت ${u.ok || 0} از ${u.attempts || 0} تلاش | درخواست به مدل‌ها ${u.calls || 0} | خروجی ردشده (توکن هدررفته) ${u.rejected || 0}` +
+        (u.via && Object.keys(u.via).length ? `\n   ${Object.entries(u.via).map(([k, v]) => `${k} ×${v}`).join('، ')}` : '');
+      const usage = [usageLine('امروز', (est.usage || {})[dayKey(0)]), usageLine('دیروز', (est.usage || {})[dayKey(1)])]
+        .filter(Boolean).join('\n');
       await sendMessage(BASE, ADMIN_ID,
         `🎓 پست آموزشی: ${on ? 'روشن ✅' : 'خاموش ❌'}\n` +
         `📥 در صف انتشار (ساعت ۱۹ تا ۲۲): ${(est.queue || []).length}\n` +
+        (usage ? `\n📊 مصرف:\n${escapeHtml(usage)}\n\n` : '') +
         'تغییر: <code>/edu on</code> یا <code>/edu off</code>' +
         (recent ? `\n\nآخرین پست‌ها:\n${escapeHtml(recent)}` : ''));
     }

@@ -954,6 +954,18 @@ _edu.maybe_post({}, _dt.datetime(2026, 10, 27, 5, 17))
 check("نه بودجهٔ Gemini نه کلید OpenRouter: هیچ‌کاری نمی‌کند", _sent2 == [])
 _edu.OPENROUTER_API_KEY = "or-test"
 
+# ── کنترل مصرف توکن: بعد از ۲ خروجی ردشده دیگر مدل بعدی صدا زده نمی‌شود ──
+_edu.EDU_MAX_REJECTS = 2
+_edu.OPENROUTER_MODELS = ["a/m1:free", "b/m2:free", "c/m3:free"]
+_p, _s = _router(gemini=["bad"], orouter={"a/m1:free": _bad_en, "b/m2:free": _good})
+_edu.requests.post = _p
+_r = _edu.generate("x", [], accept=_acc)
+check("یک ردشدهٔ Gemini + یک ردشدهٔ OpenRouter → توقف، مدل b صدا زده نمی‌شود", _r is None and _s["or"] == ["a/m1:free"] and _edu._RUN["rejected"] == 2)
+_p, _s = _router(gemini=[503], orouter={"a/m1:free": _bad_en, "b/m2:free": _good})
+_edu.requests.post = _p
+_r = _edu.generate("x", [], accept=_acc)
+check("با ۵۰۳ (بدون هزینهٔ توکن) و یک ردشده، مدل بعدی هنوز امتحان می‌شود", _r == _good and _edu._RUN["rejected"] == 1)
+
 # ── ۴۲۹: مدل هم‌خانواده رد می‌شود؛ سقف روزانه فوراً متوقف می‌کند ──
 _edu.OPENROUTER_MODELS = ["g/gemma-a:free", "g/gemma-b:free", "q/qwen:free"]
 _p, _s = _router(gemini=[503], orouter={"q/qwen:free": _good})
@@ -1163,5 +1175,43 @@ _ks.clear(); _gi["i"] = 0
 _edu.maybe_post({}, _tehran(0, day=31))
 check("پست آموزشی can_call را با min_interval_min=0 صدا می‌زند", _seen_kw.get("min_interval_min") == 0)
 _edu.gemini_budget.can_call = _orig_cc
+
+# ── آمار مصرف و سقف روزانهٔ تلاش ──
+print("Edu usage stats:")
+_ku = {}
+_edu.cloudflare_kv.get = lambda k, d=None: _ku.get(k, d)
+_edu.cloudflare_kv.put = lambda k, v: _ku.__setitem__(k, _json.loads(_json.dumps(v))) or True
+_edu.EDU_PUBLISH_HOURS = (23,)
+_edu.OPENROUTER_API_KEY = ""
+_edu._RUN.update(gemini_calls=0, or_calls=0, rejected=0)
+
+
+def _fail_gen(desc, recent, **kw):
+    _edu._RUN.update(gemini_calls=3, or_calls=1, rejected=1, provider="", model="")
+    return None
+
+
+_edu.generate = _fail_gen
+_edu.EDU_EVERY_HOURS = 6
+_edu.EDU_RETRY_GAP_MIN = 0
+_edu.EDU_MAX_TRIES_PER_SLOT = 50
+_edu.EDU_MAX_ATTEMPTS_PER_DAY = 3
+_U = _dt.datetime(2026, 11, 2, 1, 0)
+for _i in range(5):
+    _edu.maybe_post({}, _U + _dt.timedelta(minutes=_i))
+_day = _edu.local_now(_U).date().isoformat()
+_ud = _ku["edu_state"]["usage"][_day]
+check("سقف روزانهٔ تلاش: بیش از ۳ بار ساخت نمی‌کند", _ud["attempts"] == 3 and _ud["fail"] == 3 and _ud["ok"] == 0)
+check("آمار: درخواست‌ها و خروجی‌های ردشده شمرده می‌شود", _ud["calls"] == 12 and _ud["rejected"] == 3)
+_edu.maybe_post({}, _U + _dt.timedelta(minutes=10), force=True)
+check("force سقف روزانه را نادیده می‌گیرد ولی در آمار شمرده می‌شود", _ku["edu_state"]["usage"][_day]["attempts"] == 4)
+_edu.EDU_MAX_ATTEMPTS_PER_DAY = 10
+_ku.clear()
+_edu.generate = lambda desc, recent, **kw: (_edu._RUN.update(gemini_calls=1, or_calls=0, rejected=0, provider="gemini", model="g-1") or _good)
+_edu.maybe_post({}, _U)
+check("موفقیت در آمار با نام مدل ثبت می‌شود", _ku["edu_state"]["usage"][_day]["via"] == {"gemini/g-1": 1} and _ku["edu_state"]["usage"][_day]["ok"] == 1)
+_edu.EDU_MAX_TRIES_PER_SLOT = 6
+_edu.EDU_RETRY_GAP_MIN = 56
+_edu.EDU_PUBLISH_HOURS = _DEFAULT_PUB_HOURS
 
 print(f"\n{_passed} تست با موفقیت گذشت ✅")

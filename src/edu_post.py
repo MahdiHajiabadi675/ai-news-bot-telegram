@@ -33,7 +33,7 @@ from . import bale, cloudflare_kv, gemini_budget, storage
 from .bot import send_message
 from .config import (
     CHANNEL_ID, DISPLAY_TZ_OFFSET_MIN, EDU_ENABLED, EDU_EVERY_HOURS,
-    EDU_MAX_OUTPUT_TOKENS, EDU_MAX_TRIES_PER_SLOT, EDU_PUBLISH_HOURS, EDU_QUEUE_MAX,
+    EDU_MAX_ATTEMPTS_PER_DAY, EDU_MAX_OUTPUT_TOKENS, EDU_MAX_REJECTS, EDU_MAX_TRIES_PER_SLOT, EDU_PUBLISH_HOURS, EDU_QUEUE_MAX,
     EDU_RECENT_KEEP, EDU_RECENT_PROMPT, EDU_RETRY_GAP_MIN,
     GEMINI_API_KEY, OPENROUTER_API_KEY, OPENROUTER_APP_NAME, OPENROUTER_MAX_MODELS,
     OPENROUTER_MODELS, OPENROUTER_SITE_URL,
@@ -405,6 +405,7 @@ def _openrouter_generate(prompt: str, good=None, left=None):
             continue
         timeout = CALL_TIMEOUT if left is None else min(CALL_TIMEOUT, max(5, left()))
         attempts += 1
+        _RUN["or_calls"] += 1
         data, code, reason = _call_openrouter(model, prompt, timeout)
         if reason == "daily":
             print("[EDU] OpenRouter daily free limit reached — stopping")
@@ -415,6 +416,10 @@ def _openrouter_generate(prompt: str, good=None, left=None):
             continue
         if good is not None and not good(data):
             print(f"[EDU] OpenRouter {model}: output rejected — next model")
+            _RUN["rejected"] += 1
+            if _RUN["rejected"] >= max(1, EDU_MAX_REJECTS):
+                print(f"[EDU] {_RUN['rejected']} outputs rejected — stopping to save tokens")
+                break
             continue
         _RUN.update(provider="openrouter", model=model)
         print(f"[EDU] OpenRouter success: {model}")
@@ -427,7 +432,7 @@ BACKOFF_SECONDS = (6, 15)                     # فاصلهٔ تلاش‌های �
 MAX_TOTAL_SECONDS = 150                       # سقف کل زمان ساخت یک پست (Gemini + OpenRouter، همهٔ تلاش‌ها)
 CALL_TIMEOUT = 40
 _sleep = time.sleep
-_RUN = {"gemini_calls": 0, "provider": "", "model": ""}  # گزارش آخرین generate
+_RUN = {"gemini_calls": 0, "or_calls": 0, "rejected": 0, "provider": "", "model": ""}  # گزارش آخرین generate
 
 
 def _call(model: str, payload: dict, timeout: float = CALL_TIMEOUT):
@@ -476,7 +481,7 @@ def generate(category_desc: str, recent_titles: list, accept=None, use_gemini: b
     «قابل‌قبول» یعنی accept(data) (در _run همان validate) None برنگرداند. خروجی ناخوانا یا
     بی‌کیفیت یعنی مدل بعدی. کل زمان از MAX_TOTAL_SECONDS بیشتر نمی‌شود.
     """
-    _RUN.update(gemini_calls=0, provider="", model="")
+    _RUN.update(gemini_calls=0, or_calls=0, rejected=0, provider="", model="")
     recent = "\n".join(f"- {t}" for t in recent_titles[-max(1, EDU_RECENT_PROMPT):]) or "(none yet)"
     prompt = PROMPT.format(topic=category_desc, recent=recent)
     t0 = time.monotonic()
@@ -517,6 +522,7 @@ def generate(category_desc: str, recent_titles: list, accept=None, use_gemini: b
                     _RUN.update(provider="gemini", model=model)
                     return data
                 print(f"[EDU] Gemini {model}: output rejected")
+                _RUN["rejected"] += 1
                 break  # جواب داد ولی قابل‌قبول نبود؛ تکرار روی همان مدل فایده ندارد
             print(f"[EDU] Gemini {model}: HTTP {code}")
             if code not in RETRY_STATUS:
@@ -526,12 +532,15 @@ def generate(category_desc: str, recent_titles: list, accept=None, use_gemini: b
             _invalidate_model()  # مدل منقضی → اجرای بعد مدل تازه پیدا کند
         elif code in RETRY_STATUS or code == 200:
             for alt in _alternatives(model):
-                if left() <= 5:
+                if left() <= 5 or _RUN["rejected"] >= max(1, EDU_MAX_REJECTS):
                     break
                 _RUN["gemini_calls"] += 1
                 data, c = _call(alt, payload, min(CALL_TIMEOUT, max(5, left())))
                 print(f"[EDU] Gemini fallback {alt}: HTTP {c}")
-                if c == 200 and good(data):
+                ok_alt = c == 200 and good(data)
+                if c == 200 and not ok_alt:
+                    _RUN["rejected"] += 1
+                if ok_alt:
                     try:
                         cloudflare_kv.put("gemini_model", alt)  # اجراهای بعد از همین شروع کنند
                     except Exception:  # noqa: BLE001
@@ -541,6 +550,9 @@ def generate(category_desc: str, recent_titles: list, accept=None, use_gemini: b
         print("[EDU] Gemini unavailable — trying free OpenRouter models")
     else:
         print("[EDU] Gemini skipped — trying free OpenRouter models")
+    if _RUN["rejected"] >= max(1, EDU_MAX_REJECTS):
+        print(f"[EDU] {_RUN['rejected']} outputs rejected — stopping to save tokens")
+        return None
     return _openrouter_generate(prompt, good=good, left=left)
 
 
@@ -593,6 +605,10 @@ def _generate(est, now_utc, force=False):
         print(f"[EDU] Queue full ({len(queue)}) — not generating")
         return
 
+    day = local_now(now_utc).date().isoformat()
+    if not force and (est.get("usage", {}).get(day, {}).get("attempts", 0)) >= EDU_MAX_ATTEMPTS_PER_DAY:
+        print(f"[EDU] Daily attempt cap reached ({EDU_MAX_ATTEMPTS_PER_DAY}) — not generating")
+        return
     same_slot = est.get("tries_slot") == slot
     tries = (est.get("tries") or 0) if same_slot else 0
     if tries >= EDU_MAX_TRIES_PER_SLOT:
@@ -620,11 +636,12 @@ def _generate(est, now_utc, force=False):
     if gemini_ok and _RUN.get("gemini_calls"):
         gemini_budget.mark_called()
     post = validate(_unwrap(raw), recent) if raw is not None else None
+    _note_usage(est, day, post is not None)
 
     if post is None:
         if not force:
             est.update({"tries_slot": slot, "tries": tries + 1, "last_try_at": now_utc.isoformat() + "Z"})
-            cloudflare_kv.put(KEY, est)
+        cloudflare_kv.put(KEY, est)  # آمار مصرف هم ذخیره شود
         print(f"[EDU] No valid post for slot {slot} (try {tries + 1}/{EDU_MAX_TRIES_PER_SLOT}"
               + (", force: not counted)" if force else ")"))
         return
@@ -638,6 +655,21 @@ def _generate(est, now_utc, force=False):
                                                "at": now_utc.isoformat() + "Z"}])[-EDU_RECENT_KEEP:]
     cloudflare_kv.put(KEY, est)
     print(f"[EDU] Generated: {post['title'][:50]} ({tag}) via {via} — queue={len(queue)}")
+
+
+def _note_usage(est, day, ok):
+    """آمار مصرف هر روز (برای /edu): تلاش‌ها، درخواست‌ها به مدل‌ها، خروجی‌های ردشده (= توکن هدررفته)"""
+    usage = est.setdefault("usage", {})
+    d = usage.setdefault(day, {"attempts": 0, "ok": 0, "fail": 0, "calls": 0, "rejected": 0, "via": {}})
+    d["attempts"] += 1
+    d["ok" if ok else "fail"] += 1
+    d["calls"] += int(_RUN.get("gemini_calls", 0)) + int(_RUN.get("or_calls", 0))
+    d["rejected"] += int(_RUN.get("rejected", 0))
+    if ok:
+        via = f"{_RUN.get('provider') or '?'}/{_RUN.get('model') or '?'}"
+        d["via"][via] = d["via"].get(via, 0) + 1
+    for old in sorted(usage)[:-3]:  # فقط ۳ روز آخر
+        del usage[old]
 
 
 def _publish_due(est, now_utc):

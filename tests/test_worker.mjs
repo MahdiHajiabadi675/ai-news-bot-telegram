@@ -286,6 +286,10 @@ check('/edu وضعیت خاموش را نشان می‌دهد', last('sendMessag
 set('edu_state', { queue: [{ post: { title: 'x' } }, { post: { title: 'y' } }], recent: [] });
 await send(msg('/edu'));
 check('/edu تعداد صف انتشار را نشان می‌دهد', last('sendMessage').body.text.includes('در صف انتشار') && last('sendMessage').body.text.includes('2'));
+const _d0 = new Date(Date.now() + 210 * 60000).toISOString().slice(0, 10);
+set('edu_state', { queue: [], recent: [], usage: { [_d0]: { attempts: 3, ok: 1, fail: 2, calls: 9, rejected: 2, via: { 'gemini/g-1': 1 } } } });
+await send(msg('/edu'));
+check('/edu آمار مصرف امروز را نشان می‌دهد', last('sendMessage').body.text.includes('ساخت 1 از 3 تلاش') && last('sendMessage').body.text.includes('توکن هدررفته) 2') && last('sendMessage').body.text.includes('gemini/g-1'));
 await send(msg('/edu on'));
 check('/edu on دوباره روشن می‌کند', get('state').edu_enabled === true);
 
