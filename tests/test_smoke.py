@@ -54,6 +54,7 @@ import src.translator as translator  # noqa: E402
 import src.publisher as publisher  # noqa: E402
 import src.digest as digest  # noqa: E402
 import src.cluster as cluster  # noqa: E402
+import src.quiz as quiz  # noqa: E402
 import src.storage as storage  # noqa: E402
 
 _passed = 0
@@ -736,6 +737,9 @@ check("edu: ساخت هر ۶ ساعت و انتشار ۱۹ تا ۲۲", _cfg.EDU_
 _DEFAULT_PUB_HOURS = _cfg.EDU_PUBLISH_HOURS
 check("edu: سقف توکن پیش‌فرض کم است", _cfg.EDU_MAX_OUTPUT_TOKENS <= 1000)
 _edu.EDU_EVERY_HOURS = 2
+# کوییز در تست‌های زمان‌بندی خاموش است (شمارش پست‌ها قابل پیش‌بینی بماند)؛
+# تست جداگانهٔ کوییز پایین‌تر آن را روشن می‌کند.
+_edu.EDU_QUIZ_PER_DAY = 0
 _edu.EDU_PUBLISH_HOURS = tuple(range(24))  # تست‌های جریان ساده: انتشار هر ساعتی مجاز؛ زمان‌بندی واقعی پایین‌تر تست می‌شود
 # در تست‌های جریان، «تور نجات» محلی خاموش است تا شمارش پست‌ها قابل پیش‌بینی بماند؛
 # تست جداگانه‌ای پایین‌تر رفتار واقعی (با fallback روشن) را می‌سنجد.
@@ -1371,6 +1375,79 @@ _msg_also = formatting.format_message({"title_fa": "عنوان", "summary_fa": "
                                        "link": "http://x", "hashtags": ["AI"],
                                        "also_sources": [{"source": "TechCrunch", "link": "http://tc"}]})
 check("قالب پست: خط «همچنین در» اضافه می‌شود", "همچنین در: TechCrunch" in _msg_also)
+
+
+# ───────────── کوییز آموزشی ─────────────
+print("Edu quiz:")
+check("بانک کوییز حداقل ۴ سؤال با پاسخ درست معتبر دارد",
+      len(quiz.QUIZ_BANK) >= 4 and all(0 <= q["correct"] < len(q["options"]) for q in quiz.QUIZ_BANK))
+_q1, _id1 = quiz.pick(0, [])
+_q2, _id2 = quiz.pick(0, [_id1])
+check("کوییز چرخشی است و سؤال تکراری نمی‌دهد", _id1 != _id2)
+check("همهٔ کوییزها id یکتا دارند", len({q["id"] for q in quiz.QUIZ_BANK}) == len(quiz.QUIZ_BANK))
+
+_kqz = {}
+_edu.cloudflare_kv.get = lambda k, d=None: _kqz.get(k, d)
+_edu.cloudflare_kv.put = lambda k, v: _kqz.__setitem__(k, _json.loads(_json.dumps(v))) or True
+_edu.EDU_PUBLISH_HOURS = _DEFAULT_PUB_HOURS
+_edu.EDU_EVERY_HOURS = 6
+_edu.EDU_POSTS_PER_DAY = 4
+_edu.EDU_QUIZ_PER_DAY = 1
+_edu.EDU_CATCHUP_MAX = 2
+_edu.EDU_USE_BUILTIN_FALLBACK = False
+_edu.GEMINI_API_KEY = "k"; _edu.OPENROUTER_API_KEY = ""; _edu.CHANNEL_ID = "@c"; _edu.EDU_ENABLED = True
+_edu.gemini_budget.can_call = lambda **kw: True
+_edu.generate = lambda desc, recent, **kw: None
+_sent_q, _polls_q = [], []
+_edu.send_message = lambda c, t, **kw: (_sent_q.append(t) or {"ok": True})
+_edu.send_poll = lambda c, q, o, cidx, exc=None: (_polls_q.append((q, cidx)) or {"ok": True})
+_edu.bale.send_text = lambda t: True
+_edu.bale.reset = lambda: None
+_edu.storage.load_published = lambda: []
+_edu.storage.save_published = lambda items: None
+_queue4 = [{"post": dict(_good), "tag": "t", "slot": f"s{i}"} for i in range(4)]
+_kqz["edu_state"] = {"queue": _queue4}
+for _h in range(19, 23):
+    _edu.maybe_post({}, _tehran(_h, day=8))
+check("شب با ۴ پست: ۳ پست متنی + ۱ کوییز", len(_sent_q) == 3 and len(_polls_q) == 1)
+check("کوییزِ منتشرشده پاسخ درست معتبر دارد",
+      _polls_q and 0 <= _polls_q[0][1] < len(quiz.QUIZ_BANK[0]["options"]))
+
+
+# ───────────── انتشار زمان‌بندی‌شده ─────────────
+print("Scheduled publishing:")
+# تست‌های edu/kv ذخیره‌سازی را به store محلی خودشان وصل کرده‌اند؛ برگردان.
+kv.get = lambda key, default=None: _store.get(key, default)
+kv.put = lambda key, value: _store.__setitem__(key, value)
+_store["pending"] = [{"id": "s1", "source": "S", "title_fa": "خبر زمان‌بندی", "summary_fa": "x",
+                      "importance": "medium", "hashtags": ["AI"], "link": "http://x"}]
+_store["approved"] = []
+bot._handle_callback({"id": "c", "data": "sched:2:s1", "from": {"id": 42}}, {})
+_appr = _store["approved"]
+check("sched: خبر از صف تایید به «آماده انتشار» با زمان آینده می‌رود",
+      _store["pending"] == [] and len(_appr) == 1
+      and _appr[0]["admin_action"] == "scheduled"
+      and _appr[0]["schedule_at"] > datetime.datetime.utcnow().isoformat())
+
+_psent = []
+publisher.send_message = lambda c, t, **kw: (_psent.append(t) or {"ok": True})
+publisher.bale.reset = lambda: None
+publisher.bale.mirror = lambda it: None
+publisher.storage.load_published = lambda: []
+publisher.storage.save_published = lambda items: None
+publisher.storage.save_approved = lambda items: _store.__setitem__("approved", items)
+_now_iso2 = datetime.datetime.utcnow()
+_future = {"id": "f1", "title_fa": "خبر آینده", "summary_fa": "x", "importance": "medium",
+           "hashtags": ["AI"], "link": "http://x",
+           "schedule_at": (_now_iso2 + datetime.timedelta(hours=3)).isoformat() + "Z"}
+_past = {"id": "p1", "title_fa": "خبر گذشته", "summary_fa": "x", "importance": "medium",
+         "hashtags": ["AI"], "link": "http://x",
+         "schedule_at": (_now_iso2 - datetime.timedelta(hours=1)).isoformat() + "Z"}
+_pstate = {"daily_post_count": 0, "daily_post_date": datetime.datetime.utcnow().date().isoformat()}
+publisher.publish_approved(_pstate, [_future, _past])
+check("publisher: خبر آینده در صف می‌ماند و خبر گذشته منتشر می‌شود",
+      len(_psent) == 1 and "خبر گذشته" in _psent[0]
+      and [i["id"] for i in _store["approved"]] == ["f1"])
 
 
 # ───────────── امنیت: ویرایش خبر فقط توسط ادمین ─────────────

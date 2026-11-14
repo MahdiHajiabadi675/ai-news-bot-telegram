@@ -397,4 +397,23 @@ console.log('Health endpoint:');
   check('/health: هیچ عنوان خبری لو نمی‌رود', !JSON.stringify(body).includes('عنوان'));
 }
 
+// ───────────── انتشار زمان‌بندی‌شده ─────────────
+console.log('Scheduled publishing:');
+{
+  set('state', { paused: false, auto_publish_enabled: true, daily_post_count: 0,
+    daily_post_date: new Date().toISOString().slice(0, 10) });
+  set('pending', [item('sc1')]); set('approved', []); set('published', []);
+  await send(cb('sched:2:sc1'));
+  const appr = get('approved');
+  check('sched: خبر با زمان آینده در صف «آماده انتشار» می‌ماند',
+    appr.length === 1 && new Date(appr[0].schedule_at) > new Date());
+  check('sched: همان لحظه منتشر نمی‌شود', !calls.some(c => c.body.chat_id === '@chan'));
+
+  set('pending', [item('sc3', { schedule_at: new Date(Date.now() + 3600000).toISOString() })]);
+  set('approved', []); set('published', []);
+  await send(cb('approve:sc3'));
+  check('publishItem: خبر زمان‌بندی‌شده فوری منتشر نمی‌شود',
+    !get('published').some(p => p.published));
+}
+
 console.log(`\n${passed} تست Worker با موفقیت گذشت ✅`);

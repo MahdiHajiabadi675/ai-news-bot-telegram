@@ -1,6 +1,6 @@
 import re
 import requests
-from datetime import datetime
+from datetime import datetime, timedelta
 from .config import (
     BOT_TOKEN, CHANNEL_ID, ADMIN_ID, AUTO_TRUST_THRESHOLD, DISPLAY_TZ_OFFSET_MIN, START_BANNER_URL, DRY_RUN
 )
@@ -49,6 +49,29 @@ def send_photo(chat_id, photo, caption, parse_mode="HTML", reply_markup=None):
     except Exception as e:
         print(f"[ERROR] send_photo: {e}")
         return None
+
+def send_poll(chat_id, question, options, correct_option_id, explanation=None):
+    """نظرسنجی نوع quiz (کوییز آموزشی) — پاسخ درست و توضیح دارد."""
+    if DRY_RUN:
+        print(f"[DRY] sendPoll → {chat_id}: {question}")
+        return {"ok": True, "dry_run": True, "result": {"message_id": 0}}
+    data = {
+        "chat_id": chat_id,
+        "question": str(question)[:300],
+        "options": [str(o)[:100] for o in options][:10],
+        "type": "quiz",
+        "correct_option_id": int(correct_option_id),
+        "is_anonymous": True,
+    }
+    if explanation:
+        data["explanation"] = str(explanation)[:200]
+    try:
+        resp = requests.post(f"{BASE}/sendPoll", json=data, timeout=15)
+        return resp.json()
+    except Exception as e:
+        print(f"[ERROR] send_poll: {e}")
+        return None
+
 
 def answer_callback(callback_query_id, text=None, show_alert=False):
     if DRY_RUN:
@@ -327,6 +350,26 @@ def _handle_callback(cb, state):
 
     pending = storage.load_pending()
     approved = storage.load_approved()
+
+    if action == "sched":
+        # ⏰ تایید + انتشار در ساعت آینده (callback: sched:<hours>:<id>)
+        try:
+            hours = max(1, min(48, int(item_hash or 0)))
+        except ValueError:
+            hours = 2
+        target_id = parts[2] if len(parts) > 2 else ""
+        item = _find_and_remove(pending, target_id)
+        if item:
+            item["status"] = "approved"
+            item["admin_action"] = "scheduled"
+            item["schedule_at"] = (datetime.utcnow() + timedelta(hours=hours)).isoformat() + "Z"
+            approved.append(item)
+            storage.save_pending(pending)
+            storage.save_approved(approved)
+            answer_callback(cb_id, f"⏰ برای {hours} ساعت بعد زمان‌بندی شد")
+        else:
+            answer_callback(cb_id, "❌ خبر پیدا نشد", show_alert=True)
+        return
 
     if action == "approve":
         item = _find_and_remove(pending, item_hash)
@@ -765,6 +808,10 @@ def _send_review(item):
             [
                 {"text": "⭐️ ویژه", "callback_data": f"feature:{item_id}"},
                 {"text": "✏️ ویرایش", "callback_data": f"edit:{item_id}"}
+            ],
+            [
+                {"text": "⏰ +۲ ساعت", "callback_data": f"sched:2:{item_id}"},
+                {"text": "⏰ +۶ ساعت", "callback_data": f"sched:6:{item_id}"}
             ],
             [{"text": "🗑 پاک کردن کل صف", "callback_data": "clearq"}]
         ]

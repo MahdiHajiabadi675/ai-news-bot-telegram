@@ -228,6 +228,27 @@ async function handleCallback(cb, env, BASE, CHANNEL_ID, ADMIN_ID) {
   const pending = await getJSON(env, 'pending', []);
   const approved = await getJSON(env, 'approved', []);
 
+  if (action === 'sched') {
+    // ⏰ تایید + انتشار در ساعت آینده (callback: sched:<hours>:<id>)
+    const hours = Math.max(1, Math.min(48, Number(parts[1]) || 2));
+    const targetId = parts[2] || '';
+    const idx = pending.findIndex(i => itemKey(i) === targetId);
+    if (idx !== -1) {
+      const item = pending.splice(idx, 1)[0];
+      await recordDecision(env, item, 'approve');
+      item.status = 'approved';
+      item.admin_action = 'scheduled';
+      item.schedule_at = new Date(Date.now() + hours * 3600 * 1000).toISOString();
+      approved.push(item);
+      await saveJSON(env, 'pending', pending);
+      await saveJSON(env, 'approved', approved);
+      await answerCallback(BASE, cbId, `⏰ برای ${hours} ساعت بعد زمان‌بندی شد`);
+    } else {
+      await answerCallback(BASE, cbId, '❌ خبر پیدا نشد', true);
+    }
+    return;
+  }
+
   if (action === 'approve') {
     const idx = pending.findIndex(i => itemKey(i) === itemHash);
     if (idx !== -1) {
@@ -682,6 +703,10 @@ async function sendReview(BASE, ADMIN_ID, item) {
       [
         { text: '⭐️ ویژه', callback_data: `feature:${id}` },
         { text: '✏️ ویرایش', callback_data: `edit:${id}` }
+      ],
+      [
+        { text: '⏰ +۲ ساعت', callback_data: `sched:2:${id}` },
+        { text: '⏰ +۶ ساعت', callback_data: `sched:6:${id}` }
       ]
     ]
   };
@@ -968,6 +993,11 @@ async function publishItem(env, BASE, CHANNEL_ID, ADMIN_ID, item) {
     return;
   }
 
+  if (isScheduledFuture(item)) {
+    await sendMessage(BASE, ADMIN_ID, '⏰ زمان این خبر نرسیده — در صف «آماده انتشار» می‌ماند');
+    return;
+  }
+
   const today = new Date().toISOString().slice(0, 10);
   if (state.daily_post_date !== today) {
     state.daily_post_date = today;
@@ -1059,6 +1089,10 @@ async function handleRun(env, BASE, CHANNEL_ID, ADMIN_ID) {
     const key = itemKey(item);
     if (key && publishedIds.has(key)) {
       console.log('[handleRun] Already published, skipping:', key);
+      continue;
+    }
+    if (isScheduledFuture(item)) {
+      console.log('[handleRun] Scheduled later, keeping:', key);
       continue;
     }
 
@@ -1353,4 +1387,10 @@ function migrateState(state) {
 /** کلید یکتای خبر — بعضی آیتم‌های قدیمی «hash» دارن، جدیدها «id» */
 function itemKey(item) {
   return item.id || item.hash || '';
+}
+
+/** خبر زمان‌بندی‌شده‌ای که هنوز موعدش نرسیده */
+function isScheduledFuture(item) {
+  const at = Date.parse((item && item.schedule_at) || '');
+  return Number.isFinite(at) && at > Date.now();
 }

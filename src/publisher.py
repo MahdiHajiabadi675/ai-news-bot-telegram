@@ -63,6 +63,18 @@ def publish_approved(state, approved_items=None):
             print(f"[INFO] Already published, skipping: {key}")
             continue
 
+        # ⏰ خبر زمان‌بندی‌شده تا رسیدن موعدش در صف می‌ماند
+        sched = item.get("schedule_at")
+        if sched:
+            try:
+                due = datetime.fromisoformat(str(sched).replace("Z", ""))
+            except ValueError:
+                due = None
+            if due and due > datetime.utcnow():
+                print(f"[INFO] Scheduled for {sched} — keeping in queue")
+                remaining.append(item)
+                continue
+
         if state["daily_post_count"] >= MAX_POSTS_PER_RUN:
             print(f"[INFO] Run limit reached ({MAX_POSTS_PER_RUN}) — keeping in queue")
             remaining.append(item)

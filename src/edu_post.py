@@ -29,12 +29,12 @@ from datetime import datetime, timedelta
 
 import requests
 
-from . import bale, cloudflare_kv, gemini_budget, storage
-from .bot import send_message
+from . import bale, cloudflare_kv, gemini_budget, quiz, storage
+from .bot import send_message, send_poll
 from .config import (
     CHANNEL_ID, DISPLAY_TZ_OFFSET_MIN, EDU_ENABLED, EDU_EVERY_HOURS,
     EDU_MAX_ATTEMPTS_PER_DAY, EDU_MAX_OUTPUT_TOKENS, EDU_MAX_REJECTS, EDU_MAX_TRIES_PER_SLOT, EDU_PUBLISH_HOURS, EDU_QUEUE_MAX,
-    EDU_CATCHUP_MAX, EDU_POSTS_PER_DAY, EDU_RECENT_KEEP, EDU_RECENT_PROMPT, EDU_RETRY_GAP_MIN,
+    EDU_CATCHUP_MAX, EDU_POSTS_PER_DAY, EDU_QUIZ_PER_DAY, EDU_RECENT_KEEP, EDU_RECENT_PROMPT, EDU_RETRY_GAP_MIN,
     EDU_USE_BUILTIN_FALLBACK, DRY_RUN,
     GEMINI_API_KEY, OPENROUTER_API_KEY, OPENROUTER_APP_NAME, OPENROUTER_MAX_MODELS,
     OPENROUTER_MODELS, OPENROUTER_SITE_URL,
@@ -908,6 +908,25 @@ def _publish_due(est, now_utc):
     batch = min(behind, max(1, EDU_CATCHUP_MAX)) if catching_up else 1
     sent = 0
     for _ in range(batch):
+        # آخرین پست شب → کوییز آموزشی (نظرسنجی چهارگزینه‌ای با پاسخ و توضیح)
+        if EDU_QUIZ_PER_DAY > 0 and (done + sent) == target - 1:
+            q, qid = quiz.pick(done + sent, est.get("quiz_used") or [])
+            res = send_poll(CHANNEL_ID, q["question"], q["options"], q["correct"], q.get("explanation"))
+            if res and res.get("ok"):
+                est["quiz_used"] = (list(est.get("quiz_used") or []) + [qid])[-20:]
+                sent += 1
+                print(f"[EDU] Quiz published: {qid} — {done + sent}/{target} today")
+                try:
+                    log = storage.load_published()
+                    log.append({"id": f"quiz-{qid}", "title_fa": q["question"][:80],
+                                "source": "آموزش AI", "category": "edu", "published": True,
+                                "published_at": datetime.utcnow().isoformat() + "Z"})
+                    storage.save_published(log)
+                except Exception as e:  # noqa: BLE001
+                    print(f"[EDU] quiz log failed: {type(e).__name__}")
+                continue
+            print(f"[EDU] quiz send failed: {res}")
+
         item = _peek_queue(est)
         from_builtin = False
         if item is None:
