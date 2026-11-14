@@ -94,7 +94,7 @@ def format_digest(items, limit: int = TG_LIMIT, quizzes=None) -> str:
             lines.append(f"{i}. {question}")
             if answer:
                 lines.append(f"   ✅ {e(clip(answer, 60))}")
-    lines += ["", "─" * 20, "🏷️ #جمع‌بندی_هفته"]
+    lines += ["", "─" * 20, "📣 این جمع‌بندی را برای دوستت فوروارد کن", "🏷️ #جمع‌بندی_هفته"]
     text = "\n".join(lines)
     if len(text) > limit:  # دفاع آخر: از انتها کم کن (تگ‌ها سالم می‌مانند)
         text = format_digest(items[:-1], limit, quizzes) if len(items) > 1 else text[:limit]
@@ -121,7 +121,7 @@ def format_plain(items, quizzes=None) -> str:
             lines.append(f"{i}. {clip(qz.get('question'), 70)}")
             if answer:
                 lines.append(f"   ✅ {clip(answer, 60)}")
-    lines += ["", "#جمع‌بندی_هفته"]
+    lines += ["", "📣 این جمع‌بندی را برای دوستت فوروارد کن", "#جمع‌بندی_هفته"]
     return "\n".join(lines)[:4000]
 
 

@@ -49,6 +49,7 @@ def publish_approved(state, approved_items=None):
     importance_order = {"high": 0, "medium": 1, "low": 2}
     approved.sort(key=lambda x: (
         0 if x.get("admin_action") == "featured" else 1,
+        0 if x.get("topic_hit") else 1,          # موضوعات مورد علاقهٔ ادمین
         0 if x.get("admin_action") == "auto_approved" else 1,
         importance_order.get(x.get("importance", "medium"), 2)
     ))

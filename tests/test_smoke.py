@@ -58,6 +58,8 @@ import src.quiz as quiz  # noqa: E402
 import src.hn as hn  # noqa: E402
 import src.arxiv_daily as arxiv_daily  # noqa: E402
 import src.bluesky as bluesky  # noqa: E402
+import src.hashtags as hashtags  # noqa: E402
+import src.topics as topic_prefs  # noqa: E402
 import src.storage as storage  # noqa: E402
 
 _passed = 0
@@ -1396,6 +1398,44 @@ _msg_also = formatting.format_message({"title_fa": "عنوان", "summary_fa": "
                                        "link": "http://x", "hashtags": ["AI"],
                                        "also_sources": [{"source": "TechCrunch", "link": "http://tc"}]})
 check("قالب پست: خط «همچنین در» اضافه می‌شود", "همچنین در: TechCrunch" in _msg_also)
+
+
+# ───────────── هشتگ‌های هدفمند ─────────────
+print("Targeted hashtags:")
+_h = hashtags.build({"title": "OpenAI releases GPT-6 with new safety guardrails",
+                     "summary": "", "category": "model_release"})
+check("هشتگ موجودیت اول می‌آید", _h and _h[0] == "OpenAI")
+check("هشتگ دسته و موضوع اضافه می‌شود",
+      "مدل_جدید" in _h and "ایمنی_AI" in _h and "هوش_مصنوعی" in _h)
+check("سقف ۴ هشتگ و بدون تکرار", len(_h) <= 4 and len(set(_h)) == len(_h))
+check("هشتگ‌ها فقط حروف/عدد/زیرخط دارند",
+      all(all(c.isalnum() or c == "_" or "\u0600" <= c <= "\u06FF" for c in t) for t in _h))
+check("هشتگ موجودیت برای Qwen", hashtags.build({"title": "Qwen 3 is out", "category": "model_release"})[0] == "Qwen")
+check("هشتگ برای خبر بی‌موضوع هم ساخته می‌شود",
+      "هوش_مصنوعی" in hashtags.build({"title": "Market update", "category": "industry"}))
+
+
+# ───────────── موضوعات مورد علاقه (اولویت، نه فیلتر) ─────────────
+print("Topic preferences:")
+_items_t = [
+    {"title": "OpenAI ships a new safety filter", "summary": "", "source": "OpenAI Blog",
+     "category": "model_release", "hashtags": ["ایمنی_AI"], "hot": 50, "hot_reasons": []},
+    {"title": "Nvidia earnings beat estimates", "summary": "", "source": "CNBC",
+     "category": "industry", "hashtags": [], "hot": 60, "hot_reasons": []},
+]
+_hits_t = topic_prefs.boost(_items_t, ["ایمنی"])
+check("موضوع: خبر هم‌خوان نشانه و جذابیت می‌گیرد",
+      _hits_t == 1 and _items_t[0].get("topic_hit") == "ایمنی" and _items_t[0]["hot"] == 62)
+check("موضوع: خبرهای دیگر حذف نمی‌شوند",
+      len(_items_t) == 2 and "topic_hit" not in _items_t[1])
+check("موضوع: لیست تمیز، بدون تکرار و با سقف طول",
+      topic_prefs.clean_list(["ایمنی", " ایمنی ", "", "x" * 60]) == ["ایمنی", "x" * 40])
+check("موضوع: بدون موضوع هیچ تغییری نمی‌دهد", topic_prefs.boost(list(_items_t), []) == 0)
+
+_base_item = {"source": "دیجیاتو", "importance": "medium", "confidence": "likely", "category": "other"}
+_base_score = mainmod.calculate_score(dict(_base_item))
+_boost_score = mainmod.calculate_score({**_base_item, "topic_hit": "ایمنی"})
+check("امتیاز خبرِ موضوعدار ۱۰ واحد بیشتر است", _boost_score == _base_score + 10)
 
 
 # ───────────── کوییز آموزشی ─────────────

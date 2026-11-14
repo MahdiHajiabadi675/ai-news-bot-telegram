@@ -31,6 +31,7 @@ from src.analyzer import analyze_articles, localize
 from src import source_trust
 from src import cluster
 from src import hn
+from src import topics as topic_prefs
 from src.fast_track import process_fast_track
 from src.bot import poll_updates, _send_review, notify_admin_new, send_message
 from src.publisher import publish_approved
@@ -58,6 +59,9 @@ def calculate_score(item: dict) -> int:
     category_score = category_weight * SCORE_CATEGORY_WEIGHT
 
     total = int(source_score + importance_score + confidence_score + category_score)
+    # موضوعات مورد علاقهٔ ادمین: اولویت، نه فیلتر (بقیهٔ خبرها هم می‌آیند)
+    if item.get("topic_hit"):
+        total += topic_prefs.SCORE_BONUS
     return min(total, 100)
 
 
@@ -214,6 +218,11 @@ def _run(force=False):
                 # سیگنال Hacker News: اگر خبر واقعاً در HN داغ است، به جذابیت اضافه کن
                 if HN_ENABLED:
                     analyzed = hn.enrich(analyzed, limit=HN_MAX_ITEMS)
+
+                # موضوعات مورد علاقهٔ ادمین: اولویت، نه فیلتر
+                topic_list = topic_prefs.load(state)
+                if topic_list:
+                    rl["topic_hits"] = topic_prefs.boost(analyzed, topic_list)
 
                 # بعد از تحلیل، خبر دیده‌شده محسوب می‌شود تا دوباره پردازش نشود.
                 for article in articles:

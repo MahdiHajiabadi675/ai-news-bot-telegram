@@ -556,6 +556,22 @@ console.log('Engagement features:');
   const startKb = startCall.body.reply_markup;
   const flatStart = startKb && startKb.inline_keyboard ? startKb.inline_keyboard.flat() : [];
   check('/start: دکمهٔ آرشیو موضوعی', flatStart.some(b => b.url && b.url.includes('t.me/s/chan')));
+
+  // 🎯 موضوعات مورد علاقه
+  set('state', { paused: false, auto_publish_enabled: true, daily_post_count: 0, topics: [] });
+  await send(msg('/topics add ایمنی'));
+  check('/topics add: موضوع ذخیره می‌شود', (get('state').topics || []).includes('ایمنی'));
+  await send(msg('/topics'));
+  check('/topics: فهرست موضوعات را نشان می‌دهد',
+    last('sendMessage').body.text.includes('ایمنی') && last('sendMessage').body.text.includes('topics add'));
+  await send(msg('/topics del ایمنی'));
+  check('/topics del: موضوع حذف می‌شود', (get('state').topics || []).length === 0);
+  await send(msg('/topics add ایجنت'));
+  await send(msg('/topics clear'));
+  check('/topics clear: همه پاک می‌شوند', (get('state').topics || []).length === 0);
+
+  check('/welcome: متن حرفه‌ای با منبع‌ها و دعوت به فوروارد',
+    welcomeMsg.body.text.includes('۳۷ منبع') && welcomeMsg.body.text.includes('فوروارد'));
 }
 
 console.log(`\n${passed} تست Worker با موفقیت گذشت ✅`);

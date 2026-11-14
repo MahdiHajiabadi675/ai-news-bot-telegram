@@ -10,6 +10,7 @@ Analyzer — تحلیل محلی اخبار (بدون Gemini)
 """
 from . import source_trust
 from .classifier import classify, is_english
+from . import hashtags
 from . import translator
 from .newsworthiness import newsworthiness
 
@@ -41,12 +42,9 @@ def analyze_articles(articles: list, stats: dict) -> list:
         trust = source_trust.with_corroboration(base_trust, others)
         cls = classify(a, trust, others)
 
-        tags = ["هوش_مصنوعی", "اخبار_AI"]
-        if cls["category"] in _CATEGORY_TAG:
-            tags.append(_CATEGORY_TAG[cls["category"]])
-
         item_for_hot = {**a, **cls}
         hot = newsworthiness(item_for_hot, trust)
+        tags = hashtags.build({**a, **cls})
 
         analyzed.append({
             "id": key,

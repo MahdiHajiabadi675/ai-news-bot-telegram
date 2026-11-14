@@ -647,9 +647,21 @@ async function handleMessage(msg, env, BASE, CHANNEL_ID, ADMIN_ID) {
       .filter(p => p && p.published && !p.deleted && p.link)
       .slice(-3)
       .reverse();
-    let msg = '👋 <b>به کانال خوش آمدی</b>\n\n';
-    msg += 'هر ساعت مهم‌ترین خبرهای هوش مصنوعی، ترجمه‌شده و خلاصه.\n';
-    msg += 'هر شب ۴ پست آموزشی + ۲ کوییز، و جمع‌بندی هفته هر جمعه.\n\n';
+    let msg = '👋 <b>به کانال «اخبار هوش مصنوعی» خوش آمدی</b>\n\n';
+    msg += 'اینجا مهم‌ترین خبرهای دنیای AI را — ترجمه‌شده، خلاصه و با تیتر فارسی — می‌بینی؛ ' +
+      'به‌همراه آموزش‌های کوتاه و کاربردی.\n\n';
+    msg += '📌 <b>چه چیزی دریافت می‌کنی؟</b>\n';
+    msg += '• خبرهای لحظه‌ای از ۳۷ منبع معتبر (OpenAI، Google، Anthropic، Meta، Mistral، Qwen و رسانه‌های بزرگ)\n';
+    msg += '• خلاصهٔ فارسی + متن اصلی؛ خبرهای مهم با تایید انسانی منتشر می‌شوند\n';
+    msg += '• هر شب ساعت ۱۹ تا ۲۲: ۴ پست آموزشی + ۲ کوییز تعاملی\n';
+    msg += '• هر جمعه: جمع‌بندی هفته با ۷ خبر مهم و پاسخ کوییزها\n';
+    msg += '• هر روز: یک مقالهٔ تازه از arXiv\n\n';
+    msg += '🗂 <b>راهنمای سریع</b>\n';
+    msg += '• آرشیو موضوعی: دکمهٔ «🗂 آرشیو موضوعی» در منوی /start\n';
+    msg += '• خبرهای مهم 📌 سنجاق می‌شوند\n';
+    msg += '• هشتگ‌های پرکاربرد: #مدل_جدید #ایمنی_AI #متن_باز #ایجنت\n';
+    if (env.CHANNEL_GROUP_URL) msg += `• گروه بحث: ${env.CHANNEL_GROUP_URL}\n`;
+    msg += '\n📣 اگر برایت مفید بود، کانال را برای دوستت فوروارد کن.';
     if (recent.length) {
       msg += '<b>تازه‌ترین خبرها:</b>\n';
       recent.forEach((p, i) => {
@@ -669,6 +681,43 @@ async function handleMessage(msg, env, BASE, CHANNEL_ID, ADMIN_ID) {
     }
     try { await sendBaleText(env, msg.replace(/<[^>]+>/g, '')); } catch (e) { /* نادیده */ }
     await sendMessage(BASE, ADMIN_ID, mid ? '✅ پست خوش‌آمد در کانال سنجاق شد' : '⚠️ ارسال نشد');
+  } else if (/^\/topics/i.test(text)) {
+    // 🎯 موضوعات مورد علاقهٔ ادمین: اولویت‌دهی، نه فیلتر
+    const topics = Array.isArray(state.topics) ? state.topics : [];
+    const rest = text.replace(/^\/topics\s*/i, '').trim();
+    const [cmd, ...words] = rest.split(/\s+/);
+    const value = words.join(' ').trim().slice(0, 40);
+    if (!rest) {
+      const lines = topics.length
+        ? topics.map((t, i) => `${i + 1}. ${escapeHtml(t)}`).join('\n')
+        : 'هنوز موضوعی ثبت نشده.';
+      await sendMessage(BASE, ADMIN_ID,
+        `🎯 <b>موضوعات مورد علاقه</b>\n${lines}\n\n` +
+        'افزودن: <code>/topics add ایمنی</code>\n' +
+        'حذف: <code>/topics del ایمنی</code>\n' +
+        'پاک‌کردن همه: <code>/topics clear</code>\n\n' +
+        '<i>این فقط اولویت است؛ بقیهٔ خبر‌ها هم منتشر می‌شوند.</i>');
+    } else if (/^clear$/i.test(cmd)) {
+      await updateState(env, { topics: [] });
+      await sendMessage(BASE, ADMIN_ID, '🗑 فهرست موضوعات پاک شد.');
+    } else if (/^(add|\+)$/i.test(cmd) && value) {
+      if (topics.length >= 10) {
+        await sendMessage(BASE, ADMIN_ID, '⚠️ حداکثر ۱۰ موضوع؛ اول یکی را حذف کن.');
+      } else {
+        if (!topics.some(t => String(t).toLowerCase() === value.toLowerCase())) topics.push(value);
+        await updateState(env, { topics });
+        await sendMessage(BASE, ADMIN_ID,
+          `✅ موضوع ثبت شد: <b>${escapeHtml(value)}</b>\n🎯 ${topics.map(t => escapeHtml(t)).join(' · ')}`);
+      }
+    } else if (/^(del|remove|-)$/i.test(cmd) && value) {
+      const next = topics.filter(t => String(t).toLowerCase() !== value.toLowerCase());
+      await updateState(env, { topics: next });
+      await sendMessage(BASE, ADMIN_ID, next.length === topics.length
+        ? `⚠️ پیدا نشد: ${escapeHtml(value)}`
+        : `🗑 حذف شد: <b>${escapeHtml(value)}</b>`);
+    } else {
+      await sendMessage(BASE, ADMIN_ID, 'فرمت: <code>/topics add ایمنی</code>');
+    }
   } else if (/^\/health/i.test(text)) {
     // همان اطلاعات GET /health، این‌بار داخل تلگرام
     const h = await healthSnapshot(env);
