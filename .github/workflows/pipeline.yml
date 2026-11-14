@@ -50,13 +50,6 @@ jobs:
         # ورودی dispatch مستقیم داخل shell نمی‌رود (جلوگیری از command injection)
         env:
           TRIGGER: ${{ inputs.trigger }}
-        run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "$TRIGGER" != "cron" ]; then
-            python main.py run --force
-          else
-            python main.py run
-          fi
-        env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHANNEL_ID: ${{ secrets.TELEGRAM_CHANNEL_ID }}
           TELEGRAM_ADMIN_ID: ${{ secrets.TELEGRAM_ADMIN_ID }}
@@ -67,6 +60,12 @@ jobs:
           CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
           CF_KV_NAMESPACE: ${{ secrets.CF_KV_NAMESPACE }}
           CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "$TRIGGER" != "cron" ]; then
+            python main.py run --force
+          else
+            python main.py run
+          fi
 
       # نکته: انتشار اخبارِ تاییدشده داخل خود همین pipeline انجام می‌شه
       # (src/publisher.py). دکمه «تایید» ادمین هم از طریق Cloudflare Worker
