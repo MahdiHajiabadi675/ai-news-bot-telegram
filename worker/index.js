@@ -950,6 +950,8 @@ function renderChannelMessage(item, env, summaryLen, showOriginal, tagCount = -1
   }
   if (untranslated) text += '\n\n🔤 <i>ترجمه نشده — متن اصلی</i>';
   if (item.confidence === 'rumor') text += '\n\n⚠️ <i>این خبر تایید رسمی نشده است</i>';
+  const signature = String(env?.CHANNEL_SIGNATURE || '').trim();
+  if (signature) text += `\n\n${escapeHtml(signature)}`;
   return text;
 }
 

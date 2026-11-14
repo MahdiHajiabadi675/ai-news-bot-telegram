@@ -652,6 +652,12 @@ _FEEDS = importlib.reload(_col).FEEDS  # تست‌های قبلی FEEDS را م�
 _off = {f["name"] for f in _FEEDS if f.get("official")}
 check("منابع رسمی: OpenAI/HuggingFace/Anthropic/DeepMind", {"OpenAI Blog", "HuggingFace", "Anthropic", "DeepMind"} <= _off)
 check("رسانه‌ها رسمی نیستند", not ({"TechCrunch AI", "MIT Tech Review", "دیجیاتو"} & _off))
+check("فیدها نام/آدرس یکتا و کلیدهای لازم دارند",
+      len(_FEEDS) == len({f["name"] for f in _FEEDS}) == len({f["url"] for f in _FEEDS})
+      and all({"name", "url", "lang"} <= set(f) for f in _FEEDS))
+check("همهٔ منابع رسمی trustworthy هستند", all(f.get("trusted") for f in _FEEDS if f.get("official")))
+check("منابع تازه (Mistral/Qwen/smol/Import AI) اضافه شده‌اند",
+      {"Mistral AI", "Qwen Blog", "AI News", "Import AI"} <= {f["name"] for f in _FEEDS})
 
 _sent_rv = []
 bot.send_message = lambda chat_id, text, **kw: (_sent_rv.append(text) or {"ok": True})
@@ -1742,6 +1748,14 @@ check("پیام بلند: زیر سقف و تگ‌های بسته",
       len(_long) <= 4000
       and _long.count("<b>") == _long.count("</b>")
       and _long.count("<blockquote") == _long.count("</blockquote>"))
+
+_orig_sig = formatting.CHANNEL_SIGNATURE
+formatting.CHANNEL_SIGNATURE = "@my_channel"
+check("امضای کانال به انتهای پست اضافه می‌شود",
+      formatting.format_message(item_en).rstrip().endswith("@my_channel"))
+formatting.CHANNEL_SIGNATURE = ""
+check("بدون تنظیم امضا، پست بدون امضاست", "@my_channel" not in formatting.format_message(item_en))
+formatting.CHANNEL_SIGNATURE = _orig_sig
 
 
 # ───────────── شکست KV باید دیده شود، نه نادیده ─────────────

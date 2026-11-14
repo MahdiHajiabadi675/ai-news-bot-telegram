@@ -348,6 +348,17 @@ console.log('Safe formatting:');
   const badText = calls.find(c => c.body.chat_id === '@chan').body.text;
   check('لینک نامعتبر → بدون href و بدون javascript',
     !badText.includes('javascript:') && !badText.includes('<a href=""'));
+
+  // امضای کانال (اختیاری)
+  set('state', { paused: false, auto_publish_enabled: true, daily_post_count: 0,
+    daily_post_date: new Date().toISOString().slice(0, 10) });
+  set('pending', [item('sig1')]); set('approved', []); set('published', []);
+  calls.length = 0;
+  await worker.fetch(new Request('https://w.example/webhook', {
+    method: 'POST', headers: SECRET_HEADER, body: JSON.stringify(cb('approve:sig1')),
+  }), { ...env, CHANNEL_SIGNATURE: '@my_channel' });
+  const sigText = calls.find(c => c.body.chat_id === '@chan').body.text;
+  check('امضای کانال در انتهای پست می‌آید', sigText.trimEnd().endsWith('@my_channel'));
 }
 
 // ───────────── undo / ویرایش پست منتشرشده ─────────────

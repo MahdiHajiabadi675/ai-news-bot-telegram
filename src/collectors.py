@@ -26,6 +26,10 @@ FEEDS = [
     # Anthropic و Meta فید رسمی ندارند؛ این‌ها فیدهای جامعه‌اند که هر ساعت از سایت رسمی ساخته می‌شوند
     {"name": "Anthropic", "url": f"{_COMMUNITY}/feed_anthropic_news.xml", "lang": "en", "trusted": True, "official": True, "fast_track": False},
     {"name": "Meta AI", "url": f"{_COMMUNITY}/feed_meta_ai.xml", "lang": "en", "trusted": True, "official": True, "fast_track": False},
+    # Mistral هم فید رسمی ندارد؛ همان روش جامعه
+    {"name": "Mistral AI", "url": f"{_COMMUNITY}/feed_mistral.xml", "lang": "en", "trusted": True, "official": True, "fast_track": False},
+    # Qwen (علی‌بابا) بلاگ رسمی با RSS — آزمایشگاه مهمی که قبلاً پوشش نداشت
+    {"name": "Qwen Blog", "url": "https://qwenlm.github.io/blog/index.xml", "lang": "en", "trusted": True, "official": True, "fast_track": False},
     # بلاگ‌های عمومی شرکت‌ها (همه‌ی موضوع‌ها، پس فیلتر AI دارند)
     {"name": "Microsoft Research", "url": "https://www.microsoft.com/en-us/research/feed/", "lang": "en", "trusted": False, "fast_track": False},
     {"name": "NVIDIA Blog", "url": "https://blogs.nvidia.com/feed/", "lang": "en", "trusted": False, "fast_track": False},
@@ -42,6 +46,15 @@ FEEDS = [
     {"name": "The Decoder", "url": "https://the-decoder.com/feed/", "lang": "en", "trusted": True, "fast_track": False},
     {"name": "MarkTechPost", "url": "https://www.marktechpost.com/feed/", "lang": "en", "trusted": True, "fast_track": False},
 
+    # === تحلیل و خبرنامه‌های تخصصی (سیگنال بالا، نه خبر تکراری) ===
+    {"name": "AI News", "url": "https://news.smol.ai/rss.xml", "lang": "en", "trusted": True, "fast_track": False},
+    {"name": "Import AI", "url": "https://importai.substack.com/feed", "lang": "en", "trusted": True, "fast_track": False},
+    {"name": "Interconnects", "url": "https://www.interconnects.ai/feed", "lang": "en", "trusted": True, "fast_track": False},
+    {"name": "Simon Willison", "url": "https://simonwillison.net/atom/everything/", "lang": "en", "trusted": True, "fast_track": False},
+    {"name": "The Gradient", "url": "https://thegradient.pub/rss/", "lang": "en", "trusted": True, "fast_track": False},
+    {"name": "Latent Space", "url": "https://www.latent.space/feed", "lang": "en", "trusted": True, "fast_track": False},
+    {"name": "One Useful Thing", "url": "https://www.oneusefulthing.org/feed", "lang": "en", "trusted": True, "fast_track": False},
+
     # === رسانه‌های عمومی (فیلتر AI دارند) ===
     {"name": "TechCrunch", "url": "https://techcrunch.com/feed/", "lang": "en", "trusted": False, "fast_track": False},
     {"name": "The Verge", "url": "https://www.theverge.com/rss/index.xml", "lang": "en", "trusted": False, "fast_track": False},
@@ -49,6 +62,10 @@ FEEDS = [
     {"name": "دیجیاتو", "url": "https://www.digiato.com/feed", "lang": "fa", "trusted": False, "fast_track": False},
     {"name": "زومگ", "url": "https://zoomg.ir/feed", "lang": "fa", "trusted": False, "fast_track": False},
     {"name": "تک‌راسا", "url": "https://www.techrasa.com/feed", "lang": "fa", "trusted": False, "fast_track": False},
+    # رسانه‌های عمومی بین‌المللی (فیلتر AI دارند)
+    {"name": "404 Media", "url": "https://www.404media.co/rss/", "lang": "en", "trusted": False, "fast_track": False},
+    {"name": "Techmeme", "url": "https://www.techmeme.com/feed.xml", "lang": "en", "trusted": False, "fast_track": False},
+    {"name": "BBC Tech", "url": "https://feeds.bbci.co.uk/news/technology/rss.xml", "lang": "en", "trusted": False, "fast_track": False},
 ]
 
 # بعضی فیدها به User-Agentهای غیرمرورگر ۴۰۳ می‌دهند

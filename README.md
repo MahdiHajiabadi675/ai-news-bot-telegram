@@ -4,13 +4,14 @@
 
 ## ویژگی‌ها
 
-- 📰 **جمع‌آوری خودکار** از ۲۵ منبع
+- 📰 **جمع‌آوری خودکار** از ۳۷ منبع
 - 🇮🇷 **ترجمهٔ همهٔ اخبار** به فارسی با زنجیرهٔ مترجم‌های رایگان (Google → MyMemory → Lingva)؛ **Gemini هیچ نقشی در ترجمه ندارد**
 - 🌐 **متن اصلی زیر ترجمه**: هر خبر انگلیسی با ترجمهٔ فارسی منتشر می‌شود و متن اصلی در یک بلوک جمع‌شونده زیرش می‌آید
 - 🔤 **برچسب «ترجمه نشده»** اگر همهٔ مترجم‌ها شکست بخورند (خبر با متن اصلی منتشر می‌شود، کانال نمی‌خوابد)
 - 📈 **اعتبار پویای منابع**: اعتبار هر منبع با تایید/رد شما و تایید چندمنبعی خودکار به‌روز می‌شود
 - 🔁 **ضدتکرار** — هر خبر فقط یک‌بار در کانال منتشر می‌شود
 - 🔗 **ادغام خبر تکراری** — یک رویداد از چند منبع → یک پست با «همچنین در: …»
+- ✍️ **امضای کانال** — یک خط ثابت انتهای هر پست برای رشد ارگانیک (اختیاری: `CHANNEL_SIGNATURE`)
 - 🧠 **طبقه‌بندی محلی** (بدون LLM): دسته + مهم/متوسط/کم + قطعی/احتمالی/شایعه
 - ✅ **تایید شما**: اخبار مهم و غیرقطعی قبل از انتشار بررسی می‌شوند
 - 🗑 **پاک‌کردن کل صف** با یک دکمه (با تایید دوباره)
@@ -343,10 +344,11 @@ ai-news-bot/
 
 لیست کامل در `FEEDS` (`src/collectors.py`)؛ وضعیت زندهٔ هر فید با `/feeds`.
 
-- **سایت رسمی شرکت‌ها:** OpenAI، Google AI، Google Research، DeepMind، HuggingFace، Microsoft Research، NVIDIA، AWS ML، Apple ML
-- **Anthropic و Meta AI:** فید رسمی ندارند؛ از فیدهای جامعه (`Olshansk/rss-feeds`) استفاده می‌شود که هر ساعت از سایت رسمی ساخته می‌شوند
+- **سایت رسمی شرکت‌ها:** OpenAI، Google AI، Google Research، DeepMind، HuggingFace، Microsoft Research، NVIDIA، AWS ML، Apple ML، **Mistral AI**، **Qwen (علی‌بابا)**
+- **Anthropic، Meta AI و Mistral:** فید رسمی ندارند؛ از فیدهای جامعه (`Olshansk/rss-feeds`) استفاده می‌شود که هر ساعت از سایت رسمی ساخته می‌شوند
 - **رسانه‌های AI:** MIT Tech Review، Ars Technica AI، TechCrunch AI، The Verge AI، Wired AI، VentureBeat AI، The Decoder، MarkTechPost
-- **رسانه‌های عمومی (با فیلتر AI):** TechCrunch، The Verge، Ars Technica، دیجیاتو، زومگ، تک‌راسا
+- **تحلیل و خبرنامه‌های تخصصی:** AI News (smol.ai)، Import AI (جک کلارک)، Interconnects (نیتان لمبرت)، Simon Willison، The Gradient، Latent Space، One Useful Thing (ایتن مولیک)
+- **رسانه‌های عمومی (با فیلتر AI):** TechCrunch، The Verge، Ars Technica، 404 Media، Techmeme، BBC Tech، دیجیاتو، زومگ، تک‌راسا
 
 فیدها موازی خوانده می‌شوند و از هر فید «جدیدترین» آیتم‌ها (بر اساس تاریخ انتشار، نه ترتیب فید) بررسی می‌شود.
 

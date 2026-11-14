@@ -145,6 +145,9 @@ AUTO_REJECT_THRESHOLD = 30
 # نمایش متن اصلی (انگلیسی) زیر ترجمه فارسی در کانال
 SHOW_ORIGINAL_TEXT = os.getenv("SHOW_ORIGINAL_TEXT", "true").lower() == "true"
 
+# امضای کوتاه انتهای هر پست (اختیاری) — برای رشد ارگانیک؛ متن ساده، مثلاً «@your_channel»
+CHANNEL_SIGNATURE = (os.getenv("CHANNEL_SIGNATURE", "") or "").strip()
+
 # ───────── اعتبار پویای منابع ─────────
 # اعتبار پایهٔ هر منبع (TRUST_SCORES پایین) فقط «پیش‌فرض اولیه» است.
 # با هر تایید/رد ادمین، اعتبار واقعی منبع به‌روز می‌شود (src/source_trust.py).
@@ -200,6 +203,17 @@ TRUST_SCORES = {
     "MIT Tech Review": 4,
     "Ars Technica AI": 4,
     "TechCrunch AI": 4,
+    # آزمایشگاه‌های تازه‌اضافه‌شده
+    "Mistral AI": 5,
+    "Qwen Blog": 5,
+    # تحلیل و خبرنامهٔ تخصصی
+    "AI News": 4,
+    "Import AI": 4,
+    "Interconnects": 4,
+    "Simon Willison": 4,
+    "The Gradient": 3,
+    "Latent Space": 3,
+    "One Useful Thing": 3,
     "The Verge AI": 3,
     "Wired AI": 3,
     "VentureBeat AI": 3,
@@ -212,6 +226,10 @@ TRUST_SCORES = {
     "دیجیاتو": 3,
     "زومگ": 3,
     "تک‌راسا": 3,
+    # رسانه‌های عمومی بین‌المللی
+    "404 Media": 3,
+    "Techmeme": 3,
+    "BBC Tech": 3,
 }
 
 # Category weights for scoring

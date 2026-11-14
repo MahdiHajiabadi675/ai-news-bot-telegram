@@ -16,7 +16,7 @@
 """
 from urllib.parse import urlsplit
 
-from .config import SHOW_ORIGINAL_TEXT
+from .config import SHOW_ORIGINAL_TEXT, CHANNEL_SIGNATURE
 
 TG_LIMIT = 4000  # سقف تلگرام ۴۰۹۶ است؛ کمی حاشیه
 
@@ -126,6 +126,8 @@ def _render(item: dict, summary_len: int, show_original: bool, tag_count: int = 
         text += "\n\n🔤 <i>ترجمه نشده — متن اصلی</i>"
     if item.get("confidence") == "rumor":
         text += "\n\n⚠️ <i>این خبر تایید رسمی نشده است</i>"
+    if CHANNEL_SIGNATURE:
+        text += f"\n\n{escape_html(CHANNEL_SIGNATURE)}"
     return text
 
 
