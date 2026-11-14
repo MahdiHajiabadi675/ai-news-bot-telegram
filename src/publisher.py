@@ -81,7 +81,12 @@ def publish_approved(state, approved_items=None):
             state["daily_post_count"] += 1
             item["status"] = "published"
             item["published_at"] = datetime.utcnow().isoformat() + "Z"
-            published_log.append({**item, "published": True})
+            msg_id = (result.get("result") or {}).get("message_id")
+            entry = {**item, "published": True}
+            if msg_id:
+                # برای /undo و /editlast لازم است
+                entry["message_id"] = msg_id
+            published_log.append(entry)
             to_mirror.append(dict(item))
             if key:
                 published_keys.add(key)

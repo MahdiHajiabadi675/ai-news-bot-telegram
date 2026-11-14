@@ -35,7 +35,7 @@ from .config import (
     CHANNEL_ID, DISPLAY_TZ_OFFSET_MIN, EDU_ENABLED, EDU_EVERY_HOURS,
     EDU_MAX_ATTEMPTS_PER_DAY, EDU_MAX_OUTPUT_TOKENS, EDU_MAX_REJECTS, EDU_MAX_TRIES_PER_SLOT, EDU_PUBLISH_HOURS, EDU_QUEUE_MAX,
     EDU_CATCHUP_MAX, EDU_POSTS_PER_DAY, EDU_RECENT_KEEP, EDU_RECENT_PROMPT, EDU_RETRY_GAP_MIN,
-    EDU_USE_BUILTIN_FALLBACK,
+    EDU_USE_BUILTIN_FALLBACK, DRY_RUN,
     GEMINI_API_KEY, OPENROUTER_API_KEY, OPENROUTER_APP_NAME, OPENROUTER_MAX_MODELS,
     OPENROUTER_MODELS, OPENROUTER_SITE_URL,
 )
@@ -753,6 +753,11 @@ def maybe_post(state: dict, now=None, force: bool = False) -> dict:
     """
     try:
         if not _enabled(state):
+            return state
+        if DRY_RUN:
+            est = cloudflare_kv.get(KEY, {})
+            queue_n = len(est.get("queue") or []) if isinstance(est, dict) else 0
+            print(f"[DRY] edu generation/publish skipped (queue={queue_n})")
             return state
         now_utc = now or datetime.utcnow()
         est = cloudflare_kv.get(KEY, {})

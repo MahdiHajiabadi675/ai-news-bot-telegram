@@ -13,6 +13,11 @@ def _int_env(name: str, default: int) -> int:
         return default
 
 
+# ───────── حالت تمرین (dry-run) ─────────
+# با `python main.py run --dry-run` روشن می‌شود: هیچ پیامی به تلگرام/بله نمی‌رود و
+# هیچ چیزی در KV نوشته نمی‌شود؛ فقط خواندن و چاپ قالب نهایی. برای تست محلی امن.
+DRY_RUN = (os.getenv("DRY_RUN", "") or "").strip().lower() in ("1", "true", "yes", "on")
+
 # Telegram
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 CHANNEL_ID = os.getenv("TELEGRAM_CHANNEL_ID", "")

@@ -19,6 +19,7 @@ import os
 import requests
 
 from .formatting import clip, is_untranslated
+from .config import DRY_RUN
 
 BALE_BASE = "https://tapi.bale.ai/bot"
 BALE_LIMIT = 4000
@@ -72,6 +73,9 @@ def format_bale_message(item: dict) -> str:
 def send_text(text: str) -> bool:
     """ارسال متن به کانال بله. فقط True/False برمی‌گرداند و هرگز استثنا نمی‌اندازد."""
     global _fails
+    if DRY_RUN:
+        print("[DRY] Bale send skipped (dry-run)")
+        return False
     token, chat = _creds()
     if not token or not chat:
         return False

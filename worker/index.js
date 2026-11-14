@@ -251,6 +251,11 @@ async function handleCallback(cb, env, BASE, CHANNEL_ID, ADMIN_ID) {
       `🗑 ${nP} خبر در انتظار تایید` + (includeApproved ? ` و ${nA} خبر آماده انتشار` : '') + ' پاک شد.');
   } else if (action === 'clrx') {
     await answerCallback(BASE, cbId, 'انصراف داده شد');
+  } else if (action === 'undo_yes') {
+    await answerCallback(BASE, cbId, '');
+    await doUndo(env, BASE, CHANNEL_ID, ADMIN_ID);
+  } else if (action === 'undo_no') {
+    await answerCallback(BASE, cbId, 'انصراف داده شد');
   } else if (action === 'pause') {
     await updateState(env, { paused: true });
     await answerCallback(BASE, cbId, '⏸️ متوقف');
@@ -301,6 +306,12 @@ async function handleMessage(msg, env, BASE, CHANNEL_ID, ADMIN_ID) {
     }
   }
 
+  // ویرایش خلاصهٔ پست منتشرشده (بعد از /editlast)
+  if (state._editing_pub && text && !text.startsWith('/')) {
+    await applyPublishedEdit(env, BASE, CHANNEL_ID, ADMIN_ID, state._editing_pub, text);
+    return;
+  }
+
   if (text === '/start') {
     const active = state.paused ? '⏸️ متوقف' : '▶️ فعال';
     const autoOn = state.auto_publish_enabled !== false;
@@ -331,6 +342,8 @@ async function handleMessage(msg, env, BASE, CHANNEL_ID, ADMIN_ID) {
       '<code>/edu</code> — روشن/خاموش کردن پست آموزشی\n' +
       '<code>/pause</code> · <code>/resume</code> — توقف/ادامهٔ انتشار\n' +
       '<code>/clear</code> — پاک‌کردن صف\n' +
+      '<code>/undo</code> — حذف آخرین پست کانال\n' +
+      '<code>/editlast</code> — ویرایش خلاصهٔ آخرین پست\n' +
       '<code>/sources</code> — اعتبار منابع\n' +
       '<code>/feeds</code> — سلامت فیدها\n' +
       '<code>/runs</code> — آمار اجراها\n' +
@@ -467,6 +480,28 @@ async function handleMessage(msg, env, BASE, CHANNEL_ID, ADMIN_ID) {
       );
     } else {
       await setAutoPublish(env, BASE, ADMIN_ID, null, val);
+    }
+  } else if (/^\/undo/i.test(text)) {
+    const { item } = await lastPublishedItem(env);
+    if (!item) {
+      await sendMessage(BASE, ADMIN_ID, '🗑 پستی برای حذف پیدا نشد (یا قدیمی‌تر از ۴۸ ساعت است).');
+    } else {
+      await sendMessage(BASE, ADMIN_ID,
+        `🗑 <b>حذف آخرین پست؟</b>\n\n«${escapeHtml(item.title_fa || item.title || '?')}»\n\nاین پست از کانال حذف می‌شود.`,
+        { inline_keyboard: [[
+          { text: '🗑 بله، حذف کن', callback_data: 'undo_yes' },
+          { text: '↩️ انصراف', callback_data: 'undo_no' },
+        ]] });
+    }
+  } else if (/^\/editlast/i.test(text)) {
+    const { item } = await lastPublishedItem(env);
+    if (!item) {
+      await sendMessage(BASE, ADMIN_ID, '✏️ پستی برای ویرایش پیدا نشد (یا قدیمی‌تر از ۴۸ ساعت است).');
+    } else {
+      await updateState(env, { _editing_pub: item.message_id });
+      await sendMessage(BASE, ADMIN_ID,
+        `✏️ <b>ویرایش آخرین پست</b>\n\n«${escapeHtml(item.title_fa || item.title || '?')}»\n\n` +
+        'متن خلاصهٔ جدید را بفرست. (قالب، عنوان و منبع حفظ می‌شوند.)');
     }
   } else if (/^\/edu/i.test(text)) {
     // پست آموزشی (Gemini + OpenRouter رایگان، بازهٔ طولانی): /edu on | /edu off | /edu (وضعیت)
@@ -918,7 +953,9 @@ async function publishItem(env, BASE, CHANNEL_ID, ADMIN_ID, item) {
   if (result && result.ok) {
     state.daily_post_count++;
     await saveJSON(env, 'state', state);
-    publishedLog.push({ ...item, published: true, published_at: new Date().toISOString() });
+    const msgId = result.result && result.result.message_id;
+    publishedLog.push({ ...item, published: true, published_at: new Date().toISOString(),
+      ...(msgId ? { message_id: msgId } : {}) });
     await saveJSON(env, 'published', publishedLog);
     // از صف approved حذف کن تا دوباره منتشر نشه
     const approvedList = await getJSON(env, 'approved', []);
@@ -989,7 +1026,9 @@ async function handleRun(env, BASE, CHANNEL_ID, ADMIN_ID) {
     if (result && result.ok) {
       state.daily_post_count++;
       published++;
-      publishedLog.push({ ...item, published: true, published_at: new Date().toISOString() });
+      const msgId = result.result && result.result.message_id;
+      publishedLog.push({ ...item, published: true, published_at: new Date().toISOString(),
+        ...(msgId ? { message_id: msgId } : {}) });
       if (key) publishedIds.add(key);
       console.log('[handleRun] Published successfully');
     } else {
@@ -1058,6 +1097,88 @@ async function sendMessage(BASE, chatId, text, replyMarkup = null) {
     }
   }
   return { ok: false, error_code: 429, error: 'rate limited' };
+}
+
+/** آخرین پست منتشرشدهٔ قابل حذف/ویرایش (حداکثر ۴۸ ساعت پیش) */
+const EDIT_WINDOW_MS = 48 * 3600 * 1000;
+
+async function lastPublishedItem(env) {
+  const log = await getJSON(env, 'published', []);
+  const now = Date.now();
+  for (let i = log.length - 1; i >= 0; i--) {
+    const p = log[i];
+    if (!p || !p.published || p.deleted || !p.message_id) continue;
+    const at = Date.parse(p.published_at || '');
+    if (!Number.isFinite(at) || now - at > EDIT_WINDOW_MS) continue;
+    return { log, index: i, item: p };
+  }
+  return { log, index: -1, item: null };
+}
+
+async function telegramCall(BASE, method, payload) {
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 10000);
+    let resp;
+    try {
+      resp = await fetch(`${BASE}/${method}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+        signal: ctrl.signal,
+      });
+    } finally {
+      clearTimeout(timer);
+    }
+    return await resp.json().catch(() => null);
+  } catch (e) {
+    console.error(`${method} error:`, e?.message || e);
+    return null;
+  }
+}
+
+async function doUndo(env, BASE, CHANNEL_ID, ADMIN_ID) {
+  const { log, index, item } = await lastPublishedItem(env);
+  if (index < 0) {
+    await sendMessage(BASE, ADMIN_ID, '🗑 پستی برای حذف پیدا نشد.');
+    return false;
+  }
+  const res = await telegramCall(BASE, 'deleteMessage', {
+    chat_id: CHANNEL_ID, message_id: item.message_id,
+  });
+  if (!res || !res.ok) {
+    await sendMessage(BASE, ADMIN_ID, `⚠️ حذف نشد: ${(res && res.description) || 'خطای تلگرام'}`);
+    return false;
+  }
+  item.deleted = true;
+  item.deleted_at = new Date().toISOString();
+  await saveJSON(env, 'published', log);
+  await sendMessage(BASE, ADMIN_ID, `✅ حذف شد: «${escapeHtml(item.title_fa || item.title || '?')}»`);
+  return true;
+}
+
+async function applyPublishedEdit(env, BASE, CHANNEL_ID, ADMIN_ID, messageId, newSummary) {
+  const log = await getJSON(env, 'published', []);
+  const item = log.find(p => p && p.message_id === messageId);
+  if (!item) {
+    await updateState(env, { _editing_pub: null });
+    await sendMessage(BASE, ADMIN_ID, '⚠️ پست پیدا نشد.');
+    return false;
+  }
+  item.summary_fa = String(newSummary || '').trim().slice(0, 700);
+  item.edited_at = new Date().toISOString();
+  const res = await telegramCall(BASE, 'editMessageText', {
+    chat_id: CHANNEL_ID, message_id: messageId, parse_mode: 'HTML',
+    text: formatChannelMessage(item, env),
+  });
+  await updateState(env, { _editing_pub: null });
+  if (res && res.ok) {
+    await saveJSON(env, 'published', log);
+    await sendMessage(BASE, ADMIN_ID, '✅ پست کانال ویرایش شد.');
+    return true;
+  }
+  await sendMessage(BASE, ADMIN_ID, `⚠️ ویرایش نشد: ${(res && res.description) || 'خطای تلگرام'}`);
+  return false;
 }
 
 /**

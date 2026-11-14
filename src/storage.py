@@ -6,6 +6,7 @@ Storage — از Cloudflare KV استفاده می‌کنه
 و اجرای بعدی دوباره همان خبر را می‌فرستد (پست تکراری).
 """
 from . import cloudflare_kv
+from .config import DRY_RUN
 
 # سقف نگهداری داده در KV (جلوگیری از رشد بی‌نهایت)
 MAX_PENDING_ITEMS = 300
@@ -18,6 +19,9 @@ class KVError(RuntimeError):
 
 def _put(key, value):
     """نوشتن در KV؛ شکست به‌جای نادیده گرفتن، استثنا می‌دهد."""
+    if DRY_RUN:
+        print(f"[DRY] KV put «{key}» skipped (dry-run)")
+        return
     if cloudflare_kv.put(key, value) is False:
         raise KVError(f"Cloudflare KV write failed: {key}")
 

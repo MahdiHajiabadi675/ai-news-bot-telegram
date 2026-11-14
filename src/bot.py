@@ -1,14 +1,22 @@
 import re
 import requests
+from datetime import datetime
 from .config import (
-    BOT_TOKEN, ADMIN_ID, AUTO_TRUST_THRESHOLD, DISPLAY_TZ_OFFSET_MIN, START_BANNER_URL
+    BOT_TOKEN, CHANNEL_ID, ADMIN_ID, AUTO_TRUST_THRESHOLD, DISPLAY_TZ_OFFSET_MIN, START_BANNER_URL, DRY_RUN
 )
 from . import storage, source_trust
-from .formatting import escape_html as _escape_html_fmt, clip, is_untranslated
+from .formatting import escape_html as _escape_html_fmt, clip, is_untranslated, format_message
 
 BASE = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
+# پنجرهٔ مجاز برای حذف/ویرایش پست منتشرشده (تلگرام برای کانال محدودیتی ندارد،
+# ولی آدم نباید پست هفتهٔ پیش را با یک دستور عوض کند)
+EDIT_WINDOW_HOURS = 48
+
 def send_message(chat_id, text, parse_mode="HTML", reply_markup=None):
+    if DRY_RUN:
+        print(f"[DRY] sendMessage → {chat_id}\n{text}\n" + "─" * 40)
+        return {"ok": True, "dry_run": True, "result": {"message_id": 0}}
     data = {
         "chat_id": chat_id,
         "text": text,
@@ -24,6 +32,9 @@ def send_message(chat_id, text, parse_mode="HTML", reply_markup=None):
         return None
 
 def send_photo(chat_id, photo, caption, parse_mode="HTML", reply_markup=None):
+    if DRY_RUN:
+        print(f"[DRY] sendPhoto → {chat_id} ({photo})")
+        return {"ok": True, "dry_run": True}
     data = {
         "chat_id": chat_id,
         "photo": photo,
@@ -40,6 +51,8 @@ def send_photo(chat_id, photo, caption, parse_mode="HTML", reply_markup=None):
         return None
 
 def answer_callback(callback_query_id, text=None, show_alert=False):
+    if DRY_RUN:
+        return
     data = {
         "callback_query_id": callback_query_id,
         "show_alert": show_alert
@@ -50,6 +63,140 @@ def answer_callback(callback_query_id, text=None, show_alert=False):
         requests.post(f"{BASE}/answerCallbackQuery", json=data, timeout=10)
     except:
         pass
+
+
+def delete_message(message_id, chat_id=None):
+    """حذف یک پست از کانال (برای /undo)"""
+    if DRY_RUN:
+        print(f"[DRY] deleteMessage → {chat_id or CHANNEL_ID} #{message_id}")
+        return {"ok": True, "dry_run": True}
+    try:
+        resp = requests.post(
+            f"{BASE}/deleteMessage",
+            json={"chat_id": chat_id or CHANNEL_ID, "message_id": message_id},
+            timeout=15,
+        )
+        return resp.json()
+    except Exception as e:
+        print(f"[ERROR] delete_message: {e}")
+        return None
+
+
+def edit_message_text(message_id, text, chat_id=None):
+    """ویرایش متن یک پست منتشرشده"""
+    if DRY_RUN:
+        print(f"[DRY] editMessageText → {chat_id or CHANNEL_ID} #{message_id}\n{text}")
+        return {"ok": True, "dry_run": True}
+    try:
+        resp = requests.post(
+            f"{BASE}/editMessageText",
+            json={"chat_id": chat_id or CHANNEL_ID, "message_id": message_id,
+                  "text": text, "parse_mode": "HTML"},
+            timeout=15,
+        )
+        return resp.json()
+    except Exception as e:
+        print(f"[ERROR] edit_message_text: {e}")
+        return None
+
+
+def last_published():
+    """(log، index) آخرین پست منتشرشدهٔ قابل حذف/ویرایش — یا (log، -1)
+
+    فقط پست‌هایی که message_id دارند و در پنجرهٔ EDIT_WINDOW_HOURS هستند.
+    """
+    log = storage.load_published()
+    now = datetime.utcnow()
+    for i in range(len(log) - 1, -1, -1):
+        p = log[i]
+        if not isinstance(p, dict) or not p.get("published"):
+            continue
+        if p.get("deleted") or not p.get("message_id"):
+            continue
+        at = str(p.get("published_at") or "").replace("Z", "")
+        try:
+            when = datetime.fromisoformat(at)
+        except ValueError:
+            continue
+        if (now - when).total_seconds() > EDIT_WINDOW_HOURS * 3600:
+            continue
+        return log, i
+    return log, -1
+
+
+def _undo_title(item):
+    return _escape_html_fmt(clip(item.get("title_fa") or item.get("title") or "?", 80))
+
+
+def ask_undo(chat_id=None):
+    log, i = last_published()
+    if i < 0:
+        send_message(chat_id or ADMIN_ID, "🗑 پستی برای حذف پیدا نشد (یا قدیمی‌تر از ۴۸ ساعت است).")
+        return
+    item = log[i]
+    send_message(
+        chat_id or ADMIN_ID,
+        f"🗑 <b>حذف آخرین پست؟</b>\n\n«{_undo_title(item)}»\n\nاین پست از کانال حذف می‌شود.",
+        reply_markup={"inline_keyboard": [[
+            {"text": "🗑 بله، حذف کن", "callback_data": "undo_yes"},
+            {"text": "↩️ انصراف", "callback_data": "undo_no"},
+        ]]},
+    )
+
+
+def do_undo(chat_id=None):
+    log, i = last_published()
+    if i < 0:
+        send_message(chat_id or ADMIN_ID, "🗑 پستی برای حذف پیدا نشد.")
+        return False
+    item = log[i]
+    mid = item.get("message_id")
+    res = delete_message(mid)
+    if not (res and res.get("ok")):
+        send_message(chat_id or ADMIN_ID, f"⚠️ حذف نشد: {res}")
+        return False
+    item["deleted"] = True
+    item["deleted_at"] = datetime.utcnow().isoformat() + "Z"
+    storage.save_published(log)
+    send_message(chat_id or ADMIN_ID, f"✅ حذف شد: «{_undo_title(item)}»")
+    return True
+
+
+def ask_edit_published(chat_id=None, state=None):
+    log, i = last_published()
+    if i < 0:
+        send_message(chat_id or ADMIN_ID, "✏️ پستی برای ویرایش پیدا نشد (یا قدیمی‌تر از ۴۸ ساعت است).")
+        return False
+    item = log[i]
+    if state is not None:
+        state["_editing_pub"] = item.get("message_id")
+    send_message(
+        chat_id or ADMIN_ID,
+        f"✏️ <b>ویرایش آخرین پست</b>\n\n«{_undo_title(item)}»\n\n"
+        "متن خلاصهٔ جدید را بفرست. (قالب، عنوان و منبع حفظ می‌شوند.)",
+    )
+    return True
+
+
+def apply_published_edit(state, message_id, new_summary):
+    """متن خلاصهٔ پست منتشرشده را عوض و همان پیام کانال را ویرایش می‌کند."""
+    log = storage.load_published()
+    for item in log:
+        if not isinstance(item, dict) or item.get("message_id") != message_id:
+            continue
+        item["summary_fa"] = clip(new_summary.strip(), 700)
+        item["edited_at"] = datetime.utcnow().isoformat() + "Z"
+        res = edit_message_text(message_id, format_message(item))
+        state["_editing_pub"] = None
+        if res and res.get("ok"):
+            storage.save_published(log)
+            send_message(ADMIN_ID, "✅ پست کانال ویرایش شد.")
+        else:
+            send_message(ADMIN_ID, f"⚠️ ویرایش نشد: {res}")
+        return True
+    state["_editing_pub"] = None
+    send_message(ADMIN_ID, "⚠️ پست پیدا نشد.")
+    return False
 
 def poll_updates(state):
     offset = state.get("last_update_id", 0)
@@ -243,6 +390,13 @@ def _handle_callback(cb, state):
     elif action == "clrx":
         answer_callback(cb_id, "انصراف داده شد")
 
+    elif action == "undo_yes":
+        answer_callback(cb_id)
+        do_undo(cb.get("from", {}).get("id") or ADMIN_ID)
+
+    elif action == "undo_no":
+        answer_callback(cb_id, "انصراف داده شد")
+
     elif action == "pause":
         state["paused"] = True
         answer_callback(cb_id, "⏸️ ربات متوقف شد")
@@ -281,6 +435,20 @@ def _handle_message(msg, state):
                 send_message(ADMIN_ID, "✅ ویرایش انجام شد — در انتظار تایید")
                 return
 
+    # ویرایش پست منتشرشده (بعد از زدن /editlast)
+    editing_pub = state.get("_editing_pub")
+    if editing_pub and text and not text.startswith("/"):
+        apply_published_edit(state, editing_pub, text)
+        return
+
+    if text in ("/undo", "/undolast"):
+        ask_undo(chat_id)
+        return
+
+    if text == "/editlast":
+        ask_edit_published(chat_id, state)
+        return
+
     if text == "/start":
         active = "⏸️ متوقف" if state.get("paused") else "▶️ فعال"
         auto_on = state.get("auto_publish_enabled", True)
@@ -309,6 +477,8 @@ def _handle_message(msg, state):
             "<code>/auto</code> — روشن/خاموش کردن انتشار خودکار\n"
             "<code>/pause</code> · <code>/resume</code> — توقف/ادامهٔ انتشار\n"
             "<code>/clear</code> — پاک‌کردن صف\n"
+            "<code>/undo</code> — حذف آخرین پست کانال\n"
+            "<code>/editlast</code> — ویرایش خلاصهٔ آخرین پست\n"
             "<code>/sources</code> — اعتبار منابع\n"
             "<code>/feeds</code> — سلامت فیدها\n"
             "<code>/runs</code> — آمار اجراها\n"

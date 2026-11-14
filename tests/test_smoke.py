@@ -64,6 +64,33 @@ def check(label, condition):
     print(f"  ok - {label}")
 
 
+# ───────────── dry-run: هیچ ارسال و هیچ نوشتنی ─────────────
+# این بلوک عمداً همین‌جا (قبل از هر monkeypatch) است تا send_message واقعی تست شود.
+print("Dry run:")
+_orig_bot_dry = bot.DRY_RUN
+_orig_storage_dry = storage.DRY_RUN
+_orig_post = getattr(bot.requests, "post", None)
+_dry_calls = []
+bot.DRY_RUN = True
+bot.requests.post = lambda *a, **k: _dry_calls.append(1)
+_res = bot.send_message("@chan", "<b>سلام</b>")
+check("dry-run: send_message درخواستی نمی‌فرستد و ok برمی‌گرداند",
+      _dry_calls == [] and _res.get("ok") is True and _res.get("dry_run") is True)
+
+_store.clear()
+storage.DRY_RUN = True
+storage.save_state({"daily_post_count": 3})
+check("dry-run: هیچ کلیدی در KV نوشته نمی‌شود", _store == {})
+
+storage.DRY_RUN = _orig_storage_dry
+bot.DRY_RUN = _orig_bot_dry
+if _orig_post is None:
+    del bot.requests.post
+else:
+    bot.requests.post = _orig_post
+check("dry-run: بعد از خاموش‌شدن، نوشتن عادی برمی‌گردد", storage.DRY_RUN is False)
+
+
 def reset_budget():
     _store.clear()
     budget._called_this_process = False
@@ -1292,8 +1319,66 @@ bot._handle_message({"text": "/start", "chat": {"id": 999}}, {})
 check("غیرادمین به دستورها هم دسترسی ندارد", len(_store["pending"]) == 0)
 
 
-# ───────────── قالب ایمن: لینک نامعتبر و HTML سالم ─────────────
-print("Safe message format:")
+# ───────────── undo / ویرایش پست منتشرشده ─────────────
+print("Undo & edit published:")
+# تست‌های edu این توابع را جای‌گذاری کرده بودند؛ نسخهٔ واقعی را برگردان.
+storage.load_published = lambda: _store.get("published", [])
+storage.save_published = lambda items: (_store.__setitem__("published", items) or True)
+bot.CHANNEL_ID = "@chan"
+_admin_msgs = []
+bot.send_message = lambda chat_id, text, **kw: (_admin_msgs.append((text, kw.get("reply_markup"))) or {"ok": True})
+_deleted, _edited = [], []
+
+
+def _fake_delete(message_id, chat_id=None):
+    _deleted.append(message_id)
+    return {"ok": True}
+
+
+def _fake_edit(message_id, text, chat_id=None):
+    _edited.append((message_id, text))
+    return {"ok": True}
+
+
+bot.delete_message = _fake_delete
+bot.edit_message_text = _fake_edit
+_now_iso = datetime.datetime.utcnow().isoformat() + "Z"
+_store["published"] = [
+    {"title_fa": "خبر قدیمی", "published": True, "message_id": 111, "published_at": _now_iso},
+    {"title_fa": "خبر آخر", "summary_fa": "خلاصهٔ قبلی", "title": "Last", "lang": "en",
+     "source": "S", "link": "http://x", "published": True, "message_id": 555, "published_at": _now_iso},
+]
+
+bot.ask_undo(42)
+_kb = _admin_msgs[-1][1]["inline_keyboard"][0]
+check("undo: تایید می‌خواهد و چیزی را قبل از تایید حذف نمی‌کند",
+      [b["callback_data"] for b in _kb] == ["undo_yes", "undo_no"] and _deleted == [])
+bot._handle_callback({"id": "c", "data": "undo_yes", "from": {"id": 42}}, {})
+check("undo: آخرین پست از کانال حذف و در لاگ علامت می‌خورد",
+      _deleted == [555] and _store["published"][-1]["deleted"] is True)
+bot._handle_callback({"id": "c", "data": "undo_yes", "from": {"id": 42}}, {})
+check("undo: پست حذف‌شده دوباره انتخاب نمی‌شود", _deleted == [555, 111])
+
+_store["published"] = [
+    {"title_fa": "خبر آخر", "summary_fa": "خلاصهٔ قبلی", "title": "Last", "lang": "en",
+     "source": "S", "link": "http://x", "published": True, "message_id": 555, "published_at": _now_iso},
+]
+_state_edit = {}
+check("editlast: حالت ویرایش را روشن می‌کند", bot.ask_edit_published(42, _state_edit) is True
+      and _state_edit.get("_editing_pub") == 555)
+bot._handle_message({"text": "خلاصهٔ کاملاً تازه توسط ادمین", "chat": {"id": 42}}, _state_edit)
+check("editlast: متن کانال ویرایش و لاگ به‌روز می‌شود",
+      _edited and _edited[-1][0] == 555 and "خلاصهٔ کاملاً تازه" in _edited[-1][1]
+      and _store["published"][0]["summary_fa"].startswith("خلاصهٔ کاملاً تازه"))
+check("editlast: حالت ویرایش پس از اعمال پاک می‌شود", _state_edit.get("_editing_pub") is None)
+
+# پست قدیمی‌تر از ۴۸ ساعت قابل حذف نیست
+_store["published"] = [{"title_fa": "کهنه", "published": True, "message_id": 9,
+                        "published_at": "2020-01-01T00:00:00Z"}]
+check("undo: پست قدیمی‌تر از ۴۸ ساعت انتخاب نمی‌شود", bot.last_published()[1] == -1)
+
+
+# ───────────── قالب ایمن: لینک نامعتبر و HTML سالم ─────────────print("Safe message format:")
 _bad = formatting.format_message({**item_en, "link": "javascript:alert(1)"})
 check("لینک نامعتبر (javascript:) در پیام نمی‌آید",
       "javascript:" not in _bad and 'href=""' not in _bad)

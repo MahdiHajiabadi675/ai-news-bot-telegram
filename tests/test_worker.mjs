@@ -22,8 +22,10 @@ const KV = {
 const calls = [];
 globalThis.fetch = async (url, opts) => {
   const body = opts?.body ? JSON.parse(opts.body) : {};
-  calls.push({ method: String(url).split('/').pop(), body });
-  return { json: async () => ({ ok: true }) };
+  const method = String(url).split('/').pop();
+  calls.push({ method, body });
+  // پیام‌های تلگرام یک message_id برمی‌گردانند؛ /undo و /editlast به آن نیاز دارند
+  return { json: async () => (method === 'sendMessage' ? { ok: true, result: { message_id: 9000 + calls.length } } : { ok: true }) };
 };
 const env = { BOT_TOKEN: 't', CHANNEL_ID: '@chan', ADMIN_ID: String(ADMIN), KV, WEBHOOK_SECRET: 's3cret' };
 const SECRET_HEADER = { 'X-Telegram-Bot-Api-Secret-Token': 's3cret' };
@@ -346,6 +348,40 @@ console.log('Safe formatting:');
   const badText = calls.find(c => c.body.chat_id === '@chan').body.text;
   check('لینک نامعتبر → بدون href و بدون javascript',
     !badText.includes('javascript:') && !badText.includes('<a href=""'));
+}
+
+// ───────────── undo / ویرایش پست منتشرشده ─────────────
+console.log('Undo & edit published:');
+{
+  // شمارندهٔ راند را صفر کن تا سقف ۱۵ پست، این تست را خراب نکند
+  set('state', { paused: false, auto_publish_enabled: true, daily_post_count: 0,
+    daily_post_date: new Date().toISOString().slice(0, 10) });
+  set('pending', [item('u1')]); set('approved', []); set('published', []);
+  await send(cb('approve:u1'));
+  const pub = get('published').find(p => p.published);
+  check('انتشار: message_id ذخیره می‌شود', !!pub && typeof pub.message_id === 'number');
+
+  await send(msg('/undo'));
+  const kbd = last('sendMessage').body.reply_markup.inline_keyboard.flat().map(b => b.callback_data);
+  check('undo: اول تایید می‌خواهد و چیزی را حذف نمی‌کند',
+    kbd.includes('undo_yes') && kbd.includes('undo_no') && !calls.some(c => c.method === 'deleteMessage'));
+
+  await send(cb('undo_yes'));
+  check('undo: از کانال حذف و در لاگ علامت می‌خورد',
+    calls.some(c => c.method === 'deleteMessage' && c.body.message_id === pub.message_id)
+    && get('published').find(p => p.message_id === pub.message_id).deleted === true);
+
+  set('pending', [item('u2')]); set('approved', []); set('published', []);
+  set('state', { paused: false, auto_publish_enabled: true, daily_post_count: 0,
+    daily_post_date: new Date().toISOString().slice(0, 10) });
+  await send(cb('approve:u2'));
+  await send(msg('/editlast'));
+  await send(msg('خلاصهٔ کاملاً تازه برای کانال'));
+  check('editlast: editMessageText با متن جدید صدا زده می‌شود',
+    calls.some(c => c.method === 'editMessageText' && String(c.body.text).includes('خلاصهٔ کاملاً تازه')));
+  check('editlast: لاگ به‌روز و حالت ویرایش پاک می‌شود',
+    get('published').some(p => String(p.summary_fa).startsWith('خلاصهٔ کاملاً تازه'))
+    && !get('state')._editing_pub);
 }
 
 console.log(`\n${passed} تست Worker با موفقیت گذشت ✅`);

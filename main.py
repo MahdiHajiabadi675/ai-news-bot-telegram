@@ -4,17 +4,22 @@ AI News Bot — Telegram channel for AI model news
 Free tier: GitHub Actions + Cloudflare Worker/KV + Telegram Bot API
 (ترجمه با src/translator.py؛ Gemini فعلاً کنار گذاشته شده)
 """
+import os
 import re
 import sys
 from datetime import datetime
 from pathlib import Path
+
+# --dry-run باید قبل از import ماژول‌های src اعمال شود، چون config یک‌بار در import خوانده می‌شود.
+if "--dry-run" in sys.argv:
+    os.environ["DRY_RUN"] = "1"
 
 sys.path.insert(0, str(Path(__file__).parent))
 
 from src import storage
 from src.storage import set_stage
 from src.config import (
-    COLLECT_INTERVAL_MIN, FAST_TRACK_ENABLED,
+    DRY_RUN, COLLECT_INTERVAL_MIN, FAST_TRACK_ENABLED,
     AUTO_PUBLISH_ENABLED, AUTO_PUBLISH_THRESHOLD, AUTO_REJECT_THRESHOLD, AUTO_TRUST_THRESHOLD, HOT_OFFICIAL_MIN,
     MAX_ARTICLES_PER_RUN, MAX_REVIEWS_PER_RUN,
     TRUST_SCORES, REJECT_KEYWORDS, CATEGORY_WEIGHTS, ADMIN_ID,
@@ -87,6 +92,8 @@ def run(force=False):
 
 def _run(force=False):
     print(f"[{datetime.utcnow().isoformat()}] Pipeline started")
+    if DRY_RUN:
+        print("[DRY-RUN] هیچ پیامی ارسال نمی‌شود و هیچ چیزی در KV نوشته نمی‌شود؛ فقط پیش‌نمایش.")
     translator.reset()
     # آمار «قیف» همین اجرا برای /runs: چند خبر پیدا شد و کجا کم شد
     rl = {"t": datetime.utcnow().isoformat() + "Z", "forced": bool(force), "collected": False}
@@ -334,4 +341,4 @@ if __name__ == "__main__":
         force = "--force" in sys.argv
         run(force=force)
     else:
-        print("Usage: python main.py run [--force]")
+        print("Usage: python main.py run [--force] [--dry-run]")
