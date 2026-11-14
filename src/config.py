@@ -13,6 +13,11 @@ def _int_env(name: str, default: int) -> int:
         return default
 
 
+# ───────── سیگنال Hacker News ─────────
+# برای چند خبر برتر هر اجرا، امتیاز/نظر HN خوانده می‌شود (API رایگان، بدون کلید)
+HN_ENABLED = os.getenv("HN_ENABLED", "true").strip().lower() not in ("0", "false", "no", "off")
+HN_MAX_ITEMS = _int_env("HN_MAX_ITEMS", 5)
+
 # ───────── حالت تمرین (dry-run) ─────────
 # با `python main.py run --dry-run` روشن می‌شود: هیچ پیامی به تلگرام/بله نمی‌رود و
 # هیچ چیزی در KV نوشته نمی‌شود؛ فقط خواندن و چاپ قالب نهایی. برای تست محلی امن.

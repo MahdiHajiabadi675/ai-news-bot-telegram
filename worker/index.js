@@ -13,6 +13,50 @@ export default {
     const url = new URL(request.url);
     const path = url.pathname;
 
+    // ── /rss.xml: خروجی RSS برای خوانندگان فید (بدون نیاز به تلگرام) ──
+    if (path === '/rss.xml' && request.method === 'GET') {
+      const published = await getJSON(env, 'published', []);
+      const items = published.filter(p => p && p.published && !p.deleted).slice(-30).reverse();
+      const origin = url.origin;
+      const esc = escapeHtml;
+      const entries = items.map(p => {
+        const title = esc(p.title_fa || p.title || '');
+        const link = safeLink(p.link) || origin;
+        const date = p.published_at ? new Date(p.published_at).toUTCString() : new Date().toUTCString();
+        const desc = esc(String(p.summary_fa || '').slice(0, 400));
+        const guid = esc(p.id || p.hash || link);
+        return `<item><title>${title}</title><link>${link}</link>` +
+          `<guid isPermaLink="false">${guid}</guid><pubDate>${date}</pubDate>` +
+          `<description>${desc}</description></item>`;
+      }).join('');
+      const xml = '<?xml version="1.0" encoding="UTF-8"?>' +
+        `<rss version="2.0"><channel><title>AI News Bot</title><link>${origin}/</link>` +
+        `<description>اخبار هوش مصنوعی</description>${entries}</channel></rss>`;
+      return new Response(xml, {
+        headers: { 'Content-Type': 'application/rss+xml; charset=utf-8', 'Cache-Control': 'public, max-age=300' },
+      });
+    }
+
+    // ── /api/news: نسخهٔ JSON آخرین خبرها ──
+    if (path === '/api/news' && request.method === 'GET') {
+      const limit = Math.min(Math.max(Number(url.searchParams.get('limit')) || 20, 1), 100);
+      const published = await getJSON(env, 'published', []);
+      const items = published
+        .filter(p => p && p.published && !p.deleted)
+        .slice(-limit)
+        .reverse()
+        .map(p => ({
+          title: p.title_fa || p.title || '',
+          source: p.source || '',
+          link: p.link || '',
+          category: p.category || '',
+          published_at: p.published_at || null,
+        }));
+      return new Response(JSON.stringify({ count: items.length, items }, null, 2), {
+        headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'public, max-age=300' },
+      });
+    }
+
     // ── /health: پایش ساده (برای UptimeRobot و انسان) ──
     // هیچ اطلاعات حساسی برنمی‌گرداند: فقط شمارنده‌ها و زمان آخرین اجرا.
     if (path === '/health' && request.method === 'GET') {
@@ -914,6 +958,10 @@ function renderChannelMessage(item, env, summaryLen, showOriginal, tagCount = -1
   if (hashtags) text += `\n🏷️ ${hashtags}`;
   const also = (item.also_sources || []).filter(s => s && s.source).slice(0, 4);
   if (also.length) text += `\n🔗 همچنین در: ${also.map(s => escapeHtml(clip(s.source, 40))).join('، ')}`;
+  if (item.hn && item.hn.points) {
+    text += `\n🔥 Hacker News: ${Number(item.hn.points)} امتیاز`;
+    if (item.hn.comments) text += ` · ${Number(item.hn.comments)} نظر`;
+  }
   if (untranslated) text += '\n\n🔤 <i>ترجمه نشده — متن اصلی</i>';
   if (item.confidence === 'rumor') text += '\n\n⚠️ <i>این خبر تایید رسمی نشده است</i>';
   return text;

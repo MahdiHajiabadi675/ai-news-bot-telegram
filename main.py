@@ -20,6 +20,7 @@ from src import storage
 from src.storage import set_stage
 from src.config import (
     DRY_RUN, COLLECT_INTERVAL_MIN, FAST_TRACK_ENABLED,
+    HN_ENABLED, HN_MAX_ITEMS,
     AUTO_PUBLISH_ENABLED, AUTO_PUBLISH_THRESHOLD, AUTO_REJECT_THRESHOLD, AUTO_TRUST_THRESHOLD, HOT_OFFICIAL_MIN,
     MAX_ARTICLES_PER_RUN, MAX_REVIEWS_PER_RUN,
     TRUST_SCORES, REJECT_KEYWORDS, CATEGORY_WEIGHTS, ADMIN_ID,
@@ -29,6 +30,7 @@ from src.collectors import collect, FEEDS, interleave_by_source
 from src.analyzer import analyze_articles, localize
 from src import source_trust
 from src import cluster
+from src import hn
 from src.fast_track import process_fast_track
 from src.bot import poll_updates, _send_review, notify_admin_new, send_message
 from src.publisher import publish_approved
@@ -207,6 +209,10 @@ def _run(force=False):
                 rl["merged"] = before_cluster - len(analyzed)
                 if rl["merged"]:
                     print(f"[INFO] Merged {rl['merged']} duplicate stories")
+
+                # سیگنال Hacker News: اگر خبر واقعاً در HN داغ است، به جذابیت اضافه کن
+                if HN_ENABLED:
+                    analyzed = hn.enrich(analyzed, limit=HN_MAX_ITEMS)
 
                 # بعد از تحلیل، خبر دیده‌شده محسوب می‌شود تا دوباره پردازش نشود.
                 for article in articles:

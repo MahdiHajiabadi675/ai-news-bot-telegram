@@ -117,6 +117,11 @@ def _render(item: dict, summary_len: int, show_original: bool, tag_count: int = 
         names = "، ".join(escape_html(clip(s.get("source"), 40)) for s in also[:4])
         if names:
             text += f"\n🔗 همچنین در: {names}"
+    hn_info = item.get("hn")
+    if isinstance(hn_info, dict) and hn_info.get("points"):
+        text += f"\n🔥 Hacker News: {int(hn_info['points'])} امتیاز"
+        if hn_info.get("comments"):
+            text += f" · {int(hn_info['comments'])} نظر"
     if is_untranslated(item):
         text += "\n\n🔤 <i>ترجمه نشده — متن اصلی</i>"
     if item.get("confidence") == "rumor":

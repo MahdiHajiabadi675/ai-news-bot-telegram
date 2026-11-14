@@ -55,6 +55,7 @@ import src.publisher as publisher  # noqa: E402
 import src.digest as digest  # noqa: E402
 import src.cluster as cluster  # noqa: E402
 import src.quiz as quiz  # noqa: E402
+import src.hn as hn  # noqa: E402
 import src.storage as storage  # noqa: E402
 
 _passed = 0
@@ -1448,6 +1449,48 @@ publisher.publish_approved(_pstate, [_future, _past])
 check("publisher: خبر آینده در صف می‌ماند و خبر گذشته منتشر می‌شود",
       len(_psent) == 1 and "خبر گذشته" in _psent[0]
       and [i["id"] for i in _store["approved"]] == ["f1"])
+
+
+# ───────────── سیگنال Hacker News ─────────────
+print("Hacker News signal:")
+
+
+class _HnResp:
+    def __init__(self, status=200, payload=None):
+        self.status_code = status
+        self._payload = payload or {}
+
+    def json(self):
+        return self._payload
+
+
+_orig_hn_get = hn.requests.get
+hn.requests.get = lambda url, params=None, timeout=None: _HnResp(200, {"hits": [
+    {"title": "OpenAI launches GPT-5 with a new reasoning mode", "points": 420,
+     "num_comments": 180, "objectID": "111"},
+    {"title": "Some completely unrelated story", "points": 900, "num_comments": 50, "objectID": "222"},
+]})
+_hn_item = {"title": "OpenAI launches GPT-5 with a new reasoning mode", "hot": 55,
+            "hot_reasons": ["model"]}
+_hn_other = {"title": "Nvidia reports record data-center revenue", "hot": 50, "hot_reasons": []}
+_hn_fa = {"title": "خبر فارسی دربارهٔ هوش مصنوعی", "hot": 40}
+_hn_out = hn.enrich([_hn_item, _hn_other, _hn_fa])
+check("HN: خبر داغ با امتیاز/نظر و لینک شناسایی می‌شود",
+      _hn_out[0]["hn"]["points"] == 420 and _hn_out[0]["hn"]["url"].endswith("111"))
+check("HN: امتیاز جذابیت اضافه می‌شود و سقف ۱۰۰ رعایت می‌شود",
+      _hn_out[0]["hot"] == 65 and "HN 420" in _hn_out[0]["hot_reasons"])
+check("HN: خبر نامرتبط به HN وصل نمی‌شود", "hn" not in _hn_other)
+check("HN: عنوان فارسی جست‌وجو نمی‌شود", "hn" not in _hn_fa)
+
+hn.requests.get = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("network down"))
+_hn_fresh = {"title": "OpenAI launches GPT-5 with a new reasoning mode", "hot": 55}
+check("HN: خطای شبکه نادیده گرفته می‌شود", hn.enrich([_hn_fresh])[0].get("hn") is None)
+hn.requests.get = _orig_hn_get
+
+_msg_hn = formatting.format_message({"title_fa": "عنوان", "summary_fa": "خلاصه", "source": "S",
+                                     "link": "http://x", "hashtags": ["AI"],
+                                     "hn": {"points": 420, "comments": 180}})
+check("قالب پست: خط Hacker News اضافه می‌شود", "Hacker News: 420" in _msg_hn and "180 نظر" in _msg_hn)
 
 
 # ───────────── امنیت: ویرایش خبر فقط توسط ادمین ─────────────

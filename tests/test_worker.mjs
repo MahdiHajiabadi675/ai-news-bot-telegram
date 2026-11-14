@@ -416,4 +416,25 @@ console.log('Scheduled publishing:');
     !get('published').some(p => p.published));
 }
 
+// ───────────── خروجی عمومی RSS و API ─────────────
+console.log('Public feed & API:');
+{
+  set('published', [
+    { id: 'p1', title_fa: 'خبر تازه', source: 'Src', link: 'https://example.com/a',
+      category: 'model_release', published: true, published_at: new Date().toISOString(), summary_fa: 'خلاصه' },
+    { id: 'p2', title_fa: 'خبر حذف‌شده', published: true, deleted: true, published_at: new Date().toISOString() },
+    { id: 'p3', title_fa: 'خبر ردشده', published: false },
+  ]);
+  const rss = await worker.fetch(new Request('https://w.example/rss.xml'), env);
+  const xml = await rss.text();
+  check('rss: خروجی معتبر و شامل خبر منتشرشده', rss.status === 200 && xml.includes('<rss') && xml.includes('خبر تازه'));
+  check('rss: خبر حذف‌شده و ردشده نمی‌آید', !xml.includes('خبر حذف‌شده') && !xml.includes('خبر ردشده'));
+
+  const api = await worker.fetch(new Request('https://w.example/api/news?limit=10'), env);
+  const body = await api.json();
+  check('api/news: JSON با شمارش و فیلدهای لازم',
+    api.status === 200 && body.count === 1 && body.items[0].link === 'https://example.com/a'
+    && body.items[0].category === 'model_release');
+}
+
 console.log(`\n${passed} تست Worker با موفقیت گذشت ✅`);
