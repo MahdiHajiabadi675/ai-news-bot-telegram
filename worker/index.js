@@ -13,6 +13,46 @@ export default {
     const url = new URL(request.url);
     const path = url.pathname;
 
+    // ── /health: پایش ساده (برای UptimeRobot و انسان) ──
+    // هیچ اطلاعات حساسی برنمی‌گرداند: فقط شمارنده‌ها و زمان آخرین اجرا.
+    if (path === '/health' && request.method === 'GET') {
+      const started = Date.now();
+      let kvOk = true;
+      try {
+        await env.KV.get('health_ping');
+      } catch (e) {
+        kvOk = false;
+      }
+      const [state, pending, approved, published, heartbeat, edu] = await Promise.all([
+        getJSON(env, 'state', {}),
+        getJSON(env, 'pending', []),
+        getJSON(env, 'approved', []),
+        getJSON(env, 'published', []),
+        getJSON(env, 'heartbeat', {}),
+        getJSON(env, 'edu_state', {}),
+      ]);
+      const todayKey = new Date(Date.now() + 210 * 60000).toISOString().slice(0, 10);
+      return new Response(JSON.stringify({
+        ok: kvOk,
+        kv: kvOk,
+        ms: Date.now() - started,
+        stage: state.current_stage || 'idle',
+        paused: !!state.paused,
+        lastHeartbeat: heartbeat.at || null,
+        lastRunPublished: heartbeat.published ?? null,
+        queue: { pending: pending.length, approved: approved.length },
+        published: published.filter(p => p && p.published).length,
+        edu: {
+          queue: (edu.queue || []).length,
+          today: Number((edu.pub_count || {})[todayKey] || 0),
+        },
+        ts: new Date().toISOString(),
+      }, null, 2), {
+        status: kvOk ? 200 : 503,
+        headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' },
+      });
+    }
+
     if (path === '/webhook' && request.method === 'POST') {
       const denial = webhookAuthError(request, env);
       if (denial) return new Response(denial, { status: 403 });

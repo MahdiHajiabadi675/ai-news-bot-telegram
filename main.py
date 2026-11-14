@@ -32,6 +32,7 @@ from src.fast_track import process_fast_track
 from src.bot import poll_updates, _send_review, notify_admin_new, send_message
 from src.publisher import publish_approved
 from src import edu_post
+from src import digest
 from src import translator
 
 
@@ -292,6 +293,9 @@ def _run(force=False):
     #    Gemini اول، در صورت خطا مدل‌های رایگان OpenRouter، در آخر متن آمادهٔ محلی.
     state = edu_post.maybe_post(state, force=force)
 
+    # 5. دایجست هفتگی (جمعه شب، حداکثر یک‌بار در هفته)
+    state = digest.maybe_post(state)
+
     # 5. Publish approved items
     state = set_stage(state, "publishing")
     storage.save_state(state)
@@ -310,6 +314,13 @@ def _run(force=False):
         storage.append_run_log(rl)
     except Exception as e:
         print(f"[WARN] run log failed: {e}")
+
+    # زمان آخرین اجرا برای /health (شکستش اجرا را متوقف نمی‌کند)
+    try:
+        storage.heartbeat({"stage": state.get("current_stage"),
+                           "published": state.get("daily_post_count", 0)})
+    except Exception as e:
+        print(f"[WARN] heartbeat failed: {e}")
 
     print(f"[{datetime.utcnow().isoformat()}] Pipeline finished")
 

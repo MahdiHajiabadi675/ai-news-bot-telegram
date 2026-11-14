@@ -52,6 +52,7 @@ import src.formatting as formatting  # noqa: E402
 import src.source_trust as source_trust  # noqa: E402
 import src.translator as translator  # noqa: E402
 import src.publisher as publisher  # noqa: E402
+import src.digest as digest  # noqa: E402
 import src.storage as storage  # noqa: E402
 
 _passed = 0
@@ -1294,6 +1295,57 @@ _edu.generate = lambda desc, recent, **kw: {**_good, "title": "پست ساخته
 _edu.maybe_post({}, _tehran(19, day=4))
 check("وقتی مدل کار می‌کند، پست مدل منتشر می‌شود نه پست محلی",
       len(_sent_b) == 1 and "پست ساخته‌شده با مدل" in _sent_b[0])
+
+
+# ───────────── دایجست هفتگی ─────────────
+print("Weekly digest:")
+_dg = {}
+digest.cloudflare_kv.get = lambda k, d=None: _dg.get(k, d)
+digest.cloudflare_kv.put = lambda k, v: _dg.__setitem__(k, _json.loads(_json.dumps(v))) or True
+_dg_sent = []
+digest.send_message = lambda c, t, **kw: (_dg_sent.append(t) or {"ok": True, "result": {"message_id": 77}})
+digest.bale.reset = lambda: None
+digest.bale.send_text = lambda t: True
+digest.CHANNEL_ID = "@c"
+_now_dg = datetime.datetime.utcnow()
+
+
+def _news(i, imp="medium", days=1, cat="industry"):
+    return {"id": f"n{i}", "title_fa": f"خبر شمارهٔ {i}", "source": "منبع",
+            "link": "http://example.com/x", "published": True, "category": cat,
+            "importance": imp, "score": 90 - i,
+            "published_at": (_now_dg - datetime.timedelta(days=days)).isoformat() + "Z"}
+
+
+_log7 = [_news(i, "high" if i <= 3 else "medium") for i in range(1, 8)]
+digest.storage.load_published = lambda: list(_log7)
+digest.storage.save_published = lambda items: None
+_fri = _dt.datetime(2026, 11, 13, 20, 0) - _dt.timedelta(minutes=210)  # جمعه ۲۰:۰۰ تهران
+digest.maybe_post({}, _fri)
+check("دایجست: جمعه شب یک پست جمع‌بندی می‌فرستد", len(_dg_sent) == 1)
+check("دایجست: هفت خبر و هشتگ دارد",
+      _dg_sent and all(f"خبر شمارهٔ {i}" in _dg_sent[0] for i in range(1, 8))
+      and "جمع‌بندی هفته" in _dg_sent[0] and "#جمع‌بندی_هفته" in _dg_sent[0])
+check("دایجست: هفته در KV ثبت می‌شود", "last_week" in _dg.get("digest_state", {}))
+digest.maybe_post({}, _fri + _dt.timedelta(minutes=30))
+check("دایجست: در همان هفته دوبار پست نمی‌شود", len(_dg_sent) == 1)
+digest.maybe_post({}, _fri + _dt.timedelta(days=1))
+check("دایجست: شنبه پست نمی‌شود", len(_dg_sent) == 1)
+
+# کمتر از ۳ خبر → بدون جمع‌بندی
+_dg.clear(); _dg_sent.clear()
+digest.storage.load_published = lambda: [_news(1), _news(2)]
+digest.maybe_post({}, _fri)
+check("دایجست: با کمتر از ۳ خبر پست نمی‌شود", _dg_sent == [])
+
+# پست آموزشی و خود دایجست وارد جمع‌بندی نمی‌شوند
+_mix = [_news(i) for i in range(1, 5)] + [_news(9, cat="edu"), _news(10, cat="digest")]
+check("دایجست: پست آموزشی و دایجست قبلی حساب نمی‌شوند",
+      len(digest.recent_items(_mix, _now_dg)) == 4)
+
+# خبر قدیمی‌تر از ۷ روز حساب نمی‌شود
+_old = [_news(i) for i in range(1, 4)] + [_news(8, days=10)]
+check("دایجست: خبر قدیمی‌تر از ۷ روز حذف می‌شود", len(digest.recent_items(_old, _now_dg)) == 3)
 
 
 # ───────────── امنیت: ویرایش خبر فقط توسط ادمین ─────────────

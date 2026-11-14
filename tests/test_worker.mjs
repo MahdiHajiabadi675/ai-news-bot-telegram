@@ -384,4 +384,17 @@ console.log('Undo & edit published:');
     && !get('state')._editing_pub);
 }
 
+// ───────────── /health ─────────────
+console.log('Health endpoint:');
+{
+  set('heartbeat', { at: '2026-11-14T09:00:00Z', published: 3 });
+  const res = await worker.fetch(new Request('https://w.example/health'), env);
+  const body = await res.json();
+  check('/health: 200 با KV سالم', res.status === 200 && body.ok === true && body.kv === true);
+  check('/health: شمارنده‌ها و آخرین اجرا',
+    typeof body.queue.pending === 'number' && typeof body.published === 'number'
+    && body.lastHeartbeat === '2026-11-14T09:00:00Z');
+  check('/health: هیچ عنوان خبری لو نمی‌رود', !JSON.stringify(body).includes('عنوان'));
+}
+
 console.log(`\n${passed} تست Worker با موفقیت گذشت ✅`);

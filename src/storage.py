@@ -32,6 +32,18 @@ def ensure_writable():
     _put("health_ping", {"at": datetime.utcnow().isoformat() + "Z"})
 
 
+def heartbeat(extra=None):
+    """ثبت زمان آخرین اجرا برای /health — شکست این نوشتن اجرا را متوقف نمی‌کند."""
+    from datetime import datetime
+    data = {"at": datetime.utcnow().isoformat() + "Z"}
+    if isinstance(extra, dict):
+        data.update(extra)
+    if DRY_RUN:
+        print("[DRY] heartbeat skipped (dry-run)")
+        return
+    cloudflare_kv.put("heartbeat", data)
+
+
 def load_state():
     state = cloudflare_kv.get("state", {
         "last_update_id": 0,
