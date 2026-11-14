@@ -395,6 +395,14 @@ console.log('Health endpoint:');
     typeof body.queue.pending === 'number' && typeof body.published === 'number'
     && body.lastHeartbeat === '2026-11-14T09:00:00Z');
   check('/health: هیچ عنوان خبری لو نمی‌رود', !JSON.stringify(body).includes('عنوان'));
+
+  const resSlash = await worker.fetch(new Request('https://w.example/health/'), env);
+  check('/health/ با اسلش آخر هم کار می‌کند', resSlash.status === 200 && (await resSlash.json()).ok === true);
+
+  await send(msg('/health'));
+  const htxt = last('sendMessage').body.text;
+  check('/health داخل ربات: متن سلامت با KV، صف و وضعیت آموزشی',
+    htxt.includes('سلامت ربات') && htxt.includes('KV') && htxt.includes('آموزشی امروز'));
 }
 
 // ───────────── انتشار زمان‌بندی‌شده ─────────────

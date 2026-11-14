@@ -11,7 +11,7 @@ export default {
     const BASE = `https://api.telegram.org/bot${BOT_TOKEN}`;
 
     const url = new URL(request.url);
-    const path = url.pathname;
+    const path = url.pathname.replace(/\/+$/, '') || '/';
 
     // ── /rss.xml: خروجی RSS برای خوانندگان فید (بدون نیاز به تلگرام) ──
     if (path === '/rss.xml' && request.method === 'GET') {
@@ -59,40 +59,10 @@ export default {
 
     // ── /health: پایش ساده (برای UptimeRobot و انسان) ──
     // هیچ اطلاعات حساسی برنمی‌گرداند: فقط شمارنده‌ها و زمان آخرین اجرا.
-    if (path === '/health' && request.method === 'GET') {
-      const started = Date.now();
-      let kvOk = true;
-      try {
-        await env.KV.get('health_ping');
-      } catch (e) {
-        kvOk = false;
-      }
-      const [state, pending, approved, published, heartbeat, edu] = await Promise.all([
-        getJSON(env, 'state', {}),
-        getJSON(env, 'pending', []),
-        getJSON(env, 'approved', []),
-        getJSON(env, 'published', []),
-        getJSON(env, 'heartbeat', {}),
-        getJSON(env, 'edu_state', {}),
-      ]);
-      const todayKey = new Date(Date.now() + 210 * 60000).toISOString().slice(0, 10);
-      return new Response(JSON.stringify({
-        ok: kvOk,
-        kv: kvOk,
-        ms: Date.now() - started,
-        stage: state.current_stage || 'idle',
-        paused: !!state.paused,
-        lastHeartbeat: heartbeat.at || null,
-        lastRunPublished: heartbeat.published ?? null,
-        queue: { pending: pending.length, approved: approved.length },
-        published: published.filter(p => p && p.published).length,
-        edu: {
-          queue: (edu.queue || []).length,
-          today: Number((edu.pub_count || {})[todayKey] || 0),
-        },
-        ts: new Date().toISOString(),
-      }, null, 2), {
-        status: kvOk ? 200 : 503,
+    if (path === '/health' && (request.method === 'GET' || request.method === 'HEAD')) {
+      const snap = await healthSnapshot(env);
+      return new Response(JSON.stringify(snap, null, 2), {
+        status: snap.ok ? 200 : 503,
         headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' },
       });
     }
@@ -635,6 +605,22 @@ async function handleMessage(msg, env, BASE, CHANNEL_ID, ADMIN_ID) {
         'تغییر: <code>/edu on</code> یا <code>/edu off</code>' +
         (recent ? `\n\nآخرین پست‌ها:\n${escapeHtml(recent)}` : ''));
     }
+  } else if (/^\/health/i.test(text)) {
+    // همان اطلاعات GET /health، این‌بار داخل تلگرام
+    const h = await healthSnapshot(env);
+    const ago = h.lastHeartbeat ? Math.round((Date.now() - Date.parse(h.lastHeartbeat)) / 60000) : null;
+    const last = h.lastHeartbeat
+      ? `${h.lastHeartbeat}${ago !== null ? ` (${ago} دقیقه پیش)` : ''}`
+      : 'ثبت نشده — یعنی هنوز اجرایی با کد جدید تمام نشده';
+    const target = Number(env.EDU_POSTS_PER_DAY) || 4;
+    await sendMessage(BASE, ADMIN_ID,
+      `🩺 <b>سلامت ربات</b>\n\n` +
+      `KV: ${h.kv ? '✅ سالم' : '❌ خطا'}\n` +
+      `مرحله: ${escapeHtml(h.stage)}${h.paused ? ' (متوقف)' : ''}\n` +
+      `آخرین اجرا: ${escapeHtml(last)}\n` +
+      `صف: ${h.queue.pending} در انتظار · ${h.queue.approved} آماده انتشار\n` +
+      `منتشرشده (کل): ${h.published}\n` +
+      `آموزشی امروز: ${h.edu.today}/${target} (صف: ${h.edu.queue})`);
   } else if (text === '/stats') {
     const published = await getJSON(env, 'published', []);
     const totalPublished = published.filter(p => p.published).length;
@@ -1473,6 +1459,42 @@ async function updateState(env, updates) {
   migrateState(state);
   Object.assign(state, updates);
   await saveJSON(env, 'state', state);
+}
+
+/** وضعیت سلامت — هم برای GET /health و هم برای دستور /health در ربات */
+async function healthSnapshot(env) {
+  const started = Date.now();
+  let kvOk = true;
+  try {
+    await env.KV.get('health_ping');
+  } catch (e) {
+    kvOk = false;
+  }
+  const [state, pending, approved, published, heartbeat, edu] = await Promise.all([
+    getJSON(env, 'state', {}),
+    getJSON(env, 'pending', []),
+    getJSON(env, 'approved', []),
+    getJSON(env, 'published', []),
+    getJSON(env, 'heartbeat', {}),
+    getJSON(env, 'edu_state', {}),
+  ]);
+  const todayKey = new Date(Date.now() + 210 * 60000).toISOString().slice(0, 10);
+  return {
+    ok: kvOk,
+    kv: kvOk,
+    ms: Date.now() - started,
+    stage: state.current_stage || 'idle',
+    paused: !!state.paused,
+    lastHeartbeat: heartbeat.at || null,
+    lastRunPublished: heartbeat.published ?? null,
+    queue: { pending: pending.length, approved: approved.length },
+    published: published.filter(p => p && p.published).length,
+    edu: {
+      queue: (edu.queue || []).length,
+      today: Number((edu.pub_count || {})[todayKey] || 0),
+    },
+    ts: new Date().toISOString(),
+  };
 }
 
 /**
