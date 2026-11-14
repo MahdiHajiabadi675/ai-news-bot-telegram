@@ -1081,8 +1081,9 @@ async function publishItem(env, BASE, CHANNEL_ID, ADMIN_ID, item) {
     const approvedList = await getJSON(env, 'approved', []);
     await saveJSON(env, 'approved', approvedList.filter(i => itemKey(i) !== key));
     console.log('[publishItem] Published:', item.title_fa?.substring(0, 50));
-    // آخرین کار: همهٔ ذخیره‌ها انجام شده؛ شکست بله = حذف، بدون صف و بدون اثر بر تلگرام
+    // آخرین کار: همهٔ ذخیره‌ها انجام شده؛ شکست بله/بلو‌اسکای = حذف، بدون صف و بدون اثر بر تلگرام
     try { await sendBale(env, item); } catch (e) { /* نادیده */ }
+    try { await sendBluesky(env, item); } catch (e) { /* نادیده */ }
   } else {
     console.log('[publishItem] Failed to publish:', result?.error_code, result?.description || '');
     if (result && result.error_code === 400) {
@@ -1155,6 +1156,7 @@ async function handleRun(env, BASE, CHANNEL_ID, ADMIN_ID) {
         ...(msgId ? { message_id: msgId } : {}) });
       if (key) publishedIds.add(key);
       console.log('[handleRun] Published successfully');
+      try { await sendBluesky(env, item); } catch (e) { /* نادیده */ }
     } else {
       console.log('[handleRun] Failed to publish');
     }
@@ -1181,6 +1183,60 @@ async function handleRun(env, BASE, CHANNEL_ID, ADMIN_ID) {
 }
 
 // === Helpers ===
+
+/**
+ * آینهٔ Bluesky — بعد از هر انتشار موفق، متن کوتاه (≤۲۸۰) به Bluesky می‌رود.
+ * اگر کلیدها نباشند یا هر خطایی رخ دهد، فقط لاگ می‌شود و انتشار تلگرام دست نمی‌خورد.
+ */
+async function sendBluesky(env, item) {
+  const handle = (env.BLUESKY_HANDLE || '').trim();
+  const password = (env.BLUESKY_APP_PASSWORD || '').trim();
+  if (!handle || !password) return false;
+  const text = [item.title_fa || item.title || '', item.summary_fa || '', item.link || '']
+    .filter(Boolean).join('\n\n').slice(0, 280);
+  if (!text) return false;
+  try {
+    const ctrl1 = new AbortController();
+    const timer1 = setTimeout(() => ctrl1.abort(), 8000);
+    let login;
+    try {
+      login = await fetch('https://bsky.social/xrpc/com.atproto.server.createSession', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ identifier: handle, password }),
+        signal: ctrl1.signal,
+      });
+    } finally {
+      clearTimeout(timer1);
+    }
+    const session = await login.json().catch(() => null);
+    if (!session || !session.accessJwt || !session.did) {
+      console.log('[bsky] login failed');
+      return false;
+    }
+    const ctrl2 = new AbortController();
+    const timer2 = setTimeout(() => ctrl2.abort(), 8000);
+    let record;
+    try {
+      record = await fetch('https://bsky.social/xrpc/com.atproto.repo.createRecord', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session.accessJwt}` },
+        body: JSON.stringify({
+          repo: session.did,
+          collection: 'app.bsky.feed.post',
+          record: { $type: 'app.bsky.feed.post', text, createdAt: new Date().toISOString() },
+        }),
+        signal: ctrl2.signal,
+      });
+    } finally {
+      clearTimeout(timer2);
+    }
+    return record.status === 200;
+  } catch (e) {
+    console.log('[bsky] error:', e?.message || e);
+    return false;
+  }
+}
 
 async function sendMessage(BASE, chatId, text, replyMarkup = null) {
   const data = { chat_id: chatId, text, parse_mode: 'HTML' };

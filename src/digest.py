@@ -24,7 +24,7 @@ HOURS = (19, 20, 21, 22)
 MAX_ITEMS = 7
 MIN_ITEMS = 3
 IMPORTANCE_ORDER = {"high": 0, "medium": 1, "low": 2}
-SKIP_CATEGORIES = ("edu", "digest")
+SKIP_CATEGORIES = ("edu", "digest", "paper")
 TG_LIMIT = 4000
 
 

@@ -4,6 +4,7 @@ from .config import BOT_TOKEN, CHANNEL_ID, ADMIN_ID, MAX_POSTS_PER_RUN, MAX_POST
 from . import storage
 from .bot import send_message
 from . import bale
+from . import bluesky
 from .formatting import format_message  # noqa: F401  (re-export برای سازگاری)
 
 BASE = f"https://api.telegram.org/bot{BOT_TOKEN}"
@@ -127,4 +128,8 @@ def publish_approved(state, approved_items=None):
     # آینهٔ بله فقط بعد از ذخیرهٔ کامل وضعیت تلگرام؛ شکست = حذف، بدون صف
     for it in to_mirror:
         bale.mirror(it)
+        try:
+            bluesky.mirror(it)
+        except Exception as e:  # noqa: BLE001
+            print(f"[BSKY] mirror skipped: {type(e).__name__}")
     return state

@@ -36,6 +36,7 @@ from src.bot import poll_updates, _send_review, notify_admin_new, send_message
 from src.publisher import publish_approved
 from src import edu_post
 from src import digest
+from src import arxiv_daily
 from src import translator
 
 
@@ -309,6 +310,9 @@ def _run(force=False):
 
     # 5. دایجست هفتگی (جمعه شب، حداکثر یک‌بار در هفته)
     state = digest.maybe_post(state)
+
+    # 6. مقالهٔ روز arXiv (روزی یک‌بار، از ساعت مقرر به بعد)
+    state = arxiv_daily.maybe_post(state)
 
     # 5. Publish approved items
     state = set_stage(state, "publishing")

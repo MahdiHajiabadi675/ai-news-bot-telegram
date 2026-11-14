@@ -56,6 +56,8 @@ import src.digest as digest  # noqa: E402
 import src.cluster as cluster  # noqa: E402
 import src.quiz as quiz  # noqa: E402
 import src.hn as hn  # noqa: E402
+import src.arxiv_daily as arxiv_daily  # noqa: E402
+import src.bluesky as bluesky  # noqa: E402
 import src.storage as storage  # noqa: E402
 
 _passed = 0
@@ -1491,6 +1493,118 @@ _msg_hn = formatting.format_message({"title_fa": "عنوان", "summary_fa": "خ
                                      "link": "http://x", "hashtags": ["AI"],
                                      "hn": {"points": 420, "comments": 180}})
 check("قالب پست: خط Hacker News اضافه می‌شود", "Hacker News: 420" in _msg_hn and "180 نظر" in _msg_hn)
+
+
+# ───────────── مقالهٔ روز arXiv ─────────────
+print("arXiv paper of the day:")
+_ARXIV_XML = """<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <entry><id>http://arxiv.org/abs/2611.00002v1</id>
+    <title>A New Method for
+      Efficient Inference</title>
+    <summary>We propose a method that reduces compute.</summary>
+    <published>2026-11-13T00:00:00Z</published></entry>
+  <entry><id>http://arxiv.org/abs/2611.00001v1</id><title>Old Paper</title>
+    <summary>Old abstract.</summary><published>2026-11-12T00:00:00Z</published></entry>
+</feed>"""
+
+
+class _ArxivResp:
+    status_code = 200
+    text = _ARXIV_XML
+
+    def raise_for_status(self):
+        return None
+
+
+arxiv_daily.requests.get = lambda *a, **k: _ArxivResp()
+_entries = arxiv_daily.fetch_entries()
+check("arXiv: فید Atom درست خوانده می‌شود", len(_entries) == 2 and _entries[0]["id"] == "2611.00002v1")
+check("arXiv: عنوان چندخطی یک‌خطی می‌شود", "Efficient Inference" in _entries[0]["title"])
+check("arXiv: مقالهٔ تکراری انتخاب نمی‌شود",
+      arxiv_daily.pick(_entries, [_entries[0]["id"]])["id"] == "2611.00001v1")
+
+_ax = {}
+arxiv_daily.cloudflare_kv.get = lambda k, d=None: _ax.get(k, d)
+arxiv_daily.cloudflare_kv.put = lambda k, v: _ax.__setitem__(k, _json.loads(_json.dumps(v))) or True
+_ax_sent = []
+arxiv_daily.send_message = lambda c, t, **kw: (_ax_sent.append(t) or {"ok": True, "result": {"message_id": 5}})
+arxiv_daily.bale.reset = lambda: None
+arxiv_daily.bale.send_text = lambda t: True
+arxiv_daily.storage.load_published = lambda: []
+arxiv_daily.storage.save_published = lambda items: None
+arxiv_daily.CHANNEL_ID = "@c"
+arxiv_daily.translator.translate = lambda t, s="auto": f"ترجمه: {t[:30]}"
+_t13 = _dt.datetime(2026, 11, 14, 13, 0) - _dt.timedelta(minutes=210)
+arxiv_daily.maybe_post({}, _t13)
+check("arXiv: در ساعت مقرر یک مقاله پست می‌شود", len(_ax_sent) == 1)
+check("arXiv: پست عنوان، لینک و هشتگ دارد",
+      "مقالهٔ روز" in _ax_sent[0] and "arxiv.org/abs/2611.00002v1" in _ax_sent[0]
+      and "#مقاله_روز" in _ax_sent[0])
+arxiv_daily.maybe_post({}, _t13 + _dt.timedelta(minutes=30))
+check("arXiv: در همان روز دوبار پست نمی‌شود", len(_ax_sent) == 1)
+
+_ax.clear(); _ax_sent.clear()
+arxiv_daily.maybe_post({}, _t13 - _dt.timedelta(hours=3))
+check("arXiv: قبل از ساعت مقرر پست نمی‌شود", _ax_sent == [])
+
+_orig_tr = arxiv_daily.translator.translate
+arxiv_daily.translator.translate = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("x"))
+arxiv_daily.maybe_post({}, _t13)
+check("arXiv: شکست ترجمه → متن انگلیسی منتشر می‌شود",
+      len(_ax_sent) == 1 and "A New Method" in _ax_sent[0])
+arxiv_daily.translator.translate = _orig_tr
+
+
+# ───────────── آینهٔ Bluesky ─────────────
+print("Bluesky mirror:")
+
+
+class _BskyResp:
+    def __init__(self, status=200, payload=None):
+        self.status_code = status
+        self._payload = payload or {}
+
+    def json(self):
+        return self._payload
+
+
+_orig_bsky_post = bluesky.requests.post
+_bsky_calls = []
+
+
+def _bsky_post(url, headers=None, json=None, timeout=None):
+    method = "createSession" if str(url).endswith("createSession") else "createRecord"
+    _bsky_calls.append((method, json, headers))
+    if method == "createSession":
+        return _BskyResp(200, {"accessJwt": "jwt", "did": "did:plc:x"})
+    return _BskyResp(200, {"uri": "at://x"})
+
+
+bluesky.requests.post = _bsky_post
+os.environ.pop("BLUESKY_HANDLE", None)
+os.environ.pop("BLUESKY_APP_PASSWORD", None)
+check("Bluesky: بدون کلید خاموش است", bluesky.enabled() is False and bluesky.mirror({"title": "x"}) is False
+      and _bsky_calls == [])
+
+os.environ["BLUESKY_HANDLE"] = "me.bsky.social"
+os.environ["BLUESKY_APP_PASSWORD"] = "app-pass"
+_item_bsky = {"title_fa": "عنوان خبر", "summary_fa": "خلاصهٔ خبر", "link": "http://x"}
+check("Bluesky: متن پست از عنوان/خلاصه/لینک ساخته می‌شود",
+      "عنوان خبر" in bluesky.format_post(_item_bsky) and "http://x" in bluesky.format_post(_item_bsky))
+check("Bluesky: متن بلند کوتاه می‌شود", len(bluesky.format_post({**_item_bsky, "summary_fa": "ی" * 900})) <= 280)
+check("Bluesky: پست موفق True برمی‌گرداند", bluesky.mirror(_item_bsky) is True)
+_bsky_names = [c[0] for c in _bsky_calls]
+check(f"Bluesky: ابتدا login و بعد createRecord صدا زده می‌شود ({_bsky_names})",
+      _bsky_names[-2:] == ["createSession", "createRecord"]
+      and _bsky_calls[-1][2].get("Authorization") == "Bearer jwt")
+
+_bsky_calls.clear()
+bluesky.requests.post = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("down"))
+check("Bluesky: خطای شبکه بی‌صدا نادیده گرفته می‌شود", bluesky.mirror(_item_bsky) is False)
+bluesky.requests.post = _orig_bsky_post
+os.environ.pop("BLUESKY_HANDLE", None)
+os.environ.pop("BLUESKY_APP_PASSWORD", None)
 
 
 # ───────────── امنیت: ویرایش خبر فقط توسط ادمین ─────────────

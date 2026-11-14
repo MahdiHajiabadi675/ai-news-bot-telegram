@@ -18,6 +18,11 @@ def _int_env(name: str, default: int) -> int:
 HN_ENABLED = os.getenv("HN_ENABLED", "true").strip().lower() not in ("0", "false", "no", "off")
 HN_MAX_ITEMS = _int_env("HN_MAX_ITEMS", 5)
 
+# ───────── مقالهٔ روز arXiv ─────────
+# یک مقالهٔ تازهٔ cs.AI در روز، از این ساعت (به وقت ایران) به بعد
+ARXIV_ENABLED = os.getenv("ARXIV_ENABLED", "true").strip().lower() not in ("0", "false", "no", "off")
+ARXIV_HOUR = _int_env("ARXIV_HOUR", 13)
+
 # ───────── حالت تمرین (dry-run) ─────────
 # با `python main.py run --dry-run` روشن می‌شود: هیچ پیامی به تلگرام/بله نمی‌رود و
 # هیچ چیزی در KV نوشته نمی‌شود؛ فقط خواندن و چاپ قالب نهایی. برای تست محلی امن.

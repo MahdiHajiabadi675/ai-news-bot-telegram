@@ -437,4 +437,31 @@ console.log('Public feed & API:');
     && body.items[0].category === 'model_release');
 }
 
+// ───────────── آینهٔ Bluesky ─────────────
+console.log('Bluesky mirror:');
+{
+  const rf = globalThis.fetch;
+  const seen = [];
+  globalThis.fetch = async (url, opts) => {
+    const body = opts?.body ? JSON.parse(opts.body) : {};
+    seen.push({ url: String(url), body, headers: opts?.headers || {} });
+    if (String(url).includes('createSession')) {
+      return { json: async () => ({ accessJwt: 'jwt', did: 'did:plc:x' }), status: 200 };
+    }
+    return { json: async () => ({ ok: true }), status: 200 };
+  };
+  set('state', { paused: false, auto_publish_enabled: true, daily_post_count: 0,
+    daily_post_date: new Date().toISOString().slice(0, 10) });
+  set('pending', [item('bs1')]); set('approved', []); set('published', []);
+  const envB = { ...env, BLUESKY_HANDLE: 'me.bsky.social', BLUESKY_APP_PASSWORD: 'pw' };
+  await worker.fetch(new Request('https://w.example/webhook', {
+    method: 'POST', headers: SECRET_HEADER, body: JSON.stringify(cb('approve:bs1')),
+  }), envB);
+  const rec = seen.find(s => s.url.includes('createRecord'));
+  check('Bluesky: بعد از انتشار createRecord با did و متن خبر صدا زده می‌شود',
+    !!rec && rec.body.repo === 'did:plc:x' && rec.body.record.text.includes('عنوان'));
+  check('Bluesky: توکن در هدر Authorization می‌رود', !!rec && rec.headers.Authorization === 'Bearer jwt');
+  globalThis.fetch = rf;
+}
+
 console.log(`\n${passed} تست Worker با موفقیت گذشت ✅`);
