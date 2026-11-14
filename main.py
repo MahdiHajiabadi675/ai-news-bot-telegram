@@ -280,14 +280,15 @@ def _run(force=False):
         state["last_collect_time"] = now.isoformat() + "Z"
         storage.save_state(state)
 
-    # 4. Publish approved items
+    # 4. پست آموزشی (فقط متن) — قبل از انتشار اخبار، تا اگر انتشار طول کشید یا
+    #    اجرا به تایم‌اوت نزدیک شد، اسلات آموزشی از دست نرود.
+    #    Gemini اول، در صورت خطا مدل‌های رایگان OpenRouter، در آخر متن آمادهٔ محلی.
+    state = edu_post.maybe_post(state, force=force)
+
+    # 5. Publish approved items
     state = set_stage(state, "publishing")
     storage.save_state(state)
     state = publish_approved(state, approved_to_publish)
-
-    # پست آموزشی (فقط متن) با بازهٔ طولانی — Gemini اول، در صورت خطا مدل‌های
-    # رایگان OpenRouter. هیچ خطایی از آن بیرون نمی‌آید.
-    state = edu_post.maybe_post(state, force=force)
 
     # 5. Save state
     state = set_stage(state, "waiting")

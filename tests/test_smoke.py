@@ -708,6 +708,9 @@ _DEFAULT_PUB_HOURS = _cfg.EDU_PUBLISH_HOURS
 check("edu: سقف توکن پیش‌فرض کم است", _cfg.EDU_MAX_OUTPUT_TOKENS <= 1000)
 _edu.EDU_EVERY_HOURS = 2
 _edu.EDU_PUBLISH_HOURS = tuple(range(24))  # تست‌های جریان ساده: انتشار هر ساعتی مجاز؛ زمان‌بندی واقعی پایین‌تر تست می‌شود
+# در تست‌های جریان، «تور نجات» محلی خاموش است تا شمارش پست‌ها قابل پیش‌بینی بماند؛
+# تست جداگانه‌ای پایین‌تر رفتار واقعی (با fallback روشن) را می‌سنجد.
+_edu.EDU_USE_BUILTIN_FALLBACK = False
 
 _good = {"title": "چطور با یک پرامپت ایمیل کاری بهتر بنویسی", "hook": "ایمیل‌های کاری معمولاً طولانی و مبهم‌اند؛ با این روش در چند ثانیه شفاف می‌شوند.",
          "steps": ["موضوع و مخاطب ایمیل را بنویس", "لحن دلخواه را مشخص کن", "از مدل بخواه دو نسخه بدهد"],
@@ -1164,7 +1167,8 @@ _edu.maybe_post({}, _tehran(20, day=30))
 _q = len(_ks["edu_state"]["queue"])
 _edu.send_message = lambda c, tx, **kw: (_sent3.append(tx) or {"ok": True})
 _edu.maybe_post({}, _tehran(21, day=30))
-check("شکست ارسال: پست در صف می‌ماند و ساعت بعد می‌رود", len(_ks["edu_state"]["queue"]) == _q - 1 and len(_sent3) == _s0 + 1)
+check("شکست ارسال: پست در صف می‌ماند و ساعت بعد (با جبران عقب‌افتادگی) می‌رود",
+      len(_ks["edu_state"]["queue"]) == _q - 2 and len(_sent3) == _s0 + 2)
 
 # Gemini: فاصلهٔ ۵۵ دقیقه‌ای بودجه برای پست آموزشی اعمال نمی‌شود
 import src.gemini_budget as _gb
@@ -1213,6 +1217,56 @@ check("موفقیت در آمار با نام مدل ثبت می‌شود", _ku[
 _edu.EDU_MAX_TRIES_PER_SLOT = 6
 _edu.EDU_RETRY_GAP_MIN = 56
 _edu.EDU_PUBLISH_HOURS = _DEFAULT_PUB_HOURS
+
+
+# ───────────── تضمین ۴ پست آموزشی در شب (تور نجات + جبران تأخیر) ─────────────
+print("Edu nightly guarantee:")
+_kb = {}
+_edu.cloudflare_kv.get = lambda k, d=None: _kb.get(k, d)
+_edu.cloudflare_kv.put = lambda k, v: _kb.__setitem__(k, _json.loads(_json.dumps(v))) or True
+_edu.EDU_PUBLISH_HOURS = _DEFAULT_PUB_HOURS
+_edu.EDU_EVERY_HOURS = 6
+_edu.EDU_POSTS_PER_DAY = 4
+_edu.EDU_CATCHUP_MAX = 2
+_edu.EDU_USE_BUILTIN_FALLBACK = True
+_edu.EDU_MAX_TRIES_PER_SLOT = 6
+_edu.EDU_RETRY_GAP_MIN = 0
+_edu.GEMINI_API_KEY = "k"; _edu.OPENROUTER_API_KEY = ""; _edu.CHANNEL_ID = "@c"; _edu.EDU_ENABLED = True
+_edu.gemini_budget.can_call = lambda **kw: True
+_sent_b = []
+_edu.send_message = lambda c, t, **kw: (_sent_b.append(t) or {"ok": True})
+_edu.bale.send_text = lambda t: True
+_edu.bale.reset = lambda: None
+_edu.storage.load_published = lambda: []
+_edu.storage.save_published = lambda items: None
+_edu.generate = lambda desc, recent, **kw: None  # هر دو مدل شکست می‌خورند
+
+for _h in range(19, 23):
+    _edu.maybe_post({}, _tehran(_h, day=2))
+check("بدون هیچ خروجی مدل: ۴ پست آموزشی محلی منتشر شد", len(_sent_b) == 4)
+check("پست‌های محلی هم تیتر «آموزش» و هشتگ دارند",
+      all(x.startswith("🎓 <b>آموزش |") and "#" in x for x in _sent_b))
+_edu_state2 = _kb["edu_state"]
+check("صف خالی و شمارندهٔ روز ۴ شد",
+      _edu_state2["queue"] == [] and _edu_state2["pub_count"]["2026-10-02"] == 4)
+check("عنوان‌های محلی تکراری نیستند", len({x.splitlines()[0] for x in _sent_b}) == 4)
+
+# اگر فقط اجرای آخر شب برسد، باید جبران کند (نه صفر پست)
+_kb.clear(); _sent_b.clear()
+_edu.maybe_post({}, _tehran(22, day=3))
+check("اجرای تک در ساعت ۲۲: ۲ پست جبرانی می‌رود", len(_sent_b) == 2)
+_edu.maybe_post({}, _tehran(22, day=3))
+_n_catch = len(_sent_b)
+_edu.maybe_post({}, _tehran(22, day=3))
+check("سقف روزانه: بعد از رسیدن به ۴ پست، بیشتر نمی‌رود",
+      _n_catch == 4 and len(_sent_b) == 4)
+
+# اگر مدل کار کند، پست مدل بر «تور نجات» اولویت دارد
+_kb.clear(); _sent_b.clear()
+_edu.generate = lambda desc, recent, **kw: {**_good, "title": "پست ساخته‌شده با مدل برای امشب"}
+_edu.maybe_post({}, _tehran(19, day=4))
+check("وقتی مدل کار می‌کند، پست مدل منتشر می‌شود نه پست محلی",
+      len(_sent_b) == 1 and "پست ساخته‌شده با مدل" in _sent_b[0])
 
 
 # ───────────── امنیت: ویرایش خبر فقط توسط ادمین ─────────────

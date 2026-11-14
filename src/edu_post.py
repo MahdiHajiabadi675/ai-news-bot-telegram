@@ -34,7 +34,8 @@ from .bot import send_message
 from .config import (
     CHANNEL_ID, DISPLAY_TZ_OFFSET_MIN, EDU_ENABLED, EDU_EVERY_HOURS,
     EDU_MAX_ATTEMPTS_PER_DAY, EDU_MAX_OUTPUT_TOKENS, EDU_MAX_REJECTS, EDU_MAX_TRIES_PER_SLOT, EDU_PUBLISH_HOURS, EDU_QUEUE_MAX,
-    EDU_RECENT_KEEP, EDU_RECENT_PROMPT, EDU_RETRY_GAP_MIN,
+    EDU_CATCHUP_MAX, EDU_POSTS_PER_DAY, EDU_RECENT_KEEP, EDU_RECENT_PROMPT, EDU_RETRY_GAP_MIN,
+    EDU_USE_BUILTIN_FALLBACK,
     GEMINI_API_KEY, OPENROUTER_API_KEY, OPENROUTER_APP_NAME, OPENROUTER_MAX_MODELS,
     OPENROUTER_MODELS, OPENROUTER_SITE_URL,
 )
@@ -110,6 +111,188 @@ def current_slot(now=None):
 
 def pick_category(ordinal: int):
     return CATEGORIES[ordinal % len(CATEGORIES)]
+
+
+# ───────────── پست‌های آمادهٔ محلی (بدون مدل) ─────────────
+# چرا؟ اگر Gemini و مدل‌های رایگان OpenRouter هر دو خطا بدهند (429/503/تایم‌اوت) یا
+# کلیدی تنظیم نشده باشد، صف خالی می‌ماند و آن شب هیچ پست آموزشی نمی‌رود. این متن‌ها
+# از پیش نوشته و پاک‌سازی شده‌اند (بدون لینک و مارک‌داون) و فقط نقش «تور نجات» دارند.
+BUILTIN_POSTS = [
+    {
+        "tag": "پرامپت_آماده",
+        "title": "قالب پرامپت برای خلاصه‌کردن هر متن طولانی",
+        "hook": "به‌جای «خلاصه کن»، به مدل بگو برای چه کسی و در چند کلمه خلاصه کند؛ نتیجه چند برابر کاربردی‌تر می‌شود.",
+        "steps": [
+            "مخاطب را مشخص کن: «برای مدیری که وقت ندارد».",
+            "طول و قالب را بگو: «۵ بولت، هر کدام یک جمله».",
+            "بگو چه چیزی حذف شود: «جزئیات فنی و مثال‌ها را نیاور».",
+        ],
+        "prompt": "این متن را برای [مخاطب] در [تعداد] بولت خلاصه کن. هر بولت یک جملهٔ کامل باشد. جزئیات [مورد نظر] را حذف کن و اگر عدد یا تصمیم مهمی بود، همان را نگه دار.\n\nمتن:\n[متن خودت را اینجا بگذار]",
+        "tip": "اگر خروجی طولانی شد، بگو «نصفش کن»؛ کوتاه‌کردن تدریجی بهتر از بازنویسی از صفر است.",
+        "hashtags": ["خلاصه_سازی", "پرامپت_نویسی"],
+    },
+    {
+        "tag": "ترفند_چت‌بات",
+        "title": "سه جمله‌ای که کیفیت جواب چت‌بات را عوض می‌کند",
+        "hook": "اکثر مردم فقط سؤال می‌پرسند؛ اگر نقش، مخاطب و قالب را هم بدهی، جواب از «عمومی» به «قابل استفاده» می‌رسد.",
+        "steps": [
+            "نقش بده: «مثل یک ویراستار دقیق رفتار کن».",
+            "مخاطب را بگو: «برای کسی که هیچ پیش‌زمینه‌ای ندارد».",
+            "قالب را تعیین کن: «جدول دو ستونی، حداکثر ۶ ردیف».",
+            "یک نمونهٔ دلخواه بده تا لحن را یاد بگیرد.",
+        ],
+        "prompt": "",
+        "tip": "اگر جواب کلی بود، نگو «بهتر بگو»؛ بگو کدام قسمت کلی است.",
+        "hashtags": ["چت_بات", "ترفند"],
+    },
+    {
+        "tag": "اشتباه_رایج",
+        "title": "اشتباه رایج: اجازه دادن به مدل برای حدس زدن",
+        "hook": "مدل‌ها وقتی چیزی را نمی‌دانند، اغلب به‌جای گفتن «نمی‌دانم» یک جواب محتمل می‌سازند. یک جمله این را کم می‌کند.",
+        "steps": [
+            "در ابتدا بگو: «اگر مطمئن نیستی، صریح بگو نمی‌دانم».",
+            "بخواه حدس‌ها را جدا کند: «کدام بخش‌ها قطعی نیست؟»",
+            "برای عدد و تاریخ، خودت راستی‌آزمایی کن.",
+        ],
+        "prompt": "به این سؤال جواب بده. اگر بخشی از جواب قطعی نیست، همان‌جا بنویس «نامطمئن» و بگو برای مطمئن‌شدن چه چیزی لازم است.\n\nسؤال: [سؤال]",
+        "tip": "«نامطمئن» را با لحن تشویقی بخواه؛ وگرنه مدل باز هم حدس می‌زند.",
+        "hashtags": ["هالوسینیشن", "اعتبارسنجی"],
+    },
+    {
+        "tag": "بهره‌وری",
+        "title": "صورت‌جلسه در سه دقیقه با یک پرامپت",
+        "hook": "یادداشت‌های پراکندهٔ جلسه را بده و خروجی ساختاریافته بگیر: تصمیم‌ها، مسئول‌ها و قدم بعدی.",
+        "steps": [
+            "یادداشت خام را همان‌طور که هست بفرست.",
+            "سه بخش بخواه: تصمیم‌ها، اقدام‌ها با مسئول، سؤال‌های باز.",
+            "بخواه جاهای خالی را «نامشخص» بگذارد، نه از خودش بسازد.",
+        ],
+        "prompt": "این یادداشت جلسه را به سه بخش تبدیل کن: ۱) تصمیم‌های قطعی ۲) اقدام‌ها با مسئول و موعد ۳) سؤال‌های باز. هر چیزی که در متن نبود، «نامشخص» بنویس و از خودت اضافه نکن.\n\n[یادداشت]",
+        "tip": "خروجی را همان روز برای حاضران بفرست؛ اختلاف‌ها همان‌جا آشکار می‌شود.",
+        "hashtags": ["صورت_جلسه", "بهره_وری"],
+    },
+    {
+        "tag": "یادگیری_با_AI",
+        "title": "یک مفهوم سخت را در سه سطح یاد بگیر",
+        "hook": "یک مفهوم را در سه سطح بگیر: نوجوان، دانشجو، متخصص — و همان‌جا بفهم کجا گیر کرده‌ای.",
+        "steps": [
+            "بگو: «سه سطح توضیح بده: ۱۲ ساله، دانشجو، متخصص».",
+            "بگو کدام سطح را نفهمیدی و چرا.",
+            "بخواه با یک مثال روزمره دوباره بگوید.",
+            "آخرش سه سؤال بده تا خودت را امتحان کنی.",
+        ],
+        "prompt": "مفهوم [مفهوم] را در سه سطح توضیح بده: (۱) برای نوجوان ۱۲ ساله (۲) برای دانشجوی مبتدی (۳) برای متخصص. بعد سه سؤال کوتاه بده که بفهمم یاد گرفته‌ام یا نه.",
+        "tip": "اگر سطح سوم را نفهمیدی، مشکل تو نیست؛ بخواه اصطلاحات را یکی‌یکی تعریف کند.",
+        "hashtags": ["یادگیری", "آموزش"],
+    },
+    {
+        "tag": "تولید_تصویر",
+        "title": "آناتومی یک پرامپت تصویر خوب",
+        "hook": "«گربهٔ فضانورد» تصویر می‌دهد، اما «گربهٔ نارنجی فضانورد، نور سینمایی، پس‌زمینهٔ سیاه» تصویر درست می‌دهد.",
+        "steps": [
+            "سوژه و جزئیات ظاهری را بنویس.",
+            "سبک و نور را اضافه کن: طبیعی، سینمایی، استودیویی.",
+            "کادر و لنز را مشخص کن: نمای نزدیک یا واید.",
+            "یک قید منفی بگذار: «بدون متن روی تصویر».",
+        ],
+        "prompt": "سوژه: [چه چیزی] — جزئیات: [رنگ و حال‌وهوا] — سبک: [عکاسی سینمایی] — نور: [نور طبیعی صبح] — کادر: [نمای نزدیک] — بدون متن روی تصویر.",
+        "tip": "برای ثبات بین چند تصویر، همان پرامپت را نگه دار و فقط یک بخش را عوض کن.",
+        "hashtags": ["تولید_تصویر", "پرامپت"],
+    },
+    {
+        "tag": "برنامه‌نویسی_با_AI",
+        "title": "دیباگ با AI بدون فرستادن کل پروژه",
+        "hook": "به‌جای فرستادن کل کد، خطا و قطعهٔ کوچک را بفرست و بخواه فرض‌هایش را هم بگوید.",
+        "steps": [
+            "پیام خطا و بیست خط مرتبط را بفرست، نه کل مخزن.",
+            "بخواه اول فرض‌هایش را لیست کند، بعد راه‌حل بدهد.",
+            "دو راه‌حل با معایبشان بخواه.",
+            "یک تست کوچک بخواه که باگ برنگردد.",
+        ],
+        "prompt": "این خطا و این قطعه کد را ببین. اول فرض‌هایت را لیست کن، بعد دو راه‌حل با معایب هر کدام بده و یک تست کوچک بنویس که این باگ دیگر برنگردد.\n\nخطا: [متن]\nکد: [قطعه]",
+        "tip": "اگر راه‌حل اول کار نکرد، فرض‌های اشتباه را به مدل برگردان؛ معمولاً همان‌جا حل می‌شود.",
+        "hashtags": ["برنامه_نویسی", "دیباگ"],
+    },
+    {
+        "tag": "مفهوم_ساده",
+        "title": "پنجرهٔ زمینه با یک مثال ساده",
+        "hook": "مدل حافظهٔ دائمی ندارد؛ هر بار فقط می‌تواند چند صفحهٔ اخیر گفتگو را ببیند.",
+        "steps": [
+            "تصور کن میزی است که فقط چند برگه رویش جا می‌شود.",
+            "با اضافه‌شدن برگهٔ جدید، قدیمی‌ترین می‌افتد.",
+            "برای کار طولانی، خلاصهٔ مرحلهٔ قبل را نگه دار و دوباره بفرست.",
+            "گاهی از مدل بخواه خلاصهٔ تصمیم‌ها را بدهد.",
+        ],
+        "prompt": "",
+        "tip": "اگر مدل جزئیات اول گفتگو را فراموش کرد، تقصیر تو نیست؛ دوباره خلاصه‌اش کن.",
+        "hashtags": ["مفهوم_ساده", "context"],
+    },
+    {
+        "tag": "کاربرد_روزمره",
+        "title": "خرید هوشمندتر با یک جدول مقایسه",
+        "hook": "قبل از خرید، معیارهایت را بده و بخواه جدول مقایسه بسازد؛ تصمیم‌گیری چند دقیقه می‌شود.",
+        "steps": [
+            "معیارها را بنویس: قیمت، گارانتی، اندازه، مصرف.",
+            "وزن هر معیار را مشخص کن.",
+            "جدول و در آخر یک پیشنهاد با دلیل بخواه.",
+            "قیمت‌های واقعی را خودت جای‌گذاری کن.",
+        ],
+        "prompt": "این گزینه‌ها را با معیارهای [معیارها] مقایسه کن و جدول بده. وزن معیارها: [وزن‌ها]. در آخر یک پیشنهاد بده و دلیلش را در دو جمله بگو. اگر داده‌ای نبود، جایش را خالی بگذار.\n\nگزینه‌ها: [الف، ب، ج]",
+        "tip": "قیمت را خودت وارد کن؛ مدل قیمت روز را نمی‌داند.",
+        "hashtags": ["خرید_هوشمند", "کاربرد_روزمره"],
+    },
+    {
+        "tag": "ورک‌فلو",
+        "title": "ورک‌فلوی سه‌مرحله‌ای: از ایده تا متن آماده",
+        "hook": "یک کار بزرگ را به سه پرامپت تقسیم کن: ساختار، پیش‌نویس، ویرایش — نتیجه از یک پرامپت بلند بهتر است.",
+        "steps": [
+            "مرحلهٔ ۱: فقط ساختار و سرفصل‌ها را بخواه.",
+            "مرحلهٔ ۲: هر بخش را جدا بنویس.",
+            "مرحلهٔ ۳: بخواه مثل ویراستار سختگیر نقد و کوتاه کند.",
+        ],
+        "prompt": "مرحلهٔ ۱: برای موضوع [موضوع] و مخاطب [مخاطب] یک ساختار با ۴ سرفصل بده. مرحلهٔ ۲: بعد از تأیید من، هر سرفصل را در ۳ جمله بنویس. مرحلهٔ ۳: در پایان، متن را کوتاه و روان کن و جمله‌های تکراری را حذف کن.",
+        "tip": "بین مرحله‌ها یک خط بازخورد بده؛ کیفیت کل کار بالا می‌رود.",
+        "hashtags": ["ورک_فلو", "نویسندگی"],
+    },
+    {
+        "tag": "نویسندگی_و_محتوا",
+        "title": "لحن را با یک نمونه کپی کن",
+        "hook": "به‌جای گفتن «رسمی‌تر بنویس»، یک پاراگراف نمونه بده؛ مدل لحن را دقیق‌تر می‌گیرد.",
+        "steps": [
+            "یک پاراگراف از متنی که لحنش را می‌پسندی بفرست.",
+            "بگو «با همین لحن، این متن را بازنویسی کن».",
+            "بعد بخواه فقط جمله‌های بلند را کوتاه کند.",
+            "در آخر بپرس کدام جمله ضعیف است.",
+        ],
+        "prompt": "این نمونهٔ لحن است:\n[نمونه]\n\nحالا متن زیر را با همین لحن بازنویسی کن، بدون اضافه‌کردن مطلب تازه:\n[متن]",
+        "tip": "یک نمونهٔ بد هم بده و بگو چه چیزی را نمی‌خواهی؛ نتیجه دقیق‌تر می‌شود.",
+        "hashtags": ["نویسندگی", "لحن"],
+    },
+    {
+        "tag": "تصمیم_و_تحلیل",
+        "title": "قبل از تصمیم، از AI بخواه نقش مخالف را بازی کند",
+        "hook": "به‌جای تأیید گرفتن، بخواه ضعیف‌ترین نقطهٔ نقشه‌ات را پیدا کند؛ این کار تصمیم را واقعاً بهتر می‌کند.",
+        "steps": [
+            "نقشه‌ات را در پنج جمله بنویس.",
+            "بخواه سه ریسک اصلی و یک سؤال سخت مطرح کند.",
+            "برای هر ریسک یک راه کاهش بخواه.",
+            "در آخر بپرس «چه چیزی را ندیده‌ام؟»",
+        ],
+        "prompt": "من می‌خواهم [تصمیم] را انجام دهم. تو نقش یک منتقد تیزبین را بازی کن: سه ریسک اصلی، یک سؤال سخت که باید جواب بدهم، و برای هر ریسک یک راه کاهش بده. در پایان بگو چه چیزی را ممکن است ندیده باشم.",
+        "tip": "جواب «همه‌چیز خوب است» یعنی پرامپتت نقدطلب نبوده؛ دوباره با نقش مخالف بخواه.",
+        "hashtags": ["تصمیم_گیری", "تحلیل"],
+    },
+]
+
+
+def builtin_item(ordinal: int, recent_titles):
+    """یک پست آمادهٔ محلی (چرخشی، بدون تکرار عنوان‌های اخیر) → (post، tag)"""
+    for i in range(len(BUILTIN_POSTS)):
+        cand = BUILTIN_POSTS[(ordinal + i) % len(BUILTIN_POSTS)]
+        if not too_similar(cand["title"], recent_titles):
+            return dict(cand), cand["tag"]
+    cand = BUILTIN_POSTS[ordinal % len(BUILTIN_POSTS)]
+    return dict(cand), cand["tag"]
 
 
 # ───────────── اعتبارسنجی و قالب‌بندی ─────────────
@@ -672,41 +855,103 @@ def _note_usage(est, day, ok):
         del usage[old]
 
 
-def _publish_due(est, now_utc):
-    """اگر ساعت انتشار است و در این ساعت چیزی نرفته، اولین پست صف را منتشر کن"""
+def _peek_queue(est):
+    """اولین آیتم سالم صف، بدون برداشتن (آیتم‌های خراب حذف می‌شوند)."""
     queue = est.get("queue") if isinstance(est.get("queue"), list) else []
-    loc = local_now(now_utc)
-    if loc.hour not in EDU_PUBLISH_HOURS or not queue:
-        return
-    key = f"{loc.date().isoformat()}#{loc.hour}"
-    if est.get("last_pub_key") == key:
-        return
+    while queue and not (isinstance(queue[0], dict) and isinstance(queue[0].get("post"), dict)):
+        queue.pop(0)
+    est["queue"] = queue
+    return queue[0] if queue else None
 
-    item = queue[0]
-    post, tag = item.get("post"), item.get("tag", "")
-    if not isinstance(post, dict):
-        est["queue"] = queue[1:]  # آیتم خراب
-        cloudflare_kv.put(KEY, est)
-        return
 
-    result = send_message(CHANNEL_ID, format_html(post, tag))
-    if not (result and result.get("ok")):
-        print(f"[EDU] Telegram send failed: {result} — stays in queue")
-        return
-
-    est["queue"] = queue[1:]
-    est["last_pub_key"] = key
-    cloudflare_kv.put(KEY, est)
-    print(f"[EDU] Published: {post['title'][:50]} ({tag}) at {loc.hour}:00 — left in queue: {len(est['queue'])}")
-
-    # لاگ انتشار (برای /stats) — خطا نباید چیزی را خراب کند
+def _pub_count(est, day):
+    counts = est.get("pub_count") if isinstance(est.get("pub_count"), dict) else {}
     try:
-        log = storage.load_published()
-        log.append({"id": f"edu-{item.get('slot', key)}", "title_fa": post["title"], "source": "آموزش AI",
-                    "category": "edu", "published": True, "published_at": datetime.utcnow().isoformat() + "Z"})
-        storage.save_published(log)
-    except Exception as e:  # noqa: BLE001
-        print(f"[EDU] log failed: {type(e).__name__}")
+        return counts, int(counts.get(day) or 0)
+    except (TypeError, ValueError):
+        return counts, 0
 
-    bale.reset()
-    bale.send_text(format_plain(post, tag))
+
+def _publish_due(est, now_utc):
+    """
+    انتشار با سقف روزانه (EDU_POSTS_PER_DAY) و جبران تأخیر.
+
+    چرا این‌طور؟ GitHub Actions اجرای زمان‌بندی‌شده را گاهی عقب می‌اندازد. قبلاً
+    اگر ساعت ۱۹ از دست می‌رفت، آن پست تا آخر شب جبران نمی‌شد. حالا تعداد پست‌های
+    امروز شمرده می‌شود و تا رسیدن به سقف ادامه دارد (حداکثر EDU_CATCHUP_MAX در
+    یک اجرا). اگر صف خالی باشد (مدل‌ها شکست خوردند)، از پست آمادهٔ محلی استفاده
+    می‌شود تا شب بدون پست آموزشی نماند.
+    """
+    loc = local_now(now_utc)
+    hours = sorted(EDU_PUBLISH_HOURS)
+    if not hours or loc.hour < hours[0] or loc.hour > hours[-1]:
+        return
+
+    day = loc.date().isoformat()
+    target = max(1, EDU_POSTS_PER_DAY)
+    counts, done = _pub_count(est, day)
+    if done >= target:
+        return
+
+    key = f"{day}#{loc.hour}"
+    behind = target - done
+    remaining_slots = len([h for h in hours if h >= loc.hour])
+    catching_up = behind > remaining_slots  # اجراهای قبلی از دست رفته‌اند
+    if est.get("last_pub_key") == key and not catching_up:
+        return  # در این ساعت قبلاً پست رفته (اجرای تکراری/force)
+
+    batch = min(behind, max(1, EDU_CATCHUP_MAX)) if catching_up else 1
+    sent = 0
+    for _ in range(batch):
+        item = _peek_queue(est)
+        from_builtin = False
+        if item is None:
+            if not EDU_USE_BUILTIN_FALLBACK:
+                break
+            recent = [r.get("title", "") for r in est.get("recent", []) if isinstance(r, dict)]
+            post, tag = builtin_item(done + sent, recent)
+            item = {"post": post, "tag": tag, "slot": "builtin", "via": "builtin/local",
+                    "made_at": datetime.utcnow().isoformat() + "Z"}
+            from_builtin = True
+
+        post, tag = item.get("post"), item.get("tag", "")
+        try:
+            text = format_html(post, tag)
+        except Exception as e:  # noqa: BLE001
+            print(f"[EDU] format failed: {type(e).__name__}: {e}")
+            continue
+
+        result = send_message(CHANNEL_ID, text)
+        if not (result and result.get("ok")):
+            where = "builtin" if from_builtin else "queue"
+            print(f"[EDU] Telegram send failed: {result} — stays in {where}")
+            break
+
+        if from_builtin:
+            recent_list = est.get("recent") if isinstance(est.get("recent"), list) else []
+            recent_list.append({"title": post["title"], "tag": tag, "via": "builtin/local",
+                                "at": datetime.utcnow().isoformat() + "Z"})
+            est["recent"] = recent_list[-EDU_RECENT_KEEP:]
+        else:
+            est["queue"] = (est.get("queue") or [])[1:]
+        sent += 1
+        print(f"[EDU] Published: {post['title'][:50]} ({tag}) at {loc.hour}:00 — "
+              f"{done + sent}/{target} today, queue left: {len(est.get('queue') or [])}")
+
+        # لاگ انتشار (برای /stats) — خطا نباید چیزی را خراب کند
+        try:
+            log = storage.load_published()
+            log.append({"id": f"edu-{item.get('slot', key)}", "title_fa": post["title"], "source": "آموزش AI",
+                        "category": "edu", "published": True, "published_at": datetime.utcnow().isoformat() + "Z"})
+            storage.save_published(log)
+        except Exception as e:  # noqa: BLE001
+            print(f"[EDU] log failed: {type(e).__name__}")
+
+        bale.reset()
+        bale.send_text(format_plain(post, tag))
+
+    if sent:
+        est["last_pub_key"] = key
+        counts[day] = done + sent
+        est["pub_count"] = {k: counts[k] for k in sorted(counts)[-3:]}
+        cloudflare_kv.put(KEY, est)

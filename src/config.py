@@ -53,6 +53,16 @@ def _hours_env(name: str, default: str) -> tuple:
 
 # ساعت‌های انتشار (به وقت نمایش/ایران، ۰ تا ۲۳)؛ در هر ساعت حداکثر یک پست آموزشی
 EDU_PUBLISH_HOURS = _hours_env("EDU_PUBLISH_HOURS", "19,20,21,22")
+# هدف پست آموزشی در هر روز (۴ پست شبانه). انتشار تا رسیدن به این عدد ادامه دارد،
+# حتی اگر اجرای ساعتی GitHub عقب افتاده باشد (جبران تأخیر).
+EDU_POSTS_PER_DAY = _int_env("EDU_POSTS_PER_DAY", 4)
+# وقتی عقب هستیم، حداکثر چند پست در یک اجرا جبران شود (۲ = یک پست معمول + یک جبرانی)
+EDU_CATCHUP_MAX = _int_env("EDU_CATCHUP_MAX", 2)
+# اگر مدل‌ها (Gemini/OpenRouter) خطا دادند و صف خالی بود، از پست‌های آمادهٔ محلی
+# (بدون مدل) استفاده شود تا شب بدون پست نماند.
+EDU_USE_BUILTIN_FALLBACK = os.getenv(
+    "EDU_BUILTIN_FALLBACK", "true"
+).strip().lower() not in ("0", "false", "no", "off")
 # حداکثر پست ساخته‌شده و منتظر انتشار (اگر پر باشد ساخت متوقف می‌شود)
 EDU_QUEUE_MAX = _int_env("EDU_QUEUE_MAX", 8)
 # کنترل مصرف توکن: حداکثر خروجی «ردشده» (جواب ۲۰۰ که قبول نشد = توکن خرج‌شده) در هر تلاش،
