@@ -1422,7 +1422,8 @@ _edu.generate = lambda desc, recent, **kw: None
 _sent_q, _polls_q = [], []
 _edu.send_message = lambda c, t, **kw: (_sent_q.append(t) or {"ok": True})
 _edu.send_poll = lambda c, q, o, cidx, exc=None: (_polls_q.append((q, cidx)) or {"ok": True})
-_edu.bale.send_text = lambda t: True
+_bale_q = []
+_edu.bale.send_text = lambda t: (_bale_q.append(t) or True)
 _edu.bale.reset = lambda: None
 _edu.storage.load_published = lambda: []
 _edu.storage.save_published = lambda items: None
@@ -1432,6 +1433,8 @@ for _h in range(19, 23):
     _edu.maybe_post({}, _tehran(_h, day=8))
 check("شب با ۴ پست: ۴ پست متنی + ۲ کوییز (ساعت ۱۹ و ۲۲)",
       len(_sent_q) == 4 and len(_polls_q) == 2)
+_quiz_bale = [t for t in _bale_q if "✅ پاسخ:" in t]
+check("کوییزها با سؤال/گزینه/پاسخ به بله هم می‌روند", len(_quiz_bale) == 2)
 check("کوییزِ منتشرشده پاسخ درست معتبر دارد", _polls_q and 0 <= _polls_q[0][1] < 4)
 _edu.maybe_post({}, _tehran(22, day=8))
 check("کوییز سوم در همان روز نمی‌آید", len(_polls_q) == 2)

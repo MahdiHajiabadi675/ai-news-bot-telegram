@@ -994,6 +994,24 @@ def _log_quiz(quiz_data, message_id=None):
         print(f"[EDU] quiz log failed: {type(e).__name__}")
 
 
+def _quiz_plain(q) -> str:
+    """نسخهٔ متنی کوییز برای کانال بله (بله نظرسنجی تلگرامی ندارد)"""
+    options = list(q.get("options") or [])
+    lines = ["🧠 کوییز", "", str(q.get("question") or ""), ""]
+    digits = "۱۲۳۴"
+    for i, opt in enumerate(options[:4]):
+        lines.append(f"{digits[i]}) {opt}")
+    try:
+        correct = int(q.get("correct"))
+        if 0 <= correct < len(options):
+            lines += ["", f"✅ پاسخ: {digits[correct]}) {options[correct]}"]
+    except (TypeError, ValueError):
+        pass
+    if q.get("explanation"):
+        lines += ["", str(q["explanation"])]
+    return "\n".join(lines)[:4000]
+
+
 def _send_quiz(est, now_utc) -> bool:
     """
     یک کوییز در روز. اول تلاش می‌کند سؤال را از خبرهای تازهٔ همان روز بسازد
@@ -1033,6 +1051,12 @@ def _send_quiz(est, now_utc) -> bool:
     est["last_quiz_key"] = f"{day}#{local_now(now_utc).hour}"
     print(f"[EDU] Quiz published via {via}: {q['question'][:50]} — {counts[day]}/{max(1, EDU_QUIZ_PER_DAY)} today")
     _log_quiz(q, (res.get("result") or {}).get("message_id"))
+    # آینهٔ بله: کوییز به‌صورت متن (سؤال + گزینه‌ها + پاسخ)
+    try:
+        bale.reset()
+        bale.send_text(_quiz_plain(q))
+    except Exception as e:  # noqa: BLE001
+        print(f"[EDU] quiz bale mirror failed: {type(e).__name__}")
     return True
 
 

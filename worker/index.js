@@ -667,6 +667,7 @@ async function handleMessage(msg, env, BASE, CHANNEL_ID, ADMIN_ID) {
         chat_id: CHANNEL_ID, message_id: mid, disable_notification: false,
       });
     }
+    try { await sendBaleText(env, msg.replace(/<[^>]+>/g, '')); } catch (e) { /* نادیده */ }
     await sendMessage(BASE, ADMIN_ID, mid ? '✅ پست خوش‌آمد در کانال سنجاق شد' : '⚠️ ارسال نشد');
   } else if (/^\/health/i.test(text)) {
     // همان اطلاعات GET /health، این‌بار داخل تلگرام
@@ -1082,6 +1083,34 @@ async function sendBale(env, item) {
     return !!data.ok;
   } catch (e) {
     console.log('[bale] error');
+    return false;
+  }
+}
+
+/** ارسال یک متن ساده به بله (برای خوش‌آمد و مواردی که قالب خبر ندارند) */
+async function sendBaleText(env, text) {
+  const token = (env.BALE_BOT_TOKEN || '').trim();
+  const chat = (env.BALE_CHANNEL_ID || '').trim();
+  if (!token || !chat || !text) return false;
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 8000);
+    let res;
+    try {
+      res = await fetch(`https://tapi.bale.ai/bot${token}/sendMessage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chat_id: chat, text: String(text).slice(0, 4000) }),
+        signal: ctrl.signal,
+      });
+    } finally {
+      clearTimeout(timer);
+    }
+    const data = await res.json().catch(() => ({}));
+    if (!data.ok) console.log('[bale] text rejected');
+    return !!data.ok;
+  } catch (e) {
+    console.log('[bale] text error');
     return false;
   }
 }

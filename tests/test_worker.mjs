@@ -533,6 +533,23 @@ console.log('Engagement features:');
     && welcomeMsg.body.text.includes('خوش آمدی') && welcomeMsg.body.text.includes('خبر یک'));
   check('/welcome: پست خوش‌آمد سنجاق می‌شود', !!welcomePin);
 
+  // آینهٔ بله برای خوش‌آمد (و هر متن ساده‌ای که قالب خبر ندارد)
+  const rfW = globalThis.fetch;
+  const seenBale = [];
+  globalThis.fetch = async (url, opts) => {
+    if (String(url).includes('tapi.bale.ai')) {
+      seenBale.push(JSON.parse(opts.body));
+      return { json: async () => ({ ok: true }), status: 200 };
+    }
+    return rfW(url, opts);
+  };
+  await worker.fetch(new Request('https://w.example/webhook', {
+    method: 'POST', headers: SECRET_HEADER, body: JSON.stringify(msg('/welcome')),
+  }), { ...env, BALE_BOT_TOKEN: 'bt', BALE_CHANNEL_ID: '@bale' });
+  globalThis.fetch = rfW;
+  check('/welcome: نسخهٔ بله هم فرستاده می‌شود',
+    seenBale.length === 1 && seenBale[0].text.includes('خوش آمدی'));
+
   // 🗂 آرشیو موضوعی در منوی /start
   await send(msg('/start'));
   const startCall = calls.find(c => c.method === 'sendPhoto') || last('sendMessage');
