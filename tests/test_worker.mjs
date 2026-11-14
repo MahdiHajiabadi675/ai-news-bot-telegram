@@ -461,6 +461,18 @@ console.log('Bluesky mirror:');
   check('Bluesky: بعد از انتشار createRecord با did و متن خبر صدا زده می‌شود',
     !!rec && rec.body.repo === 'did:plc:x' && rec.body.record.text.includes('عنوان'));
   check('Bluesky: توکن در هدر Authorization می‌رود', !!rec && rec.headers.Authorization === 'Bearer jwt');
+
+  // لینک با خلاصهٔ بلند باید کامل بماند (سقف ۲۸۰)
+  set('state', { paused: false, auto_publish_enabled: true, daily_post_count: 0,
+    daily_post_date: new Date().toISOString().slice(0, 10) });
+  set('pending', [item('bs2', { summary_fa: 'ی'.repeat(600) })]);
+  set('approved', []); set('published', []);
+  await worker.fetch(new Request('https://w.example/webhook', {
+    method: 'POST', headers: SECRET_HEADER, body: JSON.stringify(cb('approve:bs2')),
+  }), envB);
+  const rec2 = seen.filter(s => s.url.includes('createRecord')).pop();
+  check('Bluesky: لینک با خلاصهٔ بلند کامل می‌ماند',
+    !!rec2 && rec2.body.record.text.endsWith('http://x') && rec2.body.record.text.length <= 280);
   globalThis.fetch = rf;
 }
 

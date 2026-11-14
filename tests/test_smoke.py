@@ -1593,6 +1593,14 @@ _item_bsky = {"title_fa": "عنوان خبر", "summary_fa": "خلاصهٔ خب�
 check("Bluesky: متن پست از عنوان/خلاصه/لینک ساخته می‌شود",
       "عنوان خبر" in bluesky.format_post(_item_bsky) and "http://x" in bluesky.format_post(_item_bsky))
 check("Bluesky: متن بلند کوتاه می‌شود", len(bluesky.format_post({**_item_bsky, "summary_fa": "ی" * 900})) <= 280)
+_bsky_long = bluesky.format_post({**_item_bsky, "summary_fa": "ی" * 900})
+check("Bluesky: لینک حتی با خلاصهٔ بلند کامل می‌ماند",
+      _bsky_long.endswith("http://x") and len(_bsky_long) <= 280)
+_bsky_long_title = bluesky.format_post({"title_fa": "ع" * 400, "summary_fa": "خلاصه", "link": "http://example.com/a"})
+check("Bluesky: لینک با عنوان بلند هم کامل می‌ماند",
+      _bsky_long_title.endswith("http://example.com/a") and len(_bsky_long_title) <= 280)
+check("Bluesky: بدون لینک هم از سقف رد نمی‌شود",
+      len(bluesky.format_post({"title_fa": "ع" * 500, "summary_fa": "ی" * 500})) <= 280)
 check("Bluesky: پست موفق True برمی‌گرداند", bluesky.mirror(_item_bsky) is True)
 _bsky_names = [c[0] for c in _bsky_calls]
 check(f"Bluesky: ابتدا login و بعد createRecord صدا زده می‌شود ({_bsky_names})",

@@ -1188,12 +1188,40 @@ async function handleRun(env, BASE, CHANNEL_ID, ADMIN_ID) {
  * آینهٔ Bluesky — بعد از هر انتشار موفق، متن کوتاه (≤۲۸۰) به Bluesky می‌رود.
  * اگر کلیدها نباشند یا هر خطایی رخ دهد، فقط لاگ می‌شود و انتشار تلگرام دست نمی‌خورد.
  */
+/**
+ * متن Bluesky: عنوان + خلاصه + لینک با اولویت حفظ لینک.
+ * سقف ۲۸۰ کاراکتر است و لینک هم جزو متن؛ اگر ساده ببریم لینک ناقص و بی‌فایده می‌شود.
+ */
+function formatBlueskyText(item) {
+  const MAX = 280;
+  const title = String(item.title_fa || item.title || '').trim();
+  const summary = String(item.summary_fa || '').trim();
+  const link = String(item.link || '').trim();
+
+  if (!link) return clip([title, summary].filter(Boolean).join('\n\n'), MAX);
+  if (link.length >= MAX) return link.slice(0, MAX);
+
+  let budget = MAX - link.length - 2;
+  const head = [];
+  if (title) {
+    const t = clip(title, budget);
+    head.push(t);
+    budget -= t.length;
+  }
+  if (summary && budget > 3) {
+    budget -= 2;
+    const s = clip(summary, budget);
+    if (s) head.push(s);
+  }
+  if (!head.length) return link;
+  return [...head, link].join('\n\n');
+}
+
 async function sendBluesky(env, item) {
   const handle = (env.BLUESKY_HANDLE || '').trim();
   const password = (env.BLUESKY_APP_PASSWORD || '').trim();
   if (!handle || !password) return false;
-  const text = [item.title_fa || item.title || '', item.summary_fa || '', item.link || '']
-    .filter(Boolean).join('\n\n').slice(0, 280);
+  const text = formatBlueskyText(item);
   if (!text) return false;
   try {
     const ctrl1 = new AbortController();

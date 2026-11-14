@@ -28,12 +28,52 @@ def enabled() -> bool:
     return bool(handle and password)
 
 
+def _clip(text: str, limit: int) -> str:
+    text = (text or "").strip()
+    if limit <= 0:
+        return ""
+    if len(text) <= limit:
+        return text
+    if limit == 1:
+        return "…"
+    return text[: limit - 1].rstrip() + "…"
+
+
 def format_post(item: dict) -> str:
+    """
+    عنوان + خلاصه + لینک، با اولویت حفظ لینک.
+
+    Bluesky سقف ۲۸۰ کاراکتر دارد و لینک هم جزو متن است؛ اگر ساده ببریم، لینک
+    ناقص می‌شود و کار نمی‌کند. اینجا اول جای لینک کنار گذاشته می‌شود، بعد عنوان
+    (با اولویت) و در آخر خلاصه تا جا دارد کوتاه می‌شوند.
+    """
     title = (item.get("title_fa") or item.get("title") or "").strip()
     summary = (item.get("summary_fa") or "").strip()
     link = str(item.get("link") or "").strip()
-    parts = [p for p in (title, summary, link) if p]
-    return "\n\n".join(parts)[:MAX_TEXT]
+
+    if not link:
+        head = [p for p in (title, summary) if p]
+        return _clip("\n\n".join(head), MAX_TEXT)
+    if len(link) >= MAX_TEXT:
+        return link[:MAX_TEXT]
+
+    budget = MAX_TEXT - len(link) - 2  # جای جداکنندهٔ قبل از لینک
+    head = []
+
+    if title:
+        title = _clip(title, budget)
+        head.append(title)
+        budget -= len(title)
+
+    if summary and budget > 3:
+        budget -= 2  # جداکنندهٔ بین عنوان و خلاصه
+        summary = _clip(summary, budget)
+        if summary:
+            head.append(summary)
+
+    if not head:
+        return link
+    return "\n\n".join(head + [link])
 
 
 def _session():
