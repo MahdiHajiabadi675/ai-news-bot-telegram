@@ -1,6 +1,6 @@
 import requests
 from datetime import datetime, date
-from .config import BOT_TOKEN, CHANNEL_ID, MAX_POSTS_PER_RUN, MAX_POSTS_PER_DAY
+from .config import BOT_TOKEN, CHANNEL_ID, ADMIN_ID, MAX_POSTS_PER_RUN, MAX_POSTS_PER_DAY
 from . import storage
 from .bot import send_message
 from . import bale
@@ -55,6 +55,7 @@ def publish_approved(state, approved_items=None):
     bale.reset()
     to_mirror = []
     remaining = []
+    dropped = []
     for item in approved:
         key = _item_key(item)
 
@@ -86,11 +87,25 @@ def publish_approved(state, approved_items=None):
                 published_keys.add(key)
             print(f"[INFO] Published: {str(item.get('title_fa', ''))[:50]}")
         else:
+            err_code = (result or {}).get("error_code")
             print(f"[ERROR] Failed to publish ({key}): {result}")
-            remaining.append(item)
+            if err_code == 400:
+                # پیام از نظر تلگرام نامعتبر است (HTML/URL)؛ با تکرار درست نمی‌شود.
+                # اگر در صف بماند هر ساعت دوباره تلاش می‌شود و یک اسلات را می‌بلعد.
+                print(f"[WARN] Dropping unpublishable item (400): {key}")
+                dropped.append(item)
+            else:
+                remaining.append(item)
 
     storage.save_approved(remaining)
     storage.save_published(published_log)
+
+    if dropped and ADMIN_ID:
+        send_message(
+            ADMIN_ID,
+            f"⚠️ {len(dropped)} خبر به‌خاطر خطای قالب/لینک تلگرام (400) از صف حذف شد.\n"
+            "اگر تکرار شد، لاگ Actions را ببین.",
+        )
 
     # آینهٔ بله فقط بعد از ذخیرهٔ کامل وضعیت تلگرام؛ شکست = حذف، بدون صف
     for it in to_mirror:

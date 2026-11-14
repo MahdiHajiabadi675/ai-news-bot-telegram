@@ -5,3 +5,7 @@ venv/
 .idea/
 .vscode/
 *.log
+node_modules/
+
+# وضعیت واقعی در Cloudflare KV است؛ فایل محلی لازم نیست
+data/

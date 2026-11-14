@@ -42,9 +42,16 @@ jobs:
           python tests/test_smoke.py > smoke.log 2>&1 || { cat smoke.log; exit 1; }
           tail -n 1 smoke.log
 
+      - name: Run Worker tests
+        # Worker همان بخشی است که ۲۴/۷ اجرا می‌شود (وبهوک ادمین)؛ نباید بدون تست دیپلوی شود.
+        run: node tests/test_worker.mjs
+
       - name: Run pipeline
+        # ورودی dispatch مستقیم داخل shell نمی‌رود (جلوگیری از command injection)
+        env:
+          TRIGGER: ${{ inputs.trigger }}
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.trigger }}" != "cron" ]; then
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "$TRIGGER" != "cron" ]; then
             python main.py run --force
           else
             python main.py run

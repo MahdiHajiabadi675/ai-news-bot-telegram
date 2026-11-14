@@ -1214,4 +1214,69 @@ _edu.EDU_MAX_TRIES_PER_SLOT = 6
 _edu.EDU_RETRY_GAP_MIN = 56
 _edu.EDU_PUBLISH_HOURS = _DEFAULT_PUB_HOURS
 
+
+# ───────────── امنیت: ویرایش خبر فقط توسط ادمین ─────────────
+print("Admin-only editing:")
+# تست‌های قبلی cloudflare_kv.put را به store محلی خودشان وصل کرده‌اند؛ اینجا برگردان.
+kv.get = lambda key, default=None: _store.get(key, default)
+kv.put = lambda key, value: _store.__setitem__(key, value)
+_store["pending"] = [{"id": "e1", "summary_fa": "متن اصلی", "_editing": True}]
+bot.ADMIN_ID = 42
+bot.send_message = lambda chat_id, text, **kw: {"ok": True}
+
+bot._handle_message({"text": "متن جعلی توسط غریبه", "chat": {"id": 999}}, {})
+check("غیرادمین نمی‌تواند متن خبر در صف را عوض کند",
+      _store["pending"][0]["summary_fa"] == "متن اصلی" and _store["pending"][0]["_editing"] is True)
+
+bot._handle_message({"text": "متن ویرایش‌شده توسط ادمین", "chat": {"id": 42}}, {})
+check("ادمین همچنان می‌تواند ویرایش کند",
+      _store["pending"][0]["summary_fa"] == "متن ویرایش‌شده توسط ادمین"
+      and _store["pending"][0]["_editing"] is False)
+
+_store["pending"] = []
+bot._handle_message({"text": "/start", "chat": {"id": 999}}, {})
+check("غیرادمین به دستورها هم دسترسی ندارد", len(_store["pending"]) == 0)
+
+
+# ───────────── قالب ایمن: لینک نامعتبر و HTML سالم ─────────────
+print("Safe message format:")
+_bad = formatting.format_message({**item_en, "link": "javascript:alert(1)"})
+check("لینک نامعتبر (javascript:) در پیام نمی‌آید",
+      "javascript:" not in _bad and 'href=""' not in _bad)
+_bad2 = formatting.format_message({**item_en, "link": 'http://x/"><b>evil'})
+check("لینک حاوی کوتیشن/< کاملاً رد می‌شود (href ساخته نمی‌شود)",
+      "<b>evil" not in _bad2 and 'href="' not in _bad2)
+_long = formatting.format_message({**item_en, "summary_fa": "ی" * 9000, "summary": "x" * 9000,
+                                   "hashtags": ["a" * 900]})
+check("پیام بلند: زیر سقف و تگ‌های بسته",
+      len(_long) <= 4000
+      and _long.count("<b>") == _long.count("</b>")
+      and _long.count("<blockquote") == _long.count("</blockquote>"))
+
+
+# ───────────── شکست KV باید دیده شود، نه نادیده ─────────────
+print("KV failure handling:")
+_orig_put = kv.put
+try:
+    kv.put = lambda k, v: False
+    _raised = False
+    try:
+        storage.save_state({"daily_post_count": 1})
+    except storage.KVError:
+        _raised = True
+    check("شکست نوشتن در KV استثنا می‌دهد (پست تکراری پیشگیری)", _raised)
+
+    _raised2 = False
+    try:
+        storage.ensure_writable()
+    except storage.KVError:
+        _raised2 = True
+    check("تست نوشتن preflight شکست را تشخیص می‌دهد", _raised2)
+finally:
+    kv.put = _orig_put
+
+kv.put = lambda key, value: _store.__setitem__(key, value)
+storage.save_state({"ok": True})
+check("بعد از سالم‌شدن KV، نوشتن عادی کار می‌کند", _store.get("state") == {"ok": True})
+
 print(f"\n{_passed} تست با موفقیت گذشت ✅")

@@ -25,7 +25,8 @@ globalThis.fetch = async (url, opts) => {
   calls.push({ method: String(url).split('/').pop(), body });
   return { json: async () => ({ ok: true }) };
 };
-const env = { BOT_TOKEN: 't', CHANNEL_ID: '@chan', ADMIN_ID: String(ADMIN), KV };
+const env = { BOT_TOKEN: 't', CHANNEL_ID: '@chan', ADMIN_ID: String(ADMIN), KV, WEBHOOK_SECRET: 's3cret' };
+const SECRET_HEADER = { 'X-Telegram-Bot-Api-Secret-Token': 's3cret' };
 const set = (k, v) => store.set(k, JSON.stringify(v));
 const get = (k) => (store.has(k) ? JSON.parse(store.get(k)) : null);
 const last = (method) => [...calls].reverse().find(c => c.method === method);
@@ -33,7 +34,7 @@ const last = (method) => [...calls].reverse().find(c => c.method === method);
 async function send(update) {
   calls.length = 0;
   const res = await worker.fetch(new Request('https://w.example/webhook', {
-    method: 'POST', body: JSON.stringify(update),
+    method: 'POST', headers: SECRET_HEADER, body: JSON.stringify(update),
   }), env);
   assert.equal(await res.text(), 'OK');
 }
@@ -292,5 +293,59 @@ await send(msg('/edu'));
 check('/edu آمار مصرف امروز را نشان می‌دهد', last('sendMessage').body.text.includes('ساخت 1 از 3 تلاش') && last('sendMessage').body.text.includes('توکن هدررفته) 2') && last('sendMessage').body.text.includes('gemini/g-1'));
 await send(msg('/edu on'));
 check('/edu on دوباره روشن می‌کند', get('state').edu_enabled === true);
+
+// ───────────── امنیت وبهوک ─────────────
+console.log('Webhook auth:');
+{
+  const body = JSON.stringify(cb('clra'));
+  const post = (headers, e = env) => worker.fetch(
+    new Request('https://w.example/webhook', { method: 'POST', headers, body }), e);
+
+  check('بدون secret_token → 403', (await post({})).status === 403);
+  check('secret_token اشتباه → 403', (await post({ 'X-Telegram-Bot-Api-Secret-Token': 'nope' })).status === 403);
+
+  const envNoSecret = { ...env, WEBHOOK_SECRET: '' };
+  check('بدون secret و IP غیرتلگرام → 403',
+    (await post({ 'CF-Connecting-IP': '8.8.8.8' }, envNoSecret)).status === 403);
+  check('بدون secret ولی IP تلگرام → پذیرفته می‌شود',
+    (await post({ 'CF-Connecting-IP': '149.154.167.99' }, envNoSecret)).status === 200);
+  check('رنج دوم IP تلگرام هم پذیرفته می‌شود',
+    (await post({ 'CF-Connecting-IP': '91.108.5.5' }, envNoSecret)).status === 200);
+}
+
+// ───────────── ضدتکرار ─────────────
+console.log('Replay guard:');
+{
+  set('pending', [item('rp1')]); set('approved', []); set('published', []);
+  const upd = { update_id: 9001, ...cb('approve:rp1') };
+  await send(upd);
+  const firstPosts = calls.filter(c => c.method === 'sendMessage' && c.body.chat_id === '@chan').length;
+  await send(upd); // همان update دوباره (تحویل تکراری تلگرام)
+  const secondPosts = calls.filter(c => c.method === 'sendMessage' && c.body.chat_id === '@chan').length;
+  check('update تکراری دوباره در کانال پست نمی‌شود', firstPosts === 1 && secondPosts === 0);
+}
+
+// ───────────── قالب ایمن (HTML/لینک) ─────────────
+console.log('Safe formatting:');
+{
+  const tagsBalanced = (t) =>
+    (t.match(/<b>/g) || []).length === (t.match(/<\/b>/g) || []).length &&
+    (t.match(/<i>/g) || []).length === (t.match(/<\/i>/g) || []).length &&
+    (t.match(/<blockquote/g) || []).length === (t.match(/<\/blockquote>/g) || []).length;
+
+  set('pending', [item('long1', { summary_fa: 'ی'.repeat(9000), summary: 'x'.repeat(9000) })]);
+  set('approved', []); set('published', []);
+  await send(cb('approve:long1'));
+  const longText = calls.find(c => c.body.chat_id === '@chan').body.text;
+  check(`پیام بلند: سقف ۴۰۰۰ و تگ سالم (طول=${longText.length}, سالم=${tagsBalanced(longText)})`,
+    longText.length <= 4000 && tagsBalanced(longText));
+
+  set('pending', [item('badlink', { link: 'javascript:alert(1)' })]);
+  set('approved', []); set('published', []);
+  await send(cb('approve:badlink'));
+  const badText = calls.find(c => c.body.chat_id === '@chan').body.text;
+  check('لینک نامعتبر → بدون href و بدون javascript',
+    !badText.includes('javascript:') && !badText.includes('<a href=""'));
+}
 
 console.log(`\n${passed} تست Worker با موفقیت گذشت ✅`);

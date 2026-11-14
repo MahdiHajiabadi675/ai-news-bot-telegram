@@ -255,6 +255,11 @@ def _handle_message(msg, state):
     text = msg.get("text", "").strip()
     chat_id = msg.get("chat", {}).get("id", 0)
 
+    # احراز هویت: فقط ادمین. این چک باید *قبل از هر نوشتن* باشد؛ قبلاً پایین‌تر،
+    # بعد از بلوک «ویرایش»، بود و هر کاربری می‌توانست متن خبر در صف را عوض کند.
+    if not ADMIN_ID or chat_id != ADMIN_ID:
+        return
+
     pending = storage.load_pending()
     # اگر هنگام ویرایش دستوری رسید، حالت ویرایش لغو شود
     if text.startswith("/"):
@@ -275,9 +280,6 @@ def _handle_message(msg, state):
                 storage.save_pending(pending)
                 send_message(ADMIN_ID, "✅ ویرایش انجام شد — در انتظار تایید")
                 return
-
-    if chat_id != ADMIN_ID:
-        return
 
     if text == "/start":
         active = "⏸️ متوقف" if state.get("paused") else "▶️ فعال"

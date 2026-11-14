@@ -1,11 +1,32 @@
 """
 Storage — از Cloudflare KV استفاده می‌کنه
+
+نکتهٔ مهم: هر نوشتن با `_put` انجام می‌شود که در صورت شکست `KVError` می‌دهد.
+اگر شکست را نادیده بگیریم، خبر در تلگرام منتشر می‌شود ولی «منتشر شد» ثبت نمی‌شود
+و اجرای بعدی دوباره همان خبر را می‌فرستد (پست تکراری).
 """
 from . import cloudflare_kv
 
 # سقف نگهداری داده در KV (جلوگیری از رشد بی‌نهایت)
 MAX_PENDING_ITEMS = 300
 MAX_PUBLISHED_LOG = 1500
+
+
+class KVError(RuntimeError):
+    """نوشتن در Cloudflare KV شکست خورد؛ اجرا باید متوقف شود."""
+
+
+def _put(key, value):
+    """نوشتن در KV؛ شکست به‌جای نادیده گرفتن، استثنا می‌دهد."""
+    if cloudflare_kv.put(key, value) is False:
+        raise KVError(f"Cloudflare KV write failed: {key}")
+
+
+def ensure_writable():
+    """آزمون کوچک نوشتن قبل از انتشار — تا «منتشر شد ولی ثبت نشد» پیش نیاید."""
+    from datetime import datetime
+    _put("health_ping", {"at": datetime.utcnow().isoformat() + "Z"})
+
 
 def load_state():
     state = cloudflare_kv.get("state", {
@@ -30,7 +51,7 @@ def load_state():
     return state
 
 def save_state(state):
-    cloudflare_kv.put("state", state)
+    _put("state", state)
 
 def set_stage(state, stage, error=None):
     state["current_stage"] = stage
@@ -44,7 +65,7 @@ def load_seen():
     return set(cloudflare_kv.get("seen", []))
 
 def save_seen(seen):
-    cloudflare_kv.put("seen", list(seen))
+    _put("seen", list(seen))
 
 def load_pending():
     return cloudflare_kv.get("pending", [])
@@ -53,13 +74,13 @@ def save_pending(items):
     if len(items) > MAX_PENDING_ITEMS:
         # قدیمی‌ترین‌ها حذف شوند (خبر کهنه ارزش انتشار ندارد)
         items = items[-MAX_PENDING_ITEMS:]
-    cloudflare_kv.put("pending", items)
+    _put("pending", items)
 
 def load_approved():
     return cloudflare_kv.get("approved", [])
 
 def save_approved(items):
-    cloudflare_kv.put("approved", items)
+    _put("approved", items)
 
 def load_published():
     return cloudflare_kv.get("published", [])
@@ -67,7 +88,7 @@ def load_published():
 def save_published(items):
     if len(items) > MAX_PUBLISHED_LOG:
         items = items[-MAX_PUBLISHED_LOG:]
-    cloudflare_kv.put("published", items)
+    _put("published", items)
 
 def load_source_stats():
     from . import source_trust
@@ -85,18 +106,15 @@ def append_run_log(entry: dict):
     log = cloudflare_kv.get("run_log", [])
     log = log if isinstance(log, list) else []
     log.append(entry)
-    cloudflare_kv.put("run_log", log[-RUN_LOG_KEEP:])
-
+    _put("run_log", log[-RUN_LOG_KEEP:])
 
 def load_run_log():
     log = cloudflare_kv.get("run_log", [])
     return log if isinstance(log, list) else []
 
-
 def load_feed_health():
     h = cloudflare_kv.get("feed_health", {})
     return h if isinstance(h, dict) else {}
-
 
 FEED_FAIL_ALERT_AT = 3  # بعد از این‌همه خطای پیاپی به ادمین هشدار بده
 
@@ -122,7 +140,7 @@ def update_feed_health(current: dict) -> list:
             "checked": now,
             "last_ok": now if h["ok"] else prev.get("last_ok"),
         }
-    cloudflare_kv.put("feed_health", merged)
+    _put("feed_health", merged)
     return newly_failing
 
 def is_duplicate(news_id: str) -> bool:

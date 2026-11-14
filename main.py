@@ -72,10 +72,27 @@ def _should_collect(force, last_collect, now=None, interval_min=None):
 
 
 def run(force=False):
+    """نقطهٔ ورود پایپ‌لاین.
+
+    اگر نوشتن در Cloudflare KV شکست بخورد، اجرا با کد خطا متوقف می‌شود؛ ادامه دادن
+    یعنی خبر در تلگرام منتشر شود ولی ثبت نشود و اجرای بعدی دوباره آن را بفرستد.
+    """
+    try:
+        _run(force=force)
+    except storage.KVError as e:
+        print(f"[FATAL] {e}")
+        print("[FATAL] Pipeline aborted to avoid duplicate channel posts.")
+        sys.exit(1)
+
+
+def _run(force=False):
     print(f"[{datetime.utcnow().isoformat()}] Pipeline started")
     translator.reset()
     # آمار «قیف» همین اجرا برای /runs: چند خبر پیدا شد و کجا کم شد
     rl = {"t": datetime.utcnow().isoformat() + "Z", "forced": bool(force), "collected": False}
+
+    # 0. KV باید قابل نوشتن باشد، وگرنه هیچ چیز ثبت نمی‌شود ولی تلگرام پست می‌گیرد
+    storage.ensure_writable()
 
     # 1. Load state
     state = storage.load_state()

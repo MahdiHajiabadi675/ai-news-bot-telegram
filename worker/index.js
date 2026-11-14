@@ -14,13 +14,8 @@ export default {
     const path = url.pathname;
 
     if (path === '/webhook' && request.method === 'POST') {
-      // اگه WEBHOOK_SECRET تنظیم شده باشه، هدر تلگرام رو بررسی کن
-      if (env.WEBHOOK_SECRET) {
-        const got = request.headers.get('X-Telegram-Bot-Api-Secret-Token') || '';
-        if (got !== env.WEBHOOK_SECRET) {
-          return new Response('Forbidden', { status: 403 });
-        }
-      }
+      const denial = webhookAuthError(request, env);
+      if (denial) return new Response(denial, { status: 403 });
 
       let update;
       try {
@@ -29,26 +24,41 @@ export default {
         return new Response('Bad Request', { status: 400 });
       }
 
+      // ضدتکرار: تلگرام تا رسیدن پاسخ ۲۰۰ همان update را دوباره می‌فرستد و
+      // بدون این چک، یک کلیک «تایید» می‌توانست دوبار پست کند.
+      if (await isDuplicateUpdate(env, update)) {
+        return new Response('OK');
+      }
+
       if (update.callback_query) {
         await handleCallback(update.callback_query, env, BASE, CHANNEL_ID, ADMIN_ID);
       } else if (update.message) {
         await handleMessage(update.message, env, BASE, CHANNEL_ID, ADMIN_ID);
       }
 
+      await rememberUpdate(env, update);
       return new Response('OK');
     }
 
     if (path === '/run' && request.method === 'POST') {
       const auth = request.headers.get('Authorization') || '';
-      const token = auth.replace('Bearer ', '');
-      if (!env.WORKER_SECRET || token !== env.WORKER_SECRET) {
-        return new Response(JSON.stringify({ ok: false, error: 'Unauthorized' }), {
-          status: 403,
-          headers: { 'Content-Type': 'application/json' }
-        });
+      const token = auth.startsWith('Bearer ') ? auth.slice('Bearer '.length) : '';
+      if (!env.WORKER_SECRET || !safeEqual(token, env.WORKER_SECRET)) {
+        return jsonResponse({ ok: false, error: 'Unauthorized' }, 403);
       }
-      const result = await handleRun(env, BASE, CHANNEL_ID, ADMIN_ID);
-      return result;
+
+      // قفل سادهٔ اجرا: دو /run هم‌زمان نباید یک صف را دوبار منتشر کنند.
+      // (KV سازگاری نهایی دارد؛ این قفل بهترین تلاش است، نه تضمین.)
+      const lock = await getJSON(env, 'run_lock', {});
+      if (lock && Number(lock.at) && Date.now() - Number(lock.at) < 5 * 60 * 1000) {
+        return jsonResponse({ ok: false, error: 'already running' }, 409);
+      }
+      await saveJSON(env, 'run_lock', { at: Date.now() });
+      try {
+        return await handleRun(env, BASE, CHANNEL_ID, ADMIN_ID);
+      } finally {
+        await saveJSON(env, 'run_lock', {});
+      }
     }
 
     return new Response('OK');
@@ -67,6 +77,85 @@ export default {
 
 // بنر منوی /start — داخل مخزن GitHub میزبانی می‌شود تا به هاست بیرونی وابسته نباشد.
 const START_BANNER_URL = 'https://raw.githubusercontent.com/MahdiHajiabadi675/ai-news-bot-telegram/main/assets/banner.jpg?v=1';
+
+// ───────────── احراز هویت وبهوک ─────────────
+// ۱) اگر WEBHOOK_SECRET تنظیم شده باشد، هدر secret_token تلگرام باید دقیقاً همان باشد.
+// ۲) اگر تنظیم نشده باشد، فقط درخواست‌هایی از رنج IP خود تلگرام پذیرفته می‌شوند؛
+//    قبلاً در این حالت *هر* درخواستی قبول می‌شد و هر کسی می‌توانست update جعلی
+//    بفرستد (مثلاً پاک‌کردن کل صف با callback_data «clra»).
+// راه توصیه‌شده: WEBHOOK_SECRET بساز و setWebhook را با &secret_token=<مقدار> صدا بزن.
+const TELEGRAM_CIDRS = ['149.154.160.0/20', '91.108.4.0/22'];
+
+function ipv4ToInt(ip) {
+  const parts = String(ip).trim().split('.');
+  if (parts.length !== 4) return null;
+  let out = 0;
+  for (const p of parts) {
+    if (!/^\d{1,3}$/.test(p)) return null;
+    const n = Number(p);
+    if (n > 255) return null;
+    out = (out * 256) + n;
+  }
+  return out;
+}
+
+function inCidr(ip, cidr) {
+  const [base, bitsRaw] = String(cidr).split('/');
+  const bits = Number(bitsRaw);
+  const a = ipv4ToInt(ip);
+  const b = ipv4ToInt(base);
+  if (a === null || b === null || !Number.isFinite(bits)) return false;
+  const mask = bits === 0 ? 0 : (0xFFFFFFFF << (32 - bits)) >>> 0;
+  return ((a & mask) >>> 0) === ((b & mask) >>> 0);
+}
+
+function isTelegramIp(ip) {
+  if (!ip) return false;
+  return TELEGRAM_CIDRS.some(cidr => inCidr(ip, cidr));
+}
+
+/** مقایسهٔ ثابت‌زمان رشته‌ها (جلوگیری از حملات زمان‌سنجی روی توکن) */
+function safeEqual(a, b) {
+  const x = new TextEncoder().encode(String(a ?? ''));
+  const y = new TextEncoder().encode(String(b ?? ''));
+  if (x.length !== y.length) return false;
+  let diff = 0;
+  for (let i = 0; i < x.length; i++) diff |= x[i] ^ y[i];
+  return diff === 0;
+}
+
+function webhookAuthError(request, env) {
+  const secret = String(env.WEBHOOK_SECRET || '').trim();
+  if (secret) {
+    const got = request.headers.get('X-Telegram-Bot-Api-Secret-Token') || '';
+    return safeEqual(got, secret) ? null : 'Forbidden';
+  }
+  const ip = String(request.headers.get('CF-Connecting-IP') || '').trim();
+  if (isTelegramIp(ip)) return null;
+  console.error('[webhook] rejected: WEBHOOK_SECRET is not set and remote IP is not Telegram:', ip || '(none)');
+  return 'Forbidden';
+}
+
+/** آیا این update قبلاً پردازش شده است؟ (تلگرام تحویل تکراری دارد) */
+async function isDuplicateUpdate(env, update) {
+  const uid = Number(update && update.update_id);
+  if (!Number.isFinite(uid) || uid <= 0) return false;
+  const state = await getJSON(env, 'state', {});
+  return uid <= Number(state.webhook_last_update_id || 0);
+}
+
+async function rememberUpdate(env, update) {
+  const uid = Number(update && update.update_id);
+  if (!Number.isFinite(uid) || uid <= 0) return;
+  await updateState(env, { webhook_last_update_id: uid });
+}
+
+function jsonResponse(body, status = 200) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { 'Content-Type': 'application/json' }
+  });
+}
 
 async function handleCallback(cb, env, BASE, CHANNEL_ID, ADMIN_ID) {
   // Never trust callback data without checking the Telegram user who clicked it.
@@ -674,7 +763,25 @@ function faNum(value) {
   return String(value ?? 0).replace(/\d/g, d => '۰۱۲۳۴۵۶۷۸۹'[Number(d)]);
 }
 
-function formatChannelMessage(item, env) {
+/** فقط لینک http/https معتبر؛ لینک خراب نباید href را بشکند و کل پیام را 400 کند. */
+function safeLink(link) {
+  const raw = String(link ?? '').trim();
+  if (!raw || /[\s"<>]/.test(raw)) return '';
+  try {
+    const u = new URL(raw);
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return '';
+    if (!u.hostname) return '';
+    return escapeHtml(raw);
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * ساخت پیام با طول‌های مشخص — تنها جایی که HTML کانال تولید می‌شود.
+ * برش نهایی هرگز روی HTML انجام نمی‌شود (تگ نصفه = خطای 400 تلگرام).
+ */
+function renderChannelMessage(item, env, summaryLen, showOriginal, tagCount = -1) {
   let emoji = '🤖';
   let divider = '─'.repeat(20);
   if (item.category === 'fast_track') emoji = '📡';
@@ -683,14 +790,14 @@ function formatChannelMessage(item, env) {
   else if (item.confidence === 'rumor') emoji = '⚠️';
 
   const untranslated = item.translated === false;
-  const title = escapeHtml(item.title_fa || item.title || '');
-  const summary = escapeHtml(clip(item.summary_fa, 700));
-  const link = escapeHtml(item.link);
-  const source = escapeHtml(item.source);
-  const hashtags = (item.hashtags || []).map(h => '#' + escapeHtml(h)).join(' ');
+  const title = escapeHtml(clip(item.title_fa || item.title || '', 300));
+  const summary = summaryLen > 0 ? escapeHtml(clip(item.summary_fa, summaryLen)) : '';
+  const source = escapeHtml(clip(item.source, 120));
+  let tags = item.hashtags || [];
+  if (tagCount >= 0) tags = tags.slice(0, tagCount);
+  const hashtags = tags.map(h => '#' + escapeHtml(h)).join(' ');
 
   let original = '';
-  const showOriginal = String(env?.SHOW_ORIGINAL_TEXT ?? 'true').toLowerCase() !== 'false';
   if (showOriginal && item.lang && item.lang !== 'fa' && !untranslated && item.title) {
     const oTitle = escapeHtml(clip(item.title, 200));
     const oSummary = escapeHtml(clip(item.summary, 500));
@@ -699,13 +806,36 @@ function formatChannelMessage(item, env) {
   }
 
   let text = `${emoji} <b>${title}</b>\n${divider}\n\n${summary}${original}\n\n${divider}\n`;
-  text += `📰 منبع: <a href="${link}">${source}</a>`;
+  const link = safeLink(item.link);
+  text += link ? `📰 منبع: <a href="${link}">${source}</a>` : `📰 منبع: ${source}`;
   if (hashtags) text += `\n🏷️ ${hashtags}`;
   if (untranslated) text += '\n\n🔤 <i>ترجمه نشده — متن اصلی</i>';
   if (item.confidence === 'rumor') text += '\n\n⚠️ <i>این خبر تایید رسمی نشده است</i>';
+  return text;
+}
 
-  if (text.length > 4000 && original) text = text.replace(original, '');
-  return text.length > 4000 ? text.slice(0, 4000) : text;
+function formatChannelMessage(item, env) {
+  const showOriginal = String(env?.SHOW_ORIGINAL_TEXT ?? 'true').toLowerCase() !== 'false'
+    && item.lang && item.lang !== 'fa' && item.translated !== false && !!item.title;
+
+  // اولویت: بلوک متن اصلی حفظ شود؛ بعد کوتاه‌ترش کنیم و در آخر حذفش کنیم.
+  const candidates = [];
+  for (const n of [700, 400, 200, 80, 0]) {
+    if (showOriginal) candidates.push([n, true]);
+    candidates.push([n, false]);
+  }
+  for (const [n, orig] of candidates) {
+    const text = renderChannelMessage(item, env, n, orig);
+    if (text.length <= 4000) return text;
+  }
+  // عنوان/منبع/هشتگ غیرعادی بلند: هشتگ‌ها را هم کم کن
+  for (const tagCount of [8, 4, 0]) {
+    for (const n of [80, 0]) {
+      const text = renderChannelMessage(item, env, n, false, tagCount);
+      if (text.length <= 4000) return text;
+    }
+  }
+  return renderChannelMessage(item, env, 0, false, 0);
 }
 
 // ───────── آینهٔ بله: فقط ارسال؛ شکست = حذف (بدون صف و بدون تلاش مجدد) ─────────
@@ -794,7 +924,14 @@ async function publishItem(env, BASE, CHANNEL_ID, ADMIN_ID, item) {
     // آخرین کار: همهٔ ذخیره‌ها انجام شده؛ شکست بله = حذف، بدون صف و بدون اثر بر تلگرام
     try { await sendBale(env, item); } catch (e) { /* نادیده */ }
   } else {
-    console.log('[publishItem] Failed to publish');
+    console.log('[publishItem] Failed to publish:', result?.error_code, result?.description || '');
+    if (result && result.error_code === 400) {
+      // پیام از نظر تلگرام نامعتبر است (HTML/URL)؛ ماندنش در صف یعنی تلاش بی‌پایان
+      // هر ساعت و بلعیدن یک اسلات انتشار.
+      const approvedList = await getJSON(env, 'approved', []);
+      await saveJSON(env, 'approved', approvedList.filter(i => itemKey(i) !== key));
+      await sendMessage(BASE, ADMIN_ID, '⚠️ یک خبر به‌خاطر خطای قالب/لینک (400) از صف حذف شد.');
+    }
   }
 }
 
@@ -857,7 +994,13 @@ async function handleRun(env, BASE, CHANNEL_ID, ADMIN_ID) {
     }
   }
 
-  await saveJSON(env, 'state', state);
+  // وضعیت را دوباره بخوان: اگر ادمین وسط انتشار /pause زده یا «انتشار خودکار» را
+  // خاموش کرده، نوشتن نسخهٔ کهنه آن را بی‌صدا برمی‌گرداند. فقط شمارنده‌های همین اجرا منتقل می‌شوند.
+  const freshState = await getJSON(env, 'state', {});
+  migrateState(freshState);
+  freshState.daily_post_count = state.daily_post_count;
+  freshState.daily_post_date = state.daily_post_date;
+  await saveJSON(env, 'state', freshState);
   if (published > 0) await saveJSON(env, 'published', publishedLog);
 
   // فقط خبرهای منتشرشده را از صف حذف کن؛ تاییدهای هم‌زمان ادمین از دست نروند.
@@ -876,17 +1019,42 @@ async function handleRun(env, BASE, CHANNEL_ID, ADMIN_ID) {
 async function sendMessage(BASE, chatId, text, replyMarkup = null) {
   const data = { chat_id: chatId, text, parse_mode: 'HTML' };
   if (replyMarkup) data.reply_markup = replyMarkup;
-  try {
-    const resp = await fetch(`${BASE}/sendMessage`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data)
-    });
-    return await resp.json();
-  } catch (e) {
-    console.error('sendMessage error:', e);
-    return null;
+
+  // تایم‌اوت: درخواست معلق نباید وبهوک را قفل کند (تلگرام بعدش update را دوباره می‌فرستد).
+  // روی 429 یک‌بار با احترام به retry_after تلاش دوباره می‌شود.
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 10000);
+      let resp;
+      try {
+        resp = await fetch(`${BASE}/sendMessage`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(data),
+          signal: ctrl.signal,
+        });
+      } finally {
+        clearTimeout(timer);
+      }
+      const out = await resp.json().catch(() => null);
+      if (out && out.ok) return out;
+      if (out && out.error_code === 429 && attempt === 0) {
+        const wait = Math.min(Math.max(Number(out?.parameters?.retry_after) || 1, 1), 3);
+        await new Promise(r => setTimeout(r, wait * 1000));
+        continue;
+      }
+      if (out) {
+        console.error('[sendMessage] failed:', out.error_code, out.description || '');
+        return out;
+      }
+      return { ok: false, error_code: resp.status || 0, error: 'invalid response' };
+    } catch (e) {
+      console.error('sendMessage error:', e?.message || e);
+      return { ok: false, error_code: 0, error: 'network' };
+    }
   }
+  return { ok: false, error_code: 429, error: 'rate limited' };
 }
 
 /**
