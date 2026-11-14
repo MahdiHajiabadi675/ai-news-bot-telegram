@@ -2,7 +2,7 @@ import requests
 from datetime import datetime, date
 from .config import BOT_TOKEN, CHANNEL_ID, ADMIN_ID, MAX_POSTS_PER_RUN, MAX_POSTS_PER_DAY
 from . import storage
-from .bot import send_message
+from .bot import send_message, pin_message
 from . import bale
 from . import bluesky
 from .formatting import format_message  # noqa: F401  (re-export برای سازگاری)
@@ -103,6 +103,12 @@ def publish_approved(state, approved_items=None):
             to_mirror.append(dict(item))
             if key:
                 published_keys.add(key)
+            if item.get("pin") and msg_id:
+                try:
+                    pin_message(msg_id)
+                    print(f"[INFO] Pinned: {key}")
+                except Exception as e:  # noqa: BLE001
+                    print(f"[WARN] pin failed: {e}")
             print(f"[INFO] Published: {str(item.get('title_fa', ''))[:50]}")
         else:
             err_code = (result or {}).get("error_code")

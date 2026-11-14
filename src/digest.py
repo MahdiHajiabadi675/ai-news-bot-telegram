@@ -14,7 +14,7 @@
 from datetime import datetime, timedelta
 
 from . import bale, cloudflare_kv, storage
-from .bot import send_message
+from .bot import pin_message, send_message
 from .config import CHANNEL_ID, DISPLAY_TZ_OFFSET_MIN, DRY_RUN
 from .formatting import clip, escape_html, safe_link
 
@@ -72,7 +72,7 @@ def pick(items, limit: int = MAX_ITEMS):
     return sorted(items, key=_sort_key)[:limit]
 
 
-def format_digest(items, limit: int = TG_LIMIT) -> str:
+def format_digest(items, limit: int = TG_LIMIT, quizzes=None) -> str:
     e = escape_html
     lines = ["🗞 <b>جمع‌بندی هفته | مهم‌ترین اخبار AI</b>", "─" * 20, ""]
     for i, p in enumerate(items, 1):
@@ -82,14 +82,26 @@ def format_digest(items, limit: int = TG_LIMIT) -> str:
         source = e(clip(p.get("source"), 40))
         if source:
             lines.append(f"   <i>{source}</i>")
+    if quizzes:
+        lines += ["", "─" * 20, "🧠 <b>کوییزهای هفته (پاسخ‌ها)</b>"]
+        for i, qz in enumerate(quizzes[:3], 1):
+            question = e(clip(qz.get("question"), 70))
+            options = qz.get("options") or []
+            try:
+                answer = str(options[int(qz.get("correct"))])
+            except (IndexError, TypeError, ValueError):
+                answer = ""
+            lines.append(f"{i}. {question}")
+            if answer:
+                lines.append(f"   ✅ {e(clip(answer, 60))}")
     lines += ["", "─" * 20, "🏷️ #جمع‌بندی_هفته"]
     text = "\n".join(lines)
     if len(text) > limit:  # دفاع آخر: از انتها کم کن (تگ‌ها سالم می‌مانند)
-        text = format_digest(items[:-1], limit) if len(items) > 1 else text[:limit]
+        text = format_digest(items[:-1], limit, quizzes) if len(items) > 1 else text[:limit]
     return text
 
 
-def format_plain(items) -> str:
+def format_plain(items, quizzes=None) -> str:
     lines = ["🗞 جمع‌بندی هفته | مهم‌ترین اخبار AI", ""]
     for i, p in enumerate(items, 1):
         title = clip(p.get("title_fa") or p.get("title"), 120)
@@ -98,8 +110,31 @@ def format_plain(items) -> str:
             lines.append(f"   {p['link']}")
         if p.get("source"):
             lines.append(f"   {p['source']}")
+    if quizzes:
+        lines += ["", "🧠 کوییزهای هفته (پاسخ‌ها)"]
+        for i, qz in enumerate(quizzes[:3], 1):
+            options = qz.get("options") or []
+            try:
+                answer = str(options[int(qz.get("correct"))])
+            except (IndexError, TypeError, ValueError):
+                answer = ""
+            lines.append(f"{i}. {clip(qz.get('question'), 70)}")
+            if answer:
+                lines.append(f"   ✅ {clip(answer, 60)}")
     lines += ["", "#جمع‌بندی_هفته"]
     return "\n".join(lines)[:4000]
+
+
+def _recent_quizzes(log, now_utc, days: int = 7, limit: int = 3):
+    cutoff = now_utc - timedelta(days=days)
+    out = []
+    for p in log:
+        if not isinstance(p, dict) or not p.get("quiz") or p.get("deleted"):
+            continue
+        if _published_at(p) < cutoff:
+            continue
+        out.append(p["quiz"])
+    return out[-limit:][::-1]
 
 
 def _log_digest(week: str, message_id=None):
@@ -143,7 +178,8 @@ def maybe_post(state: dict, now=None, force: bool = False) -> dict:
             print(f"[DIGEST] not enough news ({len(items)}/{MIN_ITEMS}) — skipped")
             return state
 
-        text = format_digest(items)
+        quizzes = _recent_quizzes(storage.load_published(), now_utc)
+        text = format_digest(items, quizzes=quizzes)
         res = send_message(CHANNEL_ID, text)
         if not (res and res.get("ok")):
             print(f"[DIGEST] send failed: {res}")
@@ -153,10 +189,16 @@ def maybe_post(state: dict, now=None, force: bool = False) -> dict:
         st.update({"last_week": week, "at": now_utc.isoformat() + "Z", "count": len(items)})
         cloudflare_kv.put(KEY, st)
         _log_digest(week, mid)
+        if mid:
+            try:
+                pin_message(mid)
+                print("[DIGEST] pinned the weekly digest")
+            except Exception as e:  # noqa: BLE001
+                print(f"[DIGEST] pin failed: {type(e).__name__}")
 
         print(f"[DIGEST] published {len(items)} items for {week}")
         bale.reset()
-        bale.send_text(format_plain(items))
+        bale.send_text(format_plain(items, quizzes))
     except Exception as e:  # noqa: BLE001
         print(f"[DIGEST] error: {type(e).__name__}: {e}")
     return state

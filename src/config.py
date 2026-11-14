@@ -78,8 +78,8 @@ EDU_CATCHUP_MAX = _int_env("EDU_CATCHUP_MAX", 2)
 EDU_USE_BUILTIN_FALLBACK = os.getenv(
     "EDU_BUILTIN_FALLBACK", "true"
 ).strip().lower() not in ("0", "false", "no", "off")
-# چند کوییز در هر شب (۰ = خاموش). کوییز پست پنجم است و جای پست متنی را نمی‌گیرد.
-EDU_QUIZ_PER_DAY = _int_env("EDU_QUIZ_PER_DAY", 1)
+# چند کوییز در هر شب (۰ = خاموش). کوییزها جدا از ۴ پست متنی‌اند؛ پیش‌فرض ۲ (اول و آخر بازه)
+EDU_QUIZ_PER_DAY = _int_env("EDU_QUIZ_PER_DAY", 2)
 # حداکثر پست ساخته‌شده و منتظر انتشار (اگر پر باشد ساخت متوقف می‌شود)
 EDU_QUEUE_MAX = _int_env("EDU_QUEUE_MAX", 8)
 # کنترل مصرف توکن: حداکثر خروجی «ردشده» (جواب ۲۰۰ که قبول نشد = توکن خرج‌شده) در هر تلاش،

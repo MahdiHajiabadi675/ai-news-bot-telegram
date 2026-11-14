@@ -495,4 +495,50 @@ console.log('Bluesky mirror:');
   globalThis.fetch = rf;
 }
 
+// ───────────── قابلیت‌های تعامل ─────────────
+console.log('Engagement features:');
+{
+  const tkey = new Date(Date.now() + 210 * 60000).toISOString().slice(0, 10);
+  set('published', [{ id: 'p1', title_fa: 'خبر', published: true, source: 'منبع' }]);
+  set('edu_state', {
+    queue: [{ post: { title: 'a' } }, { post: { title: 'b' } }, { post: { title: 'c' } }],
+    pub_count: { [tkey]: 4 },
+    quiz_count: { [tkey]: 1 },
+  });
+  await send(msg('/edu'));
+  const eduText = last('sendMessage').body.text;
+  check('/edu: پست‌های آمادهٔ انتشار', eduText.includes('در صف انتشار: 3 پست'));
+  check('/edu: کوییز باقی‌ماندهٔ امشب', eduText.includes('1 کوییز باقی‌ماندهٔ امشب'));
+  check('/edu: منتشرشدهٔ امروز', eduText.includes('4/4 پست') && eduText.includes('1/2 کوییز'));
+
+  // 📌 تایید و سنجاق
+  set('state', { paused: false, auto_publish_enabled: true, daily_post_count: 0,
+    daily_post_date: new Date().toISOString().slice(0, 10) });
+  set('pending', [item('pin1')]); set('approved', []); set('published', []);
+  await send(cb('pin:pin1'));
+  const pinnedPub = get('published').find(p => p.published);
+  const pinCall = calls.find(c => c.method === 'pinChatMessage');
+  check('pin: فوری منتشر و در کانال سنجاق می‌شود',
+    !!pinnedPub && !!pinCall && pinCall.body.message_id === pinnedPub.message_id);
+
+  // 👋 پست خوش‌آمد
+  set('published', [
+    { id: 'w1', title_fa: 'خبر یک', published: true, link: 'http://a' },
+    { id: 'w2', title_fa: 'خبر دو', published: true, link: 'http://b' },
+  ]);
+  await send(msg('/welcome'));
+  const welcomeMsg = calls.filter(c => c.method === 'sendMessage' && c.body.chat_id === '@chan').pop();
+  const welcomePin = calls.find(c => c.method === 'pinChatMessage');
+  check('/welcome: پست خوش‌آمد در کانال با لینک خبرها', !!welcomeMsg
+    && welcomeMsg.body.text.includes('خوش آمدی') && welcomeMsg.body.text.includes('خبر یک'));
+  check('/welcome: پست خوش‌آمد سنجاق می‌شود', !!welcomePin);
+
+  // 🗂 آرشیو موضوعی در منوی /start
+  await send(msg('/start'));
+  const startCall = calls.find(c => c.method === 'sendPhoto') || last('sendMessage');
+  const startKb = startCall.body.reply_markup;
+  const flatStart = startKb && startKb.inline_keyboard ? startKb.inline_keyboard.flat() : [];
+  check('/start: دکمهٔ آرشیو موضوعی', flatStart.some(b => b.url && b.url.includes('t.me/s/chan')));
+}
+
 console.log(`\n${passed} تست Worker با موفقیت گذشت ✅`);

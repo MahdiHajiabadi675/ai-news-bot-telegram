@@ -918,11 +918,36 @@ def _pub_count(est, day):
         return counts, 0
 
 
-def _quiz_due(est, loc) -> bool:
-    """آیا امروز کوییز نرفته است؟ (کوییز پست پنجم است: ۴ آموزشی + ۱ کوییز)"""
+def _quiz_slots(hours, target):
+    """ساعت‌هایی که کوییز می‌رود: اول و آخر بازه (برای ۲ کوییز: ۱۹ و ۲۲)"""
+    if target <= 0 or not hours:
+        return set()
+    if target == 1 or len(hours) == 1:
+        return {hours[0]}
+    if target == 2:
+        return {hours[0], hours[-1]}
+    step = (len(hours) - 1) / (target - 1)
+    return {hours[min(len(hours) - 1, round(i * step))] for i in range(target)}
+
+
+def _quiz_done(est, day) -> int:
+    counts = est.get("quiz_count") if isinstance(est.get("quiz_count"), dict) else {}
+    try:
+        return int(counts.get(day) or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _quiz_due(est, loc, hours) -> bool:
+    """آیا در این ساعت نوبت کوییز است؟ (روزی EDU_QUIZ_PER_DAY تا، هر ساعت حداکثر یکی)"""
     if EDU_QUIZ_PER_DAY <= 0:
         return False
-    return est.get("quiz_last_date") != loc.date().isoformat()
+    if loc.hour not in _quiz_slots(hours, EDU_QUIZ_PER_DAY):
+        return False
+    day = loc.date().isoformat()
+    if _quiz_done(est, day) >= EDU_QUIZ_PER_DAY:
+        return False
+    return est.get("last_quiz_key") != f"{day}#{loc.hour}"
 
 
 def _recent_news_titles(now_utc, limit: int = 8):
@@ -953,12 +978,14 @@ def _recent_news_titles(now_utc, limit: int = 8):
     return out
 
 
-def _log_quiz(question, message_id=None):
+def _log_quiz(quiz_data, message_id=None):
     try:
         log = storage.load_published()
-        entry = {"id": f"quiz-{local_now().date().isoformat()}", "title_fa": str(question)[:80],
+        question = str((quiz_data or {}).get("question") or "")
+        entry = {"id": f"quiz-{local_now().date().isoformat()}-{len(log)}", "title_fa": question[:80],
                  "source": "آموزش AI", "category": "edu", "published": True,
-                 "published_at": datetime.utcnow().isoformat() + "Z"}
+                 "published_at": datetime.utcnow().isoformat() + "Z",
+                 "quiz": {k: quiz_data.get(k) for k in ("question", "options", "correct", "explanation")}}
         if message_id:
             entry["message_id"] = message_id
         log.append(entry)
@@ -998,9 +1025,14 @@ def _send_quiz(est, now_utc) -> bool:
         return False
 
     est["quiz_used"] = (used + [qid])[-20:]
-    est["quiz_last_date"] = local_now(now_utc).date().isoformat()
-    print(f"[EDU] Quiz published via {via}: {q['question'][:50]}")
-    _log_quiz(q["question"], (res.get("result") or {}).get("message_id"))
+    day = local_now(now_utc).date().isoformat()
+    counts = est.get("quiz_count") if isinstance(est.get("quiz_count"), dict) else {}
+    counts[day] = _quiz_done(est, day) + 1
+    est["quiz_count"] = {k: counts[k] for k in sorted(counts)[-3:]}
+    est["quiz_last_date"] = day
+    est["last_quiz_key"] = f"{day}#{local_now(now_utc).hour}"
+    print(f"[EDU] Quiz published via {via}: {q['question'][:50]} — {counts[day]}/{max(1, EDU_QUIZ_PER_DAY)} today")
+    _log_quiz(q, (res.get("result") or {}).get("message_id"))
     return True
 
 
@@ -1023,8 +1055,8 @@ def _publish_due(est, now_utc):
     target = max(1, EDU_POSTS_PER_DAY)
     counts, done = _pub_count(est, day)
     if done >= target:
-        # متن‌ها تمام شده‌اند؛ کوییز مستقل است و اگر امروز نرفته، همین اجرا می‌رود
-        if _quiz_due(est, loc) and _send_quiz(est, now_utc):
+        # متن‌ها تمام شده‌اند؛ کوییز مستقل است و اگر نوبتش باشد، همین اجرا می‌رود
+        if _quiz_due(est, loc, hours) and _send_quiz(est, now_utc):
             cloudflare_kv.put(KEY, est)
         return
 
@@ -1085,8 +1117,8 @@ def _publish_due(est, now_utc):
         bale.reset()
         bale.send_text(format_plain(post, tag))
 
-    # کوییز پست پنجم است: مستقل از سقف ۴ پست متنی، یک‌بار در روز
-    quiz_sent = _send_quiz(est, now_utc) if _quiz_due(est, loc) else False
+    # کوییزها مستقل از سقف ۴ پست متنی‌اند: روزی EDU_QUIZ_PER_DAY تا (پیش‌فرض ۲)
+    quiz_sent = _send_quiz(est, now_utc) if _quiz_due(est, loc, hours) else False
 
     if sent or quiz_sent:
         if sent:

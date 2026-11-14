@@ -1320,6 +1320,7 @@ _dg_sent = []
 digest.send_message = lambda c, t, **kw: (_dg_sent.append(t) or {"ok": True, "result": {"message_id": 77}})
 digest.bale.reset = lambda: None
 digest.bale.send_text = lambda t: True
+digest.pin_message = lambda mid: None
 digest.CHANNEL_ID = "@c"
 _now_dg = datetime.datetime.utcnow()
 
@@ -1361,6 +1362,17 @@ check("دایجست: پست آموزشی و دایجست قبلی حساب نم�
 _old = [_news(i) for i in range(1, 4)] + [_news(8, days=10)]
 check("دایجست: خبر قدیمی‌تر از ۷ روز حذف می‌شود", len(digest.recent_items(_old, _now_dg)) == 3)
 
+# پاسخ کوییزهای هفته
+_quiz_log = [{"published": True, "category": "edu", "source": "آموزش AI",
+              "published_at": _now_dg.isoformat() + "Z",
+              "quiz": {"question": "سؤال کوییز هفته؟", "options": ["الف", "ب", "ج", "د"],
+                       "correct": 2, "explanation": "چون ج"}}]
+_qz_week = digest._recent_quizzes(_quiz_log, _now_dg)
+check("دایجست: کوییزهای هفته خوانده می‌شوند", len(_qz_week) == 1)
+_dg_txt = digest.format_digest([_news(i) for i in range(1, 5)], quizzes=_qz_week)
+check("دایجست: پاسخ درست کوییزها اعلام می‌شود",
+      "کوییزهای هفته" in _dg_txt and "✅ ج" in _dg_txt)
+
 
 # ───────────── ادغام خبرهای تکراری ─────────────
 print("Story clustering:")
@@ -1401,7 +1413,7 @@ _edu.cloudflare_kv.put = lambda k, v: _kqz.__setitem__(k, _json.loads(_json.dump
 _edu.EDU_PUBLISH_HOURS = _DEFAULT_PUB_HOURS
 _edu.EDU_EVERY_HOURS = 6
 _edu.EDU_POSTS_PER_DAY = 4
-_edu.EDU_QUIZ_PER_DAY = 1
+_edu.EDU_QUIZ_PER_DAY = 2
 _edu.EDU_CATCHUP_MAX = 2
 _edu.EDU_USE_BUILTIN_FALLBACK = False
 _edu.GEMINI_API_KEY = "k"; _edu.OPENROUTER_API_KEY = ""; _edu.CHANNEL_ID = "@c"; _edu.EDU_ENABLED = True
@@ -1418,11 +1430,11 @@ _queue4 = [{"post": dict(_good), "tag": "t", "slot": f"s{i}"} for i in range(4)]
 _kqz["edu_state"] = {"queue": list(_queue4)}
 for _h in range(19, 23):
     _edu.maybe_post({}, _tehran(_h, day=8))
-check("شب با ۴ پست: ۴ پست متنی + ۱ کوییز (پست پنجم)", len(_sent_q) == 4 and len(_polls_q) == 1)
-check("کوییزِ منتشرشده پاسخ درست معتبر دارد",
-      _polls_q and 0 <= _polls_q[0][1] < 4)
+check("شب با ۴ پست: ۴ پست متنی + ۲ کوییز (ساعت ۱۹ و ۲۲)",
+      len(_sent_q) == 4 and len(_polls_q) == 2)
+check("کوییزِ منتشرشده پاسخ درست معتبر دارد", _polls_q and 0 <= _polls_q[0][1] < 4)
 _edu.maybe_post({}, _tehran(22, day=8))
-check("کوییز در همان روز دوباره نمی‌آید", len(_polls_q) == 1)
+check("کوییز سوم در همان روز نمی‌آید", len(_polls_q) == 2)
 
 # کوییز «مرتبط و جدید»: اول از خبرهای تازه ساخته می‌شود
 _qmodel = {"question": "کدام مدل در خبر امروز معرفی شد؟",
@@ -1733,6 +1745,30 @@ check("editlast: حالت ویرایش پس از اعمال پاک می‌شود
 _store["published"] = [{"title_fa": "کهنه", "published": True, "message_id": 9,
                         "published_at": "2020-01-01T00:00:00Z"}]
 check("undo: پست قدیمی‌تر از ۴۸ ساعت انتخاب نمی‌شود", bot.last_published()[1] == -1)
+
+
+# ───────────── سنجاق‌کردن (📌) ─────────────
+print("Pin:")
+_store["pending"] = [{"id": "pin1", "source": "S", "title_fa": "خبر مهم", "summary_fa": "x",
+                      "importance": "high", "hashtags": ["AI"], "link": "http://x"}]
+_store["approved"] = []
+bot._handle_callback({"id": "c", "data": "pin:pin1", "from": {"id": 42}}, {})
+check("pin: خبر تایید و با علامت سنجاق در صف انتشار می‌رود",
+      _store["pending"] == [] and len(_store["approved"]) == 1
+      and _store["approved"][0]["pin"] is True
+      and _store["approved"][0]["admin_action"] == "pinned")
+
+_pinned_ids = []
+publisher.pin_message = lambda mid: _pinned_ids.append(mid)
+publisher.send_message = lambda c, t, **kw: {"ok": True, "result": {"message_id": 321}}
+publisher.storage.load_published = lambda: []
+publisher.storage.save_published = lambda items: None
+publisher.storage.save_approved = lambda items: None
+publisher.publish_approved({"daily_post_count": 0,
+                            "daily_post_date": datetime.datetime.utcnow().date().isoformat()},
+                           [{"id": "pp", "title_fa": "خبر سنجاقی", "summary_fa": "x",
+                             "importance": "high", "hashtags": ["AI"], "link": "http://x", "pin": True}])
+check("publisher: خبر pin‌دار بعد از انتشار سنجاق می‌شود", _pinned_ids == [321])
 
 
 # ───────────── قالب ایمن: لینک نامعتبر و HTML سالم ─────────────print("Safe message format:")

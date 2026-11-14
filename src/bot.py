@@ -88,6 +88,24 @@ def answer_callback(callback_query_id, text=None, show_alert=False):
         pass
 
 
+def pin_message(message_id, chat_id=None):
+    """سنجاق‌کردن یک پست در کانال (فقط یک پست سنجاق‌شده می‌ماند)"""
+    if DRY_RUN:
+        print(f"[DRY] pinChatMessage → {chat_id or CHANNEL_ID} #{message_id}")
+        return {"ok": True, "dry_run": True}
+    try:
+        resp = requests.post(
+            f"{BASE}/pinChatMessage",
+            json={"chat_id": chat_id or CHANNEL_ID, "message_id": message_id,
+                  "disable_notification": True},
+            timeout=15,
+        )
+        return resp.json()
+    except Exception as e:
+        print(f"[ERROR] pin_message: {e}")
+        return None
+
+
 def delete_message(message_id, chat_id=None):
     """حذف یک پست از کانال (برای /undo)"""
     if DRY_RUN:
@@ -350,6 +368,22 @@ def _handle_callback(cb, state):
 
     pending = storage.load_pending()
     approved = storage.load_approved()
+
+    if action == "pin":
+        # تایید + سنجاق بعد از انتشار (پست بعدی که منتشر شود، سنجاق می‌ماند)
+        item = _find_and_remove(pending, item_hash)
+        if item:
+            _record_decision(item, "approve")
+            item["status"] = "approved"
+            item["admin_action"] = "pinned"
+            item["pin"] = True
+            approved.append(item)
+            storage.save_pending(pending)
+            storage.save_approved(approved)
+            answer_callback(cb_id, "📌 تایید شد — در انتشار بعدی سنجاق می‌شود")
+        else:
+            answer_callback(cb_id, "❌ خبر پیدا نشد", show_alert=True)
+        return
 
     if action == "sched":
         # ⏰ تایید + انتشار در ساعت آینده (callback: sched:<hours>:<id>)
@@ -813,6 +847,7 @@ def _send_review(item):
                 {"text": "⏰ +۲ ساعت", "callback_data": f"sched:2:{item_id}"},
                 {"text": "⏰ +۶ ساعت", "callback_data": f"sched:6:{item_id}"}
             ],
+            [{"text": "📌 تایید و سنجاق", "callback_data": f"pin:{item_id}"}],
             [{"text": "🗑 پاک کردن کل صف", "callback_data": "clearq"}]
         ]
     }

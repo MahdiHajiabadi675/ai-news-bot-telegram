@@ -263,6 +263,26 @@ async function handleCallback(cb, env, BASE, CHANNEL_ID, ADMIN_ID) {
     return;
   }
 
+  if (action === 'pin') {
+    // 📌 تایید + انتشار فوری + سنجاق در کانال
+    const idx = pending.findIndex(i => itemKey(i) === itemHash);
+    if (idx !== -1) {
+      const item = pending.splice(idx, 1)[0];
+      await recordDecision(env, item, 'approve');
+      item.status = 'approved';
+      item.admin_action = 'pinned';
+      item.pin = true;
+      approved.push(item);
+      await saveJSON(env, 'pending', pending);
+      await saveJSON(env, 'approved', approved);
+      await answerCallback(BASE, cbId, '📌 تایید شد — در حال انتشار و سنجاق...');
+      await publishItem(env, BASE, CHANNEL_ID, ADMIN_ID, item);
+    } else {
+      await answerCallback(BASE, cbId, '❌ خبر پیدا نشد', true);
+    }
+    return;
+  }
+
   if (action === 'approve') {
     const idx = pending.findIndex(i => itemKey(i) === itemHash);
     if (idx !== -1) {
@@ -389,6 +409,8 @@ async function handleMessage(msg, env, BASE, CHANNEL_ID, ADMIN_ID) {
 
   if (text === '/start') {
     const active = state.paused ? '⏸️ متوقف' : '▶️ فعال';
+    // لینک آرشیو موضوعی فقط وقتی آیدی کانال یوزرنیم باشد
+    const channelHandle = String(CHANNEL_ID || '').startsWith('@') ? String(CHANNEL_ID).slice(1) : '';
     const autoOn = state.auto_publish_enabled !== false;
     const stageLabel = {
       idle: 'در انتظار اجرا',
@@ -415,6 +437,7 @@ async function handleMessage(msg, env, BASE, CHANNEL_ID, ADMIN_ID) {
       '<code>/pending</code> — بررسی صف تایید\n' +
       '<code>/auto</code> — روشن/خاموش کردن انتشار خودکار\n' +
       '<code>/edu</code> — روشن/خاموش کردن پست آموزشی\n' +
+      '<code>/welcome</code> — پست خوش‌آمد و سنجاق آن\n' +
       '<code>/pause</code> · <code>/resume</code> — توقف/ادامهٔ انتشار\n' +
       '<code>/clear</code> — پاک‌کردن صف\n' +
       '<code>/undo</code> — حذف آخرین پست کانال\n' +
@@ -445,7 +468,11 @@ async function handleMessage(msg, env, BASE, CHANNEL_ID, ADMIN_ID) {
           ],
           [
             { text: '🧹 پاک‌کردن صف', callback_data: 'cmd:clear' }
-          ]
+          ],
+          ...(channelHandle ? [[{
+            text: '🗂 آرشیو موضوعی',
+            url: `https://t.me/s/${channelHandle}?q=%23هوش_مصنوعی`,
+          }]] : [])
         ]
       },
       env.START_BANNER_URL || START_BANNER_URL
@@ -586,25 +613,61 @@ async function handleMessage(msg, env, BASE, CHANNEL_ID, ADMIN_ID) {
       await sendMessage(BASE, ADMIN_ID, `🎓 پست آموزشی: ${arg === 'on' ? 'روشن ✅' : 'خاموش ❌'}`);
     } else {
       const est = await getJSON(env, 'edu_state', {});
+      const published = await getJSON(env, 'published', []);
       const on = state.edu_enabled !== false;
       const recent = (est.recent || []).slice(-5).reverse().map(r => `• ${r.title}`).join('\n');
       // آمار مصرف مدل‌ها: امروز و دیروز (به وقت ایران)
       const dayKey = (offset) => new Date(Date.now() + 210 * 60000 - offset * 86400000).toISOString().slice(0, 10);
-      // پیشرفت شب: چند پست از سقف روزانه منتشر شده و چند تا در صف مانده
+      // پیشرفت شب: چند پست/کوییز از سقف روزانه منتشر شده و چند تا مانده
       const target = Number(env.EDU_POSTS_PER_DAY) || 4;
+      const quizTarget = Number(env.EDU_QUIZ_PER_DAY) || 2;
       const doneToday = Number((est.pub_count || {})[dayKey(0)] || 0);
+      const quizToday = Number((est.quiz_count || {})[dayKey(0)] || 0);
+      const quizLeft = Math.max(0, quizTarget - quizToday);
+      const queueN = (est.queue || []).length;
+      const eduTotal = published.filter(p => p && p.published && p.source === 'آموزش AI').length;
       const usageLine = (label, u) => !u ? '' :
         `${label}: ساخت ${u.ok || 0} از ${u.attempts || 0} تلاش | درخواست به مدل‌ها ${u.calls || 0} | خروجی ردشده (توکن هدررفته) ${u.rejected || 0}` +
         (u.via && Object.keys(u.via).length ? `\n   ${Object.entries(u.via).map(([k, v]) => `${k} ×${v}`).join('، ')}` : '');
       const usage = [usageLine('امروز', (est.usage || {})[dayKey(0)]), usageLine('دیروز', (est.usage || {})[dayKey(1)])]
         .filter(Boolean).join('\n');
       await sendMessage(BASE, ADMIN_ID,
-        `🎓 پست آموزشی: ${on ? 'روشن ✅' : 'خاموش ❌'}\n` +
-        `📤 امروز: ${doneToday} از ${target} پست | 📥 در صف انتشار (ساعت ۱۹ تا ۲۲): ${(est.queue || []).length}\n` +
+        `🎓 پست آموزشی: ${on ? 'روشن ✅' : 'خاموش ❌'} | کوییز: ${quizTarget > 0 ? 'روشن ✅' : 'خاموش ❌'}\n` +
+        `📤 امشب منتشر شد: ${doneToday}/${target} پست · ${quizToday}/${quizTarget} کوییز\n` +
+        `📥 در صف انتشار: ${queueN} پست · ${quizLeft} کوییز باقی‌ماندهٔ امشب\n` +
+        `🗂 کل پست‌های آموزشی منتشرشده: ${eduTotal}\n` +
         (usage ? `\n📊 مصرف:\n${escapeHtml(usage)}\n\n` : '') +
         'تغییر: <code>/edu on</code> یا <code>/edu off</code>' +
         (recent ? `\n\nآخرین پست‌ها:\n${escapeHtml(recent)}` : ''));
     }
+  } else if (/^\/welcome/i.test(text)) {
+    // 👋 پست خوش‌آمد (بر اساس تازه‌ترین خبرهای منتشرشده) + سنجاق در کانال
+    const published = await getJSON(env, 'published', []);
+    const recent = published
+      .filter(p => p && p.published && !p.deleted && p.link)
+      .slice(-3)
+      .reverse();
+    let msg = '👋 <b>به کانال خوش آمدی</b>\n\n';
+    msg += 'هر ساعت مهم‌ترین خبرهای هوش مصنوعی، ترجمه‌شده و خلاصه.\n';
+    msg += 'هر شب ۴ پست آموزشی + ۲ کوییز، و جمع‌بندی هفته هر جمعه.\n\n';
+    if (recent.length) {
+      msg += '<b>تازه‌ترین خبرها:</b>\n';
+      recent.forEach((p, i) => {
+        const link = safeLink(p.link);
+        const title = escapeHtml(clip(p.title_fa || p.title || '', 60));
+        msg += `${i + 1}. ${link ? `<a href="${link}">${title}</a>` : title}\n`;
+      });
+      msg += '\n';
+    }
+    msg += 'دستورها: /pending · /status · /edu · /health';
+    const res = await sendMessage(BASE, CHANNEL_ID, msg);
+    const mid = res && res.result && res.result.message_id;
+    if (mid) {
+      await telegramCall(BASE, 'pinChatMessage', {
+        chat_id: CHANNEL_ID, message_id: mid, disable_notification: false,
+      });
+    }
+    await sendMessage(BASE, ADMIN_ID, mid ? '✅ پست خوش‌آمد در کانال سنجاق شد' : '⚠️ ارسال نشد');
   } else if (/^\/health/i.test(text)) {
     // همان اطلاعات GET /health، این‌بار داخل تلگرام
     const h = await healthSnapshot(env);
@@ -737,6 +800,9 @@ async function sendReview(BASE, ADMIN_ID, item) {
       [
         { text: '⏰ +۲ ساعت', callback_data: `sched:2:${id}` },
         { text: '⏰ +۶ ساعت', callback_data: `sched:6:${id}` }
+      ],
+      [
+        { text: '📌 تایید و سنجاق', callback_data: `pin:${id}` }
       ]
     ]
   };
@@ -1069,6 +1135,12 @@ async function publishItem(env, BASE, CHANNEL_ID, ADMIN_ID, item) {
     const approvedList = await getJSON(env, 'approved', []);
     await saveJSON(env, 'approved', approvedList.filter(i => itemKey(i) !== key));
     console.log('[publishItem] Published:', item.title_fa?.substring(0, 50));
+    if (item.pin && msgId) {
+      const pinned = await telegramCall(BASE, 'pinChatMessage', {
+        chat_id: CHANNEL_ID, message_id: msgId, disable_notification: true,
+      });
+      if (pinned && pinned.ok) console.log('[publishItem] Pinned in channel');
+    }
     // آخرین کار: همهٔ ذخیره‌ها انجام شده؛ شکست بله/بلو‌اسکای = حذف، بدون صف و بدون اثر بر تلگرام
     try { await sendBale(env, item); } catch (e) { /* نادیده */ }
     try { await sendBluesky(env, item); } catch (e) { /* نادیده */ }
