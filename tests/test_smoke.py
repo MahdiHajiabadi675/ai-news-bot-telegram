@@ -53,6 +53,7 @@ import src.source_trust as source_trust  # noqa: E402
 import src.translator as translator  # noqa: E402
 import src.publisher as publisher  # noqa: E402
 import src.digest as digest  # noqa: E402
+import src.cluster as cluster  # noqa: E402
 import src.storage as storage  # noqa: E402
 
 _passed = 0
@@ -1346,6 +1347,30 @@ check("دایجست: پست آموزشی و دایجست قبلی حساب نم�
 # خبر قدیمی‌تر از ۷ روز حساب نمی‌شود
 _old = [_news(i) for i in range(1, 4)] + [_news(8, days=10)]
 check("دایجست: خبر قدیمی‌تر از ۷ روز حذف می‌شود", len(digest.recent_items(_old, _now_dg)) == 3)
+
+
+# ───────────── ادغام خبرهای تکراری ─────────────
+print("Story clustering:")
+_same_a = {"title": "OpenAI launches GPT-5 with a new reasoning mode", "source": "OpenAI Blog", "source_trust": 5}
+_same_b = {"title": "OpenAI launches GPT-5 and brings a new reasoning mode", "source": "TechCrunch", "source_trust": 3,
+           "link": "http://tc"}
+_other = {"title": "Nvidia reports record data-center revenue", "source": "The Verge", "source_trust": 3}
+_cl = cluster.merge_similar([dict(_same_a), dict(_same_b), dict(_other)])
+check("خبر تکراری از دو منبع → یک آیتم", len(_cl) == 2)
+check("منبع اصلی با بالاترین اعتبار انتخاب می‌شود",
+      _cl[0]["source"] == "OpenAI Blog" and _cl[0]["also_sources"][0]["source"] == "TechCrunch")
+check("خبر نامرتبط جدا می‌ماند", _cl[1]["source"] == "The Verge" and "also_sources" not in _cl[1])
+_ver = cluster.merge_similar([
+    {"title": "OpenAI releases GPT-5 today", "source": "A", "source_trust": 4},
+    {"title": "OpenAI releases GPT-6 today", "source": "B", "source_trust": 4},
+])
+check("نسخهٔ متفاوت (GPT-5 و GPT-6) با هم ادغام نمی‌شوند", len(_ver) == 2)
+check("شباهت عنوان‌های یکسان ۱ است", cluster.similarity("same title here", "same title here") == 1.0)
+
+_msg_also = formatting.format_message({"title_fa": "عنوان", "summary_fa": "خلاصه", "source": "OpenAI",
+                                       "link": "http://x", "hashtags": ["AI"],
+                                       "also_sources": [{"source": "TechCrunch", "link": "http://tc"}]})
+check("قالب پست: خط «همچنین در» اضافه می‌شود", "همچنین در: TechCrunch" in _msg_also)
 
 
 # ───────────── امنیت: ویرایش خبر فقط توسط ادمین ─────────────

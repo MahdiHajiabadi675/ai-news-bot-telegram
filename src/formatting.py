@@ -112,6 +112,11 @@ def _render(item: dict, summary_len: int, show_original: bool, tag_count: int = 
         text += f"📰 منبع: {source}"
     if hashtags:
         text += f"\n🏷️ {hashtags}"
+    also = [s for s in (item.get("also_sources") or []) if isinstance(s, dict) and s.get("source")]
+    if also:
+        names = "، ".join(escape_html(clip(s.get("source"), 40)) for s in also[:4])
+        if names:
+            text += f"\n🔗 همچنین در: {names}"
     if is_untranslated(item):
         text += "\n\n🔤 <i>ترجمه نشده — متن اصلی</i>"
     if item.get("confidence") == "rumor":

@@ -887,6 +887,8 @@ function renderChannelMessage(item, env, summaryLen, showOriginal, tagCount = -1
   const link = safeLink(item.link);
   text += link ? `📰 منبع: <a href="${link}">${source}</a>` : `📰 منبع: ${source}`;
   if (hashtags) text += `\n🏷️ ${hashtags}`;
+  const also = (item.also_sources || []).filter(s => s && s.source).slice(0, 4);
+  if (also.length) text += `\n🔗 همچنین در: ${also.map(s => escapeHtml(clip(s.source, 40))).join('، ')}`;
   if (untranslated) text += '\n\n🔤 <i>ترجمه نشده — متن اصلی</i>';
   if (item.confidence === 'rumor') text += '\n\n⚠️ <i>این خبر تایید رسمی نشده است</i>';
   return text;

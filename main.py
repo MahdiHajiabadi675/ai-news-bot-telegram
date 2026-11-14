@@ -28,6 +28,7 @@ from src.config import (
 from src.collectors import collect, FEEDS, interleave_by_source
 from src.analyzer import analyze_articles, localize
 from src import source_trust
+from src import cluster
 from src.fast_track import process_fast_track
 from src.bot import poll_updates, _send_review, notify_admin_new, send_message
 from src.publisher import publish_approved
@@ -199,6 +200,13 @@ def _run(force=False):
                 analyzed = analyze_articles(articles, stats)
                 rl["analyzed"] = len(analyzed)
                 rl.update(low_score=0, auto=0, pending=0)
+
+                # همان رویداد از چند منبع → یک پست با «همچنین در: ...»
+                before_cluster = len(analyzed)
+                analyzed = cluster.merge_similar(analyzed)
+                rl["merged"] = before_cluster - len(analyzed)
+                if rl["merged"]:
+                    print(f"[INFO] Merged {rl['merged']} duplicate stories")
 
                 # بعد از تحلیل، خبر دیده‌شده محسوب می‌شود تا دوباره پردازش نشود.
                 for article in articles:
