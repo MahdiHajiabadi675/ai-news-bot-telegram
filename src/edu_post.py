@@ -88,6 +88,29 @@ Return ONLY a JSON object with exactly these keys:
   "hashtags": ["1 to 2 Persian hashtag words without #, words joined by underscore"]
 }}"""
 
+QUIZ_PROMPT = """You write ONE multiple-choice quiz question in PERSIAN (Farsi) for a Telegram
+channel about AI news, based on the recent headlines below (or a practical AI concept
+directly connected to them).
+
+Recent headlines:
+{news}
+
+Rules:
+- Exactly 4 options; exactly one is correct.
+- The question must be answerable from general knowledge or from the headlines;
+  do NOT invent numbers, dates, prices or model names that are not in the headlines.
+- Persian, natural and short. No URLs, no markdown symbols (no *, #, `).
+- "explanation" is one short Persian sentence explaining why the answer is right (max 200 chars).
+- The question must be ABOUT THE NEWS, not generic trivia.
+
+Return ONLY a JSON object:
+{{
+  "question": "string (Persian, 15-200 chars)",
+  "options": ["string", "string", "string", "string"],
+  "correct": 0,
+  "explanation": "string"
+}}"""
+
 _URL_RE = re.compile(r"https?://\S+|www\.\S+", re.I)
 _MD_RE = re.compile(r"[*`#_]{1,}")
 _PERSIAN_RE = re.compile(r"[؀-ۿ]")
@@ -664,14 +687,13 @@ def generate(category_desc: str, recent_titles: list, accept=None, use_gemini: b
     «قابل‌قبول» یعنی accept(data) (در _run همان validate) None برنگرداند. خروجی ناخوانا یا
     بی‌کیفیت یعنی مدل بعدی. کل زمان از MAX_TOTAL_SECONDS بیشتر نمی‌شود.
     """
-    _RUN.update(gemini_calls=0, or_calls=0, rejected=0, provider="", model="")
     recent = "\n".join(f"- {t}" for t in recent_titles[-max(1, EDU_RECENT_PROMPT):]) or "(none yet)"
     prompt = PROMPT.format(topic=category_desc, recent=recent)
-    t0 = time.monotonic()
+    return _run_models(prompt, _accepts(accept), use_gemini)
 
-    def left():
-        return MAX_TOTAL_SECONDS - (time.monotonic() - t0)
 
+def _accepts(accept):
+    """تابع accept را به یک تابع bool ساده تبدیل می‌کند."""
     def good(data):
         if data is None:
             return False
@@ -681,6 +703,25 @@ def generate(category_desc: str, recent_titles: list, accept=None, use_gemini: b
             return accept(data) is not None
         except Exception:  # noqa: BLE001
             return False
+    return good
+
+
+def generate_quiz(news_titles, accept=None, use_gemini: bool = True):
+    """کوییز چهارگزینه‌ای مرتبط با خبرهای تازه (همان زنجیرهٔ مدل‌ها)."""
+    news = "\n".join(f"- {t}" for t in (news_titles or [])[:8]) or "(خبر تازه‌ای نیست)"
+    return _run_models(QUIZ_PROMPT.format(news=news), _accepts(accept), use_gemini)
+
+
+def _run_models(prompt: str, good, use_gemini: bool = True):
+    """
+    اجرای زنجیرهٔ مدل‌ها روی یک پرامپت دلخواه (پست آموزشی یا کوییز).
+    ترتیب اولویت: Gemini → مدل‌های flash دیگر → مدل‌های رایگان OpenRouter.
+    """
+    _RUN.update(gemini_calls=0, or_calls=0, rejected=0, provider="", model="")
+    t0 = time.monotonic()
+
+    def left():
+        return MAX_TOTAL_SECONDS - (time.monotonic() - t0)
 
     if use_gemini and GEMINI_API_KEY:
         model = _resolve_model()
@@ -877,6 +918,92 @@ def _pub_count(est, day):
         return counts, 0
 
 
+def _quiz_due(est, loc) -> bool:
+    """آیا امروز کوییز نرفته است؟ (کوییز پست پنجم است: ۴ آموزشی + ۱ کوییز)"""
+    if EDU_QUIZ_PER_DAY <= 0:
+        return False
+    return est.get("quiz_last_date") != loc.date().isoformat()
+
+
+def _recent_news_titles(now_utc, limit: int = 8):
+    """عنوان خبرهای واقعی دو روز اخیر، برای ساختن کوییز «مرتبط با اخبار»"""
+    try:
+        log = storage.load_published()
+    except Exception:  # noqa: BLE001
+        return []
+    cutoff = now_utc - timedelta(days=2)
+    out = []
+    for p in reversed(log):
+        if not isinstance(p, dict) or not p.get("published") or p.get("deleted"):
+            continue
+        if p.get("category") in ("edu", "digest", "paper", "quiz"):
+            continue
+        at = str(p.get("published_at") or "").replace("Z", "")
+        try:
+            when = datetime.fromisoformat(at)
+        except ValueError:
+            continue
+        if when < cutoff:
+            continue
+        title = str(p.get("title_fa") or p.get("title") or "").strip()
+        if title:
+            out.append(title)
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _log_quiz(question, message_id=None):
+    try:
+        log = storage.load_published()
+        entry = {"id": f"quiz-{local_now().date().isoformat()}", "title_fa": str(question)[:80],
+                 "source": "آموزش AI", "category": "edu", "published": True,
+                 "published_at": datetime.utcnow().isoformat() + "Z"}
+        if message_id:
+            entry["message_id"] = message_id
+        log.append(entry)
+        storage.save_published(log)
+    except Exception as e:  # noqa: BLE001
+        print(f"[EDU] quiz log failed: {type(e).__name__}")
+
+
+def _send_quiz(est, now_utc) -> bool:
+    """
+    یک کوییز در روز. اول تلاش می‌کند سؤال را از خبرهای تازهٔ همان روز بسازد
+    (مرتبط و جدید)، و اگر مدل‌ها خطا دادند یا خروجی بی‌کیفیت بود، از بانک
+    آمادهٔ چرخشی استفاده می‌کند تا شب بدون کوییز نماند.
+    """
+    used = list(est.get("quiz_used") or [])
+    q, via = None, ""
+    news = _recent_news_titles(now_utc)
+    if news:
+        gemini_ok = bool(GEMINI_API_KEY) and gemini_budget.can_call(min_interval_min=0)
+        try:
+            raw = generate_quiz(news, accept=quiz.validate, use_gemini=gemini_ok)
+            q = quiz.validate(raw)
+            if q and gemini_ok and _RUN.get("gemini_calls"):
+                gemini_budget.mark_called()
+        except Exception as e:  # noqa: BLE001
+            print(f"[EDU] quiz generation failed: {type(e).__name__}")
+        via = "model"
+    if not q:
+        q, qid = quiz.pick(int(now_utc.timestamp()) // 3600, used)
+        via = "bank"
+    else:
+        qid = f"gen-{local_now(now_utc).date().isoformat()}"
+
+    res = send_poll(CHANNEL_ID, q["question"], q["options"], q["correct"], q.get("explanation"))
+    if not (res and res.get("ok")):
+        print(f"[EDU] quiz send failed: {res}")
+        return False
+
+    est["quiz_used"] = (used + [qid])[-20:]
+    est["quiz_last_date"] = local_now(now_utc).date().isoformat()
+    print(f"[EDU] Quiz published via {via}: {q['question'][:50]}")
+    _log_quiz(q["question"], (res.get("result") or {}).get("message_id"))
+    return True
+
+
 def _publish_due(est, now_utc):
     """
     انتشار با سقف روزانه (EDU_POSTS_PER_DAY) و جبران تأخیر.
@@ -896,6 +1023,9 @@ def _publish_due(est, now_utc):
     target = max(1, EDU_POSTS_PER_DAY)
     counts, done = _pub_count(est, day)
     if done >= target:
+        # متن‌ها تمام شده‌اند؛ کوییز مستقل است و اگر امروز نرفته، همین اجرا می‌رود
+        if _quiz_due(est, loc) and _send_quiz(est, now_utc):
+            cloudflare_kv.put(KEY, est)
         return
 
     key = f"{day}#{loc.hour}"
@@ -908,25 +1038,6 @@ def _publish_due(est, now_utc):
     batch = min(behind, max(1, EDU_CATCHUP_MAX)) if catching_up else 1
     sent = 0
     for _ in range(batch):
-        # آخرین پست شب → کوییز آموزشی (نظرسنجی چهارگزینه‌ای با پاسخ و توضیح)
-        if EDU_QUIZ_PER_DAY > 0 and (done + sent) == target - 1:
-            q, qid = quiz.pick(done + sent, est.get("quiz_used") or [])
-            res = send_poll(CHANNEL_ID, q["question"], q["options"], q["correct"], q.get("explanation"))
-            if res and res.get("ok"):
-                est["quiz_used"] = (list(est.get("quiz_used") or []) + [qid])[-20:]
-                sent += 1
-                print(f"[EDU] Quiz published: {qid} — {done + sent}/{target} today")
-                try:
-                    log = storage.load_published()
-                    log.append({"id": f"quiz-{qid}", "title_fa": q["question"][:80],
-                                "source": "آموزش AI", "category": "edu", "published": True,
-                                "published_at": datetime.utcnow().isoformat() + "Z"})
-                    storage.save_published(log)
-                except Exception as e:  # noqa: BLE001
-                    print(f"[EDU] quiz log failed: {type(e).__name__}")
-                continue
-            print(f"[EDU] quiz send failed: {res}")
-
         item = _peek_queue(est)
         from_builtin = False
         if item is None:
@@ -974,8 +1085,12 @@ def _publish_due(est, now_utc):
         bale.reset()
         bale.send_text(format_plain(post, tag))
 
-    if sent:
-        est["last_pub_key"] = key
-        counts[day] = done + sent
-        est["pub_count"] = {k: counts[k] for k in sorted(counts)[-3:]}
+    # کوییز پست پنجم است: مستقل از سقف ۴ پست متنی، یک‌بار در روز
+    quiz_sent = _send_quiz(est, now_utc) if _quiz_due(est, loc) else False
+
+    if sent or quiz_sent:
+        if sent:
+            est["last_pub_key"] = key
+            counts[day] = done + sent
+            est["pub_count"] = {k: counts[k] for k in sorted(counts)[-3:]}
         cloudflare_kv.put(KEY, est)

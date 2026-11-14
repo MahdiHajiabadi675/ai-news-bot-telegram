@@ -1409,12 +1409,44 @@ _edu.bale.reset = lambda: None
 _edu.storage.load_published = lambda: []
 _edu.storage.save_published = lambda items: None
 _queue4 = [{"post": dict(_good), "tag": "t", "slot": f"s{i}"} for i in range(4)]
-_kqz["edu_state"] = {"queue": _queue4}
+_kqz["edu_state"] = {"queue": list(_queue4)}
 for _h in range(19, 23):
     _edu.maybe_post({}, _tehran(_h, day=8))
-check("شب با ۴ پست: ۳ پست متنی + ۱ کوییز", len(_sent_q) == 3 and len(_polls_q) == 1)
+check("شب با ۴ پست: ۴ پست متنی + ۱ کوییز (پست پنجم)", len(_sent_q) == 4 and len(_polls_q) == 1)
 check("کوییزِ منتشرشده پاسخ درست معتبر دارد",
-      _polls_q and 0 <= _polls_q[0][1] < len(quiz.QUIZ_BANK[0]["options"]))
+      _polls_q and 0 <= _polls_q[0][1] < 4)
+_edu.maybe_post({}, _tehran(22, day=8))
+check("کوییز در همان روز دوباره نمی‌آید", len(_polls_q) == 1)
+
+# کوییز «مرتبط و جدید»: اول از خبرهای تازه ساخته می‌شود
+_qmodel = {"question": "کدام مدل در خبر امروز معرفی شد؟",
+           "options": ["مدل الف", "مدل ب", "مدل ج", "مدل د"],
+           "correct": 2, "explanation": "در خبر به مدل ج اشاره شده بود."}
+check("کوییز معتبر پذیرفته می‌شود", quiz.validate(_qmodel) is not None)
+check("کوییز با ۳ گزینه رد می‌شود", quiz.validate({**_qmodel, "options": ["الف", "ب", "ج"]}) is None)
+check("کوییز با ایندکس نامعتبر رد می‌شود", quiz.validate({**_qmodel, "correct": 7}) is None)
+check("کوییز غیرفارسی رد می‌شود",
+      quiz.validate({"question": "Which model was announced?", "options": ["a", "b", "c", "d"],
+                     "correct": 0}) is None)
+
+_orig_gen_quiz = _edu.generate_quiz
+_edu.generate_quiz = lambda news, accept=None, use_gemini=True: dict(_qmodel)
+_kqz.clear(); _sent_q.clear(); _polls_q.clear()
+_edu.storage.load_published = lambda: [{"title_fa": "خبر تازهٔ امروز دربارهٔ مدل ج",
+                                        "published": True, "category": "model_release",
+                                        "published_at": _dt.datetime.utcnow().isoformat() + "Z"}]
+_kqz["edu_state"] = {"queue": [dict(_queue4[0])]}
+_edu.maybe_post({}, _tehran(19, day=9))
+check("کوییز از خبرهای تازهٔ همان روز ساخته می‌شود",
+      len(_polls_q) == 1 and _polls_q[0][0] == _qmodel["question"])
+
+_edu.generate_quiz = lambda news, accept=None, use_gemini=True: None
+_kqz.clear(); _sent_q.clear(); _polls_q.clear()
+_kqz["edu_state"] = {"queue": [dict(_queue4[0])]}
+_edu.maybe_post({}, _tehran(19, day=10))
+check("اگر مدل کوییز نداد، از بانک آماده استفاده می‌شود",
+      len(_polls_q) == 1 and _polls_q[0][0] != _qmodel["question"])
+_edu.generate_quiz = _orig_gen_quiz
 
 
 # ───────────── انتشار زمان‌بندی‌شده ─────────────

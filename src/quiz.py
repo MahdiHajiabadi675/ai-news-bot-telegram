@@ -9,6 +9,8 @@
 در `edu_state.quiz_used` نگه داشته می‌شوند تا تکرار نشوند.
 """
 
+import re
+
 QUIZ_BANK = [
     {
         "id": "prompt-specific",
@@ -94,3 +96,70 @@ def pick(ordinal: int, used=()):
             return q, q["id"]
     q = QUIZ_BANK[ordinal % len(QUIZ_BANK)]
     return q, q["id"]
+
+
+# ───────────── اعتبارسنجی کوییزِ ساخته‌شده با مدل ─────────────
+_URL_RE = re.compile(r"https?://\S+|www\.\S+", re.I)
+_MD_RE = re.compile(r"[*`#]{1,}")
+_PERSIAN_RE = re.compile(r"[؀-ۿ]")
+
+
+def _persian_ratio(text) -> float:
+    letters = [c for c in str(text or "") if c.isalpha()]
+    if not letters:
+        return 0.0
+    return sum(1 for c in letters if _PERSIAN_RE.match(c)) / len(letters)
+
+
+def _clean(text, limit) -> str:
+    text = _URL_RE.sub("", str(text or ""))
+    text = _MD_RE.sub("", text)
+    text = " ".join(text.split())
+    return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
+
+
+def validate(data):
+    """
+    خروجی مدل را به کوییز قابل‌انتشار تبدیل می‌کند؛ None = بی‌کیفیت.
+
+    شرط‌ها: ۴ گزینهٔ یکتا، ایندکس درست در بازه، متن فارسی، سؤال ۱۵..۲۲۰ کاراکتر،
+    بدون لینک/مارک‌داون. «توضیح» اختیاری است.
+    """
+    if isinstance(data, list):
+        data = next((x for x in data if isinstance(x, dict)), None)
+    if isinstance(data, dict) and "question" not in data:
+        inner = [v for v in data.values() if isinstance(v, (dict, list))]
+        if len(inner) == 1:
+            data = inner[0]
+    if not isinstance(data, dict):
+        return None
+
+    question = _clean(data.get("question"), 220)
+    raw_options = data.get("options")
+    if isinstance(raw_options, str):
+        raw_options = [x for x in re.split(r"\n+", raw_options) if x.strip()]
+    if not isinstance(raw_options, list):
+        return None
+    options = [_clean(o, 90) for o in raw_options]
+    options = [o for o in options if o]
+    if len(options) != 4:
+        return None
+    if len({o.lower() for o in options}) != 4:
+        return None
+
+    try:
+        correct = int(data.get("correct"))
+    except (TypeError, ValueError):
+        return None
+    if not 0 <= correct <= 3:
+        return None
+
+    if not (15 <= len(question) <= 220):
+        return None
+    if _persian_ratio(question) < 0.5 or _persian_ratio(" ".join(options)) < 0.5:
+        return None
+
+    explanation = _clean(data.get("explanation"), 200)
+    return {"question": question, "options": options, "correct": correct,
+            "explanation": explanation}
+
