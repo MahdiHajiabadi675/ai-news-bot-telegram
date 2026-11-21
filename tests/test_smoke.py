@@ -1862,4 +1862,60 @@ kv.put = lambda key, value: _store.__setitem__(key, value)
 storage.save_state({"ok": True})
 check("بعد از سالم‌شدن KV، نوشتن عادی کار می‌کند", _store.get("state") == {"ok": True})
 
+print("Views, why-it-matters, brief:")
+import src.views as _views  # noqa: E402
+import src.why as _why  # noqa: E402
+import src.brief as _brief  # noqa: E402
+
+_view_html = (
+    '<div data-post="chan/101"><span class="tgme_widget_message_views">1.2K</span></div>'
+    '<div data-post="chan/102"><span class="tgme_widget_message_views">987</span></div>'
+    '<div data-post="chan/103"><span>بدون بازدید</span></div>'
+)
+_view_map = _views.parse_views(_view_html)
+check("بازدید: پارس ۱.۲K و عدد ساده", _view_map == {101: 1200, 102: 987})
+check("بازدید: پسوند M", _views._to_int("2.5M") == 2_500_000)
+check("بازدید: عدد فارسی", _views._to_int("۱٬۲۰۰") == 1200)
+
+_now_v = datetime.datetime.utcnow()
+_recent = _now_v.isoformat() + "Z"
+_views_log = (
+    [{"published": True, "category": "model_release", "views": 4000, "published_at": _recent} for _ in range(2)]
+    + [{"published": True, "category": "other", "views": 1000, "published_at": _recent} for _ in range(2)]
+)
+_vstats = _views.stats(_views_log)
+check("بازدید: میانگین کل و دسته", _vstats["count"] == 4 and _vstats["by_category"]["model_release"] == 4000)
+_vitems = [{"category": "model_release", "hot": 50, "hot_reasons": []}]
+_vn = _views.boost(_vitems, _views_log)
+check("بازدید: دستهٔ پرخوان تقویت می‌شود", _vn == 1 and _vitems[0]["hot"] > 50)
+check("بازدید: دلیل تقویت ثبت می‌شود", any("پرخوان" in r for r in _vitems[0]["hot_reasons"]))
+_vtop = _views.top_report(_views_log, n=5)
+check("بازدید: گزارش /top عنوان و عدد دارد", "پربازدید" in _vtop and "4.0K" in _vtop)
+
+check("چرا مهم است: دستهٔ مدل", "گزینه" in _why.why_it_matters({"category": "model_release"}))
+check("چرا مهم است: شایعه هشدار می‌دهد", "رسمی" in _why.why_it_matters({"category": "model_release", "confidence": "rumor"}))
+check("چرا مهم است: دستهٔ ناشناخته خالی است", _why.why_it_matters({"category": "other"}) == "")
+_why_msg = formatting.format_message({
+    "title_fa": "خبر", "summary_fa": "خلاصه", "source": "OpenAI",
+    "category": "model_release", "link": "https://x.com/a",
+})
+check("چرا مهم است: در پیام کانال می‌آید", "چرا مهم است" in _why_msg)
+
+_now_b = datetime.datetime.utcnow()
+_brief_items = [{
+    "published": True, "category": "model_release", "title_fa": f"خبر {i}",
+    "source": "منبع", "link": f"https://x.com/{i}",
+    "published_at": _now_b.isoformat() + "Z", "importance": "high", "score": 80,
+} for i in range(1, 7)]
+_brief_pick = _brief.pick(_brief.recent_news(_brief_items, _now_b))
+check("صبحانه: حداکثر ۵ خبر", len(_brief_pick) == 5)
+_brief_txt = _brief.format_brief(_brief_pick)
+check("صبحانه: عنوان و لینک دارد", "خبر" in _brief_txt and "https://x.com" in _brief_txt)
+check("صبحانه: زیر سقف تلگرام", len(_brief_txt) <= 4000)
+
+print("Quiz bank:")
+check("کوییز: حداقل ۲۰ سؤال (چرخهٔ طولانی‌تر)", len(quiz.QUIZ_BANK) >= 20)
+check("کوییز: همهٔ گزینه‌ها یکتا و ایندکس درست",
+      all(len(set(q["options"])) == 4 and 0 <= q["correct"] < 4 for q in quiz.QUIZ_BANK))
+
 print(f"\n{_passed} تست با موفقیت گذشت ✅")
