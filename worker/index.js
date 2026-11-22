@@ -583,6 +583,7 @@ async function handleMessage(msg, env, BASE, CHANNEL_ID, ADMIN_ID) {
       '<code>/sources</code> — اعتبار منابع\n' +
       '<code>/feeds</code> — سلامت فیدها\n' +
       '<code>/runs</code> — آمار اجراها\n' +
+      '<code>/dashboard</code> — خلاصهٔ ۲۴ ساعت\n' +
       '<code>/top</code> — پربازدیدترین پست‌ها\n' +
       '<code>/weekly</code> — جمع‌بندی و نظرسنجی\n' +
       '<code>/stats</code> — آمار کلی\n\n' +
@@ -603,11 +604,13 @@ async function handleMessage(msg, env, BASE, CHANNEL_ID, ADMIN_ID) {
             { text: '🗞 اجراها', callback_data: 'cmd:runs' }
           ],
           [
+            { text: '📟 داشبورد', callback_data: 'cmd:dashboard' }
+          ],
+          [
             { text: '👁 پربازدید', callback_data: 'cmd:top' },
             { text: '🗓 هفتگی', callback_data: 'cmd:weekly' }
           ],
           [
-            { text: '📟 داشبورد', callback_data: 'cmd:dashboard' },
             { text: '📣 سوژه‌ها', callback_data: 'cmd:tips' },
             { text: '💾 پشتیبان', callback_data: 'cmd:backup' }
           ],

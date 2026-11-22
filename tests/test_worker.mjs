@@ -286,6 +286,14 @@ check('/start: شمارش فارسی صف',
   startMsg.caption.includes('در انتظار تایید: <b>۱</b>') &&
   startMsg.caption.includes('آماده انتشار: <b>۱</b>'));
 check('/start: طول کپشن مجاز (زیر ۱۰۲۴)', startMsg.caption.length < 1024);
+{
+  // قاعدهٔ پروژه: هر دستور منو هم دکمه دارد و هم در لیست متن /start آمده است
+  const btns = startMsg.reply_markup.inline_keyboard.flat().map(b => b.callback_data);
+  for (const c of ['status', 'pending', 'sources', 'feeds', 'runs', 'dashboard', 'stats', 'top', 'weekly', 'tips', 'backup', 'clear']) {
+    check(`/start: دکمهٔ ${c}`, btns.includes('cmd:' + c));
+  }
+  check('/start: /dashboard در لیست متن', startMsg.caption.includes('/dashboard'));
+}
 check('/start: همهٔ دکمه‌های منو',
   ['cmd:status', 'cmd:pending', 'cmd:sources', 'cmd:feeds', 'cmd:stats', 'cmd:runs', 'cmd:clear', 'auto_on', 'auto_off']
     .every(d => startMsg.reply_markup.inline_keyboard.flat().some(b => b.callback_data === d)));
