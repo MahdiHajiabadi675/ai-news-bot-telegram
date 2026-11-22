@@ -22,12 +22,14 @@ import requests
 
 from . import cloudflare_kv, storage
 from .config import (
-    CHANNEL_HANDLE, CHANNEL_ID, DRY_RUN, VIEWS_BOOST_MAX, VIEWS_ENABLED,
+    CHANNEL_HANDLE, CHANNEL_ID, DISPLAY_TZ_OFFSET_MIN, DRY_RUN, REACTIONS_BOOST_MAX,
+    REACTIONS_ENABLED, REACTIONS_WEIGHT, VIEWS_BOOST_MAX, VIEWS_ENABLED,
     VIEWS_MIN_INTERVAL_MIN, VIEWS_PAGES,
 )
 from .formatting import clip, escape_html
 
 KEY = "views_state"
+REACTIONS_KEY = "reactions"
 TIMEOUT = 12
 _UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -47,6 +49,101 @@ def channel_handle() -> str:
         raw = raw[len("https://t.me/"):]
     raw = raw.lstrip("@").strip("/")
     return raw if re.fullmatch(r"[A-Za-z0-9_]{4,64}", raw or "") else ""
+
+
+def channel_post_link(message_id) -> str:
+    """لینک عمومی یک پست کانال؛ بدون هندل عمومی، رشتهٔ خالی."""
+    handle = channel_handle()
+    try:
+        mid = int(message_id)
+    except (TypeError, ValueError):
+        return ""
+    return f"https://t.me/{handle}/{mid}" if handle and mid > 0 else ""
+
+
+def load_reactions() -> dict:
+    """{message_id: {total, by, at}} — نوشتهٔ Worker یا خود پایپ‌لاین."""
+    data = cloudflare_kv.get(REACTIONS_KEY, {})
+    return data if isinstance(data, dict) else {}
+
+
+def record_reactions(message_id, reactions, now=None) -> int:
+    """جمع واکنش‌های یک پست را در KV ذخیره می‌کند. هرگز استثنا نمی‌دهد."""
+    if not REACTIONS_ENABLED or DRY_RUN:
+        return 0
+    try:
+        mid = int(message_id)
+    except (TypeError, ValueError):
+        return 0
+    totals, total = {}, 0
+    for r in reactions or []:
+        if not isinstance(r, dict):
+            continue
+        try:
+            n = int(r.get("total_count") or 0)
+        except (TypeError, ValueError):
+            n = 0
+        if n <= 0:
+            continue
+        emoji = str((r.get("type") or {}).get("emoji") or "?")
+        totals[emoji] = totals.get(emoji, 0) + n
+        total += n
+    if total <= 0:
+        return 0
+    try:
+        data = load_reactions()
+        data[str(mid)] = {
+            "total": total,
+            "by": totals,
+            "at": (now or datetime.utcnow()).isoformat() + "Z",
+        }
+        if len(data) > 500:
+            newest = sorted(
+                data.items(),
+                key=lambda kv: str((kv[1] or {}).get("at") or ""),
+                reverse=True,
+            )[:500]
+            data = dict(newest)
+        cloudflare_kv.put(REACTIONS_KEY, data)
+    except Exception as e:  # noqa: BLE001
+        print(f"[REACTIONS] save failed: {type(e).__name__}")
+        return 0
+    return total
+
+
+def reaction_info(item, data=None) -> tuple:
+    """(تعداد کل, ایموجی غالب) برای یک آیتم منتشرشده."""
+    if not isinstance(item, dict):
+        return 0, ""
+    known = item.get("reactions") if isinstance(item.get("reactions"), dict) else {}
+    try:
+        total = int(item.get("reactions_total") or known.get("total") or 0)
+    except (TypeError, ValueError):
+        total = 0
+    if item.get("message_id") is not None:
+        data = load_reactions() if data is None else data
+        row = data.get(str(item.get("message_id"))) or {}
+        if isinstance(row, dict):
+            total = max(total, int(row.get("total") or 0))
+            known = row if row else known
+    top = ""
+    by = known.get("by") if isinstance(known, dict) else None
+    if isinstance(by, dict) and by:
+        top = max(by.items(), key=lambda kv: int(kv[1] or 0))[0]
+    return total, top
+
+
+def engagement(item, data=None) -> int:
+    """امتیاز محبوبیت: بازدید + وزن واکنش‌ها."""
+    if not isinstance(item, dict):
+        return 0
+    try:
+        views = int(item.get("views") or 0)
+    except (TypeError, ValueError):
+        views = 0
+    reactions, _ = reaction_info(item, data)
+    return views + (reactions * max(0, REACTIONS_WEIGHT) if REACTIONS_ENABLED else 0)
+
 
 
 def _to_int(raw: str, suffix: str = "") -> int:
@@ -195,17 +292,18 @@ def _published_at(item):
 
 
 def stats(log, days: int = 14) -> dict:
-    """میانگین بازدید کل و هر دسته (فقط پست‌های دارای بازدید)."""
+    """میانگین محبوبیت (بازدید + واکنش) کل و هر دسته."""
     cutoff = datetime.utcnow() - timedelta(days=max(1, days))
+    data = load_reactions()
     rows = []
     for p in log or []:
         if not isinstance(p, dict) or not p.get("published"):
             continue
-        if p.get("deleted") or not p.get("views"):
-            continue
-        if p.get("category") in ("edu", "digest", "paper", "brief"):
+        if p.get("deleted") or p.get("category") in ("edu", "digest", "paper", "brief", "weekly"):
             continue
         if _published_at(p) < cutoff:
+            continue
+        if engagement(p, data) <= 0:
             continue
         rows.append(p)
 
@@ -214,11 +312,11 @@ def stats(log, days: int = 14) -> dict:
 
     by_cat = {}
     for p in rows:
-        by_cat.setdefault(str(p.get("category") or "other"), []).append(int(p["views"]))
+        by_cat.setdefault(str(p.get("category") or "other"), []).append(engagement(p, data))
 
     return {
         "count": len(rows),
-        "overall": float(mean(int(p["views"]) for p in rows)),
+        "overall": float(mean(engagement(p, data) for p in rows)),
         "by_category": {k: float(mean(v)) for k, v in by_cat.items() if len(v) >= 2},
     }
 
@@ -229,13 +327,14 @@ def boost(items, log) -> int:
     جذابیت اضافه می‌کند. حداقل ۲ نمونه در دسته لازم است تا نویز اثر نگذارد.
     برمی‌گرداند: تعداد خبرهای تقویت‌شده.
     """
-    if not VIEWS_ENABLED or not items:
+    if not items or not (VIEWS_ENABLED or REACTIONS_ENABLED):
         return 0
     s = stats(log)
     overall = s.get("overall") or 0
     if overall <= 0 or not s.get("by_category"):
         return 0
 
+    cap = max(1, VIEWS_BOOST_MAX + (REACTIONS_BOOST_MAX if REACTIONS_ENABLED else 0))
     boosted = 0
     for item in items:
         if not isinstance(item, dict):
@@ -246,7 +345,7 @@ def boost(items, log) -> int:
         ratio = avg / overall
         if ratio < 1.10:
             continue
-        bonus = min(VIEWS_BOOST_MAX, max(1, round((ratio - 1) * 10)))
+        bonus = min(cap, max(1, round((ratio - 1) * 10)))
         item["hot"] = min(100, int(item.get("hot") or 0) + bonus)
         reasons = item.get("hot_reasons")
         tag = f"دستهٔ پرخوان (+{bonus})"
@@ -255,8 +354,47 @@ def boost(items, log) -> int:
         boosted += 1
 
     if boosted:
-        print(f"[VIEWS] boosted {boosted} item(s) from high-view categories")
+        print(f"[VIEWS] boosted {boosted} item(s) from high-engagement categories")
     return boosted
+
+
+def best_hours(log, days: int = 14, limit: int = 3) -> list:
+    """بهترین ساعت‌های انتشار به وقت محلی بر اساس محبوبیت پست‌ها."""
+    cutoff = datetime.utcnow() - timedelta(days=max(1, days))
+    data = load_reactions()
+    buckets = {}
+    for p in log or []:
+        if not isinstance(p, dict) or not p.get("published") or p.get("deleted"):
+            continue
+        if p.get("category") in ("edu", "digest", "paper", "brief", "weekly"):
+            continue
+        when = _published_at(p)
+        if when < cutoff or engagement(p, data) <= 0:
+            continue
+        local = when + timedelta(minutes=DISPLAY_TZ_OFFSET_MIN)
+        buckets.setdefault(local.hour, []).append(engagement(p, data))
+    if sum(len(v) for v in buckets.values()) < 6:
+        return []
+    rows = [(h, float(mean(v)), len(v)) for h, v in buckets.items() if len(v) >= 2]
+    rows.sort(key=lambda r: r[1], reverse=True)
+    return rows[:limit]
+
+
+def top_items(log, days: int = 7, limit: int = 3) -> list:
+    """پرمحبوبیت‌ترین خبرهای بازهٔ اخیر (برای جمع‌بندی هفتگی)."""
+    cutoff = datetime.utcnow() - timedelta(days=max(1, days))
+    data = load_reactions()
+    rows = []
+    for p in log or []:
+        if not isinstance(p, dict) or not p.get("published") or p.get("deleted"):
+            continue
+        if p.get("category") in ("edu", "digest", "paper", "brief", "weekly"):
+            continue
+        if _published_at(p) < cutoff or engagement(p, data) <= 0:
+            continue
+        rows.append(p)
+    rows.sort(key=lambda p: engagement(p, data), reverse=True)
+    return rows[:max(1, limit)]
 
 
 def _fmt_views(n) -> str:
@@ -272,33 +410,43 @@ def _fmt_views(n) -> str:
 
 
 def top_report(log=None, n: int = 10) -> str:
-    """متن دستور /top — پربازدیدترین‌های اخیر."""
+    """متن دستور /top — پرمحبوبیت‌ترین‌های اخیر (بازدید + واکنش)."""
     log = log if isinstance(log, list) else storage.load_published()
+    data = load_reactions()
     rows = [
         p for p in log
-        if isinstance(p, dict) and p.get("published") and not p.get("deleted") and p.get("views")
+        if isinstance(p, dict) and p.get("published") and not p.get("deleted")
+        and engagement(p, data) > 0
     ]
     if not rows:
         hint = "" if channel_handle() else (
             "\n\n⚠️ برای فعال‌شدن این قابلیت، متغیر <code>CHANNEL_HANDLE</code> را "
             "مثل <code>@your_channel</code> تنظیم کن."
         )
-        return "📈 هنوز بازدیدی ثبت نشده است." + hint
+        return "📈 هنوز بازدید/واکنشی ثبت نشده است." + hint
 
-    rows.sort(key=lambda p: int(p.get("views") or 0), reverse=True)
-    lines = [f"📈 <b>پربازدیدترین‌های اخیر</b>", "─" * 20]
+    rows.sort(key=lambda p: engagement(p, data), reverse=True)
+    lines = ["📈 <b>پربازدیدترین‌های اخیر</b>", "─" * 20]
     for i, p in enumerate(rows[:n], 1):
         title = escape_html(clip(p.get("title_fa") or p.get("title"), 70))
         source = escape_html(clip(p.get("source"), 30))
-        lines.append(f"{i}. <b>{_fmt_views(p.get('views'))}</b> — {title}")
+        views = _fmt_views(p.get("views"))
+        reactions, top_emoji = reaction_info(p, data)
+        extra = f" · {top_emoji} {_fmt_views(reactions)}" if reactions else ""
+        lines.append(f"{i}. <b>{views}</b>{extra} — {title}")
         if source:
             lines.append(f"   <i>{source}</i>")
 
     s = stats(log)
     if s.get("by_category"):
         best = sorted(s["by_category"].items(), key=lambda kv: kv[1], reverse=True)[:3]
-        lines += ["", "─" * 20, "📊 <b>میانگین بازدید دسته‌ها</b>"]
+        lines += ["", "─" * 20, "📊 <b>میانگین محبوبیت دسته‌ها</b>"]
         lines += [f"• {escape_html(k)}: {_fmt_views(v)}" for k, v in best]
+
+    hours = best_hours(log)
+    if hours:
+        lines += ["", "🕐 <b>بهترین ساعت‌های انتشار (ایران)</b>"]
+        lines += [f"• {h:02d}:00 — میانگین {_fmt_views(v)}" for h, v, _ in hours]
 
     lines += ["", f"<i>نمونهٔ آماری: {s.get('count', 0)} پست</i>"]
     return "\n".join(lines)[:3900]

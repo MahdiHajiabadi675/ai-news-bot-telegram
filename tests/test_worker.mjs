@@ -21,7 +21,10 @@ const KV = {
 };
 const calls = [];
 globalThis.fetch = async (url, opts) => {
-  const body = opts?.body ? JSON.parse(opts.body) : {};
+  let body = {};
+  if (typeof opts?.body === 'string') {
+    try { body = JSON.parse(opts.body); } catch { body = {}; }
+  }
   const method = String(url).split('/').pop();
   calls.push({ method, body });
   // پیام‌های تلگرام یک message_id برمی‌گردانند؛ /undo و /editlast به آن نیاز دارند
@@ -601,6 +604,93 @@ console.log('Engagement features:');
   await Promise.all(pends2);
   const secondAlert = calls.find(c => c.method === 'sendMessage' && String(c.body.text).includes('از کار افتاده'));
   check('هشدار: حداکثر هر ۳ ساعت یک‌بار تکرار می‌شود', !secondAlert);
+
+  // ───────── حلقهٔ تعامل v2 ─────────
+  console.log('Engagement loop v2:');
+  const publicMsg = (text, chatId = 555) => ({
+    message: {
+      text, chat: { id: chatId, type: 'private' },
+      from: { id: chatId, first_name: 'کاربر', username: 'reader' },
+    },
+  });
+
+  store.delete('reactions');
+  await send({ message_reaction_count: {
+    message_id: 777,
+    reactions: [{ type: { emoji: '🔥' }, total_count: 5 }, { type: { emoji: '👍' }, total_count: 2 }],
+  } });
+  const rx = get('reactions');
+  check('واکنش: آپدیت کانال در KV ذخیره می‌شود', rx && rx['777'] && rx['777'].total === 7);
+  check('واکنش: تفکیک ایموجی ذخیره می‌شود', rx['777'].by['🔥'] === 5);
+  set('published', [{ id: 'rx1', message_id: 777, title_fa: 'خبر واکنشی', published: true }]);
+  await send(msg('/top'));
+  const rxTop = last('sendMessage').body.text;
+  check('/top: خبر بدون بازدید ولی با واکنش هم می‌آید', rxTop.includes('خبر واکنشی') && rxTop.includes('🔥'));
+
+  set('subscribers', []);
+  await send(publicMsg('/subscribe'));
+  check('/subscribe: کاربر خصوصی مشترک می‌شود',
+    last('sendMessage').body.chat_id === 555 && last('sendMessage').body.text.includes('اشتراک فعال')
+    && (get('subscribers') || []).length === 1);
+  await send(publicMsg('/subscribe'));
+  check('/subscribe: اشتراک تکراری ثبت نمی‌شود',
+    last('sendMessage').body.text.includes('از قبل مشترک') && (get('subscribers') || []).length === 1);
+
+  store.delete('tips');
+  store.delete('tip_rate');
+  await send(publicMsg('/tip OpenAI مدل تازه‌ای معرفی کرد'));
+  const tipRows = get('tips') || [];
+  check('/tip: سوژهٔ مخاطب ذخیره می‌شود', tipRows.length === 1 && tipRows[0].status === 'new');
+  const tipNotice = calls.find(c => c.method === 'sendMessage' && c.body.chat_id === ADMIN
+    && c.body.reply_markup);
+  check('/tip: ادمین دکمهٔ تایید/رد می‌گیرد',
+    !!tipNotice && JSON.stringify(tipNotice.body.reply_markup).includes('tipok:'));
+
+  await send(publicMsg('/tip یک سوژهٔ دوم در همان ساعت'));
+  check('/tip: محدودیت نرخ ساعتی',
+    last('sendMessage').body.text.includes('سهمیه') && (get('tips') || []).length === 1);
+
+  calls.length = 0;
+  await send(cb(`tipok:${tipRows[0].id}`));
+  const tipPub = calls.find(c => c.method === 'sendMessage' && c.body.chat_id === '@chan');
+  check('/tip: سوژهٔ تاییدشده در کانال منتشر می‌شود',
+    !!tipPub && tipPub.body.text.includes('از مخاطبان') && (get('tips') || [])[0].status === 'approved');
+
+  await send(publicMsg('/unsubscribe'));
+  check('/unsubscribe: اشتراک قطع می‌شود',
+    last('sendMessage').body.text.includes('قطع شد') && (get('subscribers') || []).length === 0);
+
+  set('weekly_state', {
+    last_date: '2026-01-03',
+    poll: { closed: true, total_votes: 9 },
+    result: { category: 'tool_release', label: 'ابزار و محصول', votes: 6, total: 9,
+      expires_at: new Date(Date.now() + 86400000).toISOString() },
+  });
+  await send(msg('/weekly'));
+  const weeklyTxt = last('sendMessage').body.text;
+  check('/weekly: نتیجهٔ نظرسنجی را نشان می‌دهد',
+    weeklyTxt.includes('انتخاب مخاطبان') && weeklyTxt.includes('ابزار و محصول'));
+
+  set('tips', [{ id: 'tip-1', chat_id: 555, user: 'کاربر', text: 'سوژهٔ تست', status: 'new' }]);
+  await send(msg('/tips'));
+  const tipsCall = [...calls].reverse().find(c => c.method === 'sendMessage' && c.body.reply_markup);
+  check('/tips: فهرست سوژه‌ها با دکمهٔ بررسی',
+    !!tipsCall && JSON.stringify(tipsCall.body.reply_markup).includes('tipok:tip-1'));
+
+  calls.length = 0;
+  await send(msg('/backup'));
+  check('/backup: فایل پشتیبان به ادمین می‌رود',
+    !!calls.find(c => c.method === 'sendDocument')
+    && last('sendMessage').body.text.includes('پشتیبان ارسال شد'));
+
+  set('pending', [item('share1')]);
+  set('approved', []);
+  set('published', []);
+  set('state', { paused: false, auto_publish_enabled: true, daily_post_count: 0 });
+  await send(cb('approve:share1'));
+  const shareCall = calls.find(c => c.method === 'editMessageReplyMarkup'
+    && JSON.stringify(c.body.reply_markup || {}).includes('t.me/share'));
+  check('اشتراک‌گذاری: دکمهٔ «فرستادن به دوست» زیر پست می‌آید', !!shareCall);
 }
 
 console.log(`\n${passed} تست Worker با موفقیت گذشت ✅`);

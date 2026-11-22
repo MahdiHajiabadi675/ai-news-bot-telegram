@@ -1918,4 +1918,253 @@ check("کوییز: حداقل ۲۰ سؤال (چرخهٔ طولانی‌تر)", l
 check("کوییز: همهٔ گزینه‌ها یکتا و ایندکس درست",
       all(len(set(q["options"])) == 4 and 0 <= q["correct"] < 4 for q in quiz.QUIZ_BANK))
 
+# ─────────────────────────────────────────────────────────────
+# Engagement loop v2: reactions, weekly poll, storylines, backup, tips, DMs
+# ─────────────────────────────────────────────────────────────
+import json
+import tempfile
+
+import src.weekly as weekly
+import src.storylines as storylines
+import src.backup as backup
+import src.tips as tips
+import src.subscribers as subscribers
+
+print("Reactions:")
+_store.clear()
+_views._orig_reaction_dry = getattr(_views, "DRY_RUN", False)
+_views.DRY_RUN = False
+_views.REACTIONS_ENABLED = True
+_total = _views.record_reactions(77, [
+    {"type": {"emoji": "🔥"}, "total_count": 3},
+    {"type": {"emoji": "❤️"}, "total_count": 1},
+])
+check("واکنش: جمع واکنش‌ها ذخیره می‌شود", _total == 4 and _store["reactions"]["77"]["total"] == 4)
+_rx_total, _rx_top = _views.reaction_info({"message_id": 77})
+check("واکنش: ایموجی غالب و تعداد", _rx_total == 4 and _rx_top == "🔥")
+check("واکنش: در امتیاز محبوبیت وزن دارد", _views.engagement({"message_id": 77, "views": 5}) == 45)
+
+_rx_log = [{"published": True, "message_id": 77, "title_fa": "خبر واکنشی", "views": 5,
+            "category": "model_release", "published_at": datetime.datetime.utcnow().isoformat() + "Z"}]
+_rx_top_txt = _views.top_report(_rx_log, n=3)
+check("واکنش: /top ایموجی و تعداد را نشان می‌دهد", "🔥" in _rx_top_txt and "4" in _rx_top_txt)
+check("واکنش: top_items بر اساس واکنش مرتب می‌کند", _views.top_items(_rx_log)[0]["message_id"] == 77)
+
+
+class _JsonResp:
+    def __init__(self, payload):
+        self._payload = payload
+
+    def json(self):
+        return self._payload
+
+
+_orig_bot_get = getattr(bot.requests, "get", None)
+bot.requests.get = lambda *a, **k: _JsonResp({"ok": True, "result": [{
+    "update_id": 909,
+    "message_reaction_count": {"message_id": 88, "reactions": [
+        {"type": {"emoji": "👍"}, "total_count": 6},
+    ]},
+}]})
+_rx_state, _rx_handled = bot.poll_updates({})
+if _orig_bot_get is None:
+    del bot.requests.get
+else:
+    bot.requests.get = _orig_bot_get
+check("واکنش: آپدیت message_reaction_count پردازش می‌شود",
+      len(_rx_handled) == 1 and _rx_state["last_update_id"] == 909
+      and _store["reactions"]["88"]["total"] == 6)
+
+print("Weekly poll loop:")
+_store.clear()
+weekly.DRY_RUN = False
+_orig_stop_poll = weekly.bot.stop_poll
+weekly.bot.stop_poll = lambda mid: {"ok": True, "result": {"poll": {"options": [
+    {"voter_count": 1}, {"voter_count": 6}, {"voter_count": 2}, {"voter_count": 0},
+]}}}
+_now_w = datetime.datetime.utcnow()
+_store["weekly_state"] = {"poll": {
+    "message_id": 55,
+    "options": [
+        {"category": "model_release", "text": "انتشار مدل جدید"},
+        {"category": "tool_release", "text": "ابزار و محصول"},
+        {"category": "research", "text": "پژوهش و مقاله"},
+        {"category": "funding", "text": "سرمایه‌گذاری"},
+    ],
+    "closes_at": (_now_w - datetime.timedelta(hours=1)).isoformat() + "Z",
+    "closed": False,
+}}
+_weekly_state = weekly.refresh(_now_w)
+weekly.bot.stop_poll = _orig_stop_poll
+check("نظرسنجی: بعد از زمان بسته می‌شود",
+      _weekly_state["poll"]["closed"] is True and _weekly_state["poll"]["total_votes"] == 9)
+check("نظرسنجی: برندهٔ رأی‌گیری ذخیره می‌شود",
+      _weekly_state.get("result", {}).get("category") == "tool_release")
+check("نظرسنجی: برنده تا روزهای بوست فعال است", weekly.winner_category(_now_w) == "tool_release")
+
+_poll_items = [
+    {"category": "tool_release", "hot": 50, "hot_reasons": []},
+    {"category": "model_release", "hot": 50, "hot_reasons": []},
+]
+_poll_boosted = weekly.boost(_poll_items, _now_w)
+check("نظرسنجی: فقط دستهٔ برنده بوست می‌گیرد",
+      _poll_boosted == 1 and _poll_items[0]["hot"] == 56 and _poll_items[1]["hot"] == 50)
+check("نظرسنجی: دلیل بوست ثبت می‌شود", any("مخاطبان" in r for r in _poll_items[0]["hot_reasons"]))
+
+_poll_pick = _brief.pick([
+    {"category": "model_release", "importance": "medium", "score": 95,
+     "published_at": _now_w.isoformat() + "Z"},
+    {"category": "tool_release", "importance": "medium", "score": 10,
+     "published_at": _now_w.isoformat() + "Z"},
+], limit=2)
+check("نظرسنجی: صبحانه دستهٔ برنده را اول می‌گذارد",
+      _poll_pick[0]["category"] == "tool_release")
+
+_recap_log = _rx_log + [{"published": True, "category": "tool_release", "views": 900,
+                          "title_fa": "خبر دوم", "published_at": _now_w.isoformat() + "Z"}]
+_recap = weekly.format_recap(_recap_log, _recap_log, _now_w)
+check("جمع‌بندی: عنوان و نوار روند دارد", "جمع‌بندی هفته" in _recap and "📊" in _recap)
+check("جمع‌بندی: /weekly نتیجهٔ نظرسنجی را نشان می‌دهد", "انتخاب مخاطبان" in weekly.report(_now_w))
+
+_expired = weekly.load_state()
+_expired["result"]["expires_at"] = (_now_w - datetime.timedelta(days=1)).isoformat() + "Z"
+weekly.save_state(_expired)
+check("نظرسنجی: بعد از انقضا اثرش برداشته می‌شود", weekly.winner_category(_now_w) == "")
+_expired["result"]["expires_at"] = (_now_w + datetime.timedelta(days=3)).isoformat() + "Z"
+weekly.save_state(_expired)
+
+print("Storylines:")
+_store.clear()
+storylines.CHANNEL_HANDLE = "@testchan"
+storylines.CHANNEL_ID = "@testchan"
+storylines.DRY_RUN = False
+storylines.STORYLINES_ENABLED = True
+_store["stories"] = {"openai": [{
+    "id": "old-1", "title": "OpenAI GPT-5", "message_id": 11,
+    "published_at": (_now_w - datetime.timedelta(days=2)).isoformat() + "Z",
+}]}
+_story_items = [{"id": "new-1", "title": "OpenAI releases a new model", "category": "model_release"}]
+_story_links = storylines.enrich(_story_items, _now_w)
+check("پیش‌زمینه: موجودیت‌ها استخراج می‌شوند", "openai" in storylines.extract({"title": "OpenAI news"}))
+check("پیش‌زمینه: لینک پست قبلی اضافه می‌شود",
+      _story_links == 1
+      and _story_items[0]["background"][0]["link"] == "https://t.me/testchan/11")
+storylines.record(_story_items[0], 22, _now_w)
+_story_index = storylines.load_index()
+check("پیش‌زمینه: پست جدید در تایم‌لاین ثبت می‌شود",
+      any(r.get("message_id") == 22 for r in _story_index.get("openai", [])))
+
+print("KV backup:")
+_store.clear()
+_store["state"] = {"daily_post_count": 2}
+_store["published"] = [{"id": "x"}]
+_store["unknown_key"] = "ignored"
+_snap = backup.snapshot()
+check("پشتیبان: کلیدهای مهم در snapshot هستند",
+      _snap["keys"]["state"]["daily_post_count"] == 2 and _snap["keys"]["published"][0]["id"] == "x")
+check("پشتیبان: کلید ناشناخته در snapshot نمی‌آید", "unknown_key" not in _snap["keys"])
+_payload = json.loads(backup.payload_bytes().decode("utf-8"))
+check("پشتیبان: فایل JSON معتبر است", _payload["format"] == "ai-news-bot-kv" and _payload["version"] == 1)
+_backup_dir = tempfile.mkdtemp()
+_backup_path = os.path.join(_backup_dir, "backup.json")
+with open(_backup_path, "w", encoding="utf-8") as _f:
+    json.dump({"keys": {"state": {"daily_post_count": 7}, "unknown_key": 1}}, _f)
+_orig_backup_put = backup.cloudflare_kv.put
+backup.cloudflare_kv.put = lambda k, v: (_store.__setitem__(k, v) or True)
+_written = backup.restore(_backup_path)
+backup.cloudflare_kv.put = _orig_backup_put
+check("بازیابی: فقط کلیدهای شناخته‌شده نوشته می‌شوند",
+      _written == 1 and _store["state"]["daily_post_count"] == 7
+      and _store.get("unknown_key") == "ignored")
+
+print("Reader tips:")
+_store.clear()
+tips.TIPS_ENABLED = True
+tips.DRY_RUN = False
+_ok, _msg, _tip = tips.add(901, "علی", "این یک سوژهٔ خبری تازه برای کانال است")
+check("سوژه: متن معتبر ذخیره می‌شود", _ok is True and isinstance(_tip, dict) and tips.find(_tip["id"]))
+_ok2, _msg2, _ = tips.add(901, "علی", "یک سوژهٔ دیگر در همان ساعت برای تست")
+check("سوژه: محدودیت نرخ ساعتی اعمال می‌شود", _ok2 is False and "سهمیه" in _msg2)
+check("سوژه: در صف بررسی ادمین است", len(tips.pending()) == 1)
+check("سوژه: متن کاربر escape می‌شود",
+      "<script>" not in tips.format_post({"user": "<x>", "text": "<script>alert(1)</script>"}))
+_ok3, _msg3, _tip3 = tips.add(902, "مریم", "سوژهٔ دوم از کاربر دیگر برای تست")
+check("سوژه: کاربر دیگر سهمیهٔ جدا دارد", _ok3 is True and _tip3 is not None)
+tips.mark(_tip["id"], "approved")
+check("سوژه: بعد از بررسی از صف خارج می‌شود", all(t.get("id") != _tip["id"] for t in tips.pending()))
+
+print("DM subscribers:")
+_store.clear()
+subscribers.DM_DIGEST_MAX = 2
+check("اشتراک: افزودن کاربر جدید", subscribers.add(1001, "ali") is True)
+check("اشتراک: افزودن دوباره تکراری نیست", subscribers.add(1001, "ali") is False)
+check("اشتراک: شمارش درست است", subscribers.count() == 1)
+check("اشتراک: سقف ظرفیت رعایت می‌شود",
+      subscribers.add(1002, "b") is True and subscribers.add(1003, "c") is False)
+check("اشتراک: حذف کار می‌کند",
+      subscribers.remove(1001) is True and subscribers.remove(1001) is False and subscribers.count() == 1)
+
+print("Publishing hygiene & translation retry:")
+_store.clear()
+publisher.QUIET_HOURS = "0-7"
+check("بهداشت: ساعت سکوت تشخیص داده می‌شود",
+      publisher._quiet_hours(datetime.datetime(2026, 1, 1, 22, 0)) is True)
+check("بهداشت: خارج از ساعت سکوت مانعی نیست",
+      publisher._quiet_hours(datetime.datetime(2026, 1, 1, 10, 0)) is False)
+publisher.PUBLISH_MIN_GAP_MIN = 20
+_gap_now = datetime.datetime.utcnow()
+check("بهداشت: فاصلهٔ کوتاه بین راندها رد می‌شود",
+      publisher._gap_ok({"last_publish_at": (_gap_now - datetime.timedelta(minutes=10)).isoformat() + "Z"}, _gap_now) is False)
+check("بهداشت: فاصلهٔ کافی مجاز است",
+      publisher._gap_ok({"last_publish_at": (_gap_now - datetime.timedelta(minutes=30)).isoformat() + "Z"}, _gap_now) is True)
+
+publisher.SHARE_BUTTON_ENABLED = True
+_views.CHANNEL_HANDLE = "@testchan"
+_share = publisher._share_markup({"title": "خبر تست"}, 5)
+_share_url = _share["inline_keyboard"][0][0]["url"] if _share else ""
+check("اشتراک‌گذاری: دکمهٔ لینک پست کانال ساخته می‌شود",
+      "t.me/share" in _share_url and "t.me/testchan/5" in __import__("urllib.parse", fromlist=["unquote"]).unquote(_share_url))
+
+publisher.TRANSLATE_RETRY_MAX = 2
+publisher.QUIET_HOURS = ""
+publisher.PUBLISH_MIN_GAP_MIN = 0
+_orig_localize = analyzer.localize
+_orig_pub_send = publisher.send_message
+_orig_pub_edit = publisher.edit_message_reply_markup
+_orig_pub_story = publisher.storylines.record
+_orig_bale_mirror = publisher.bale.mirror
+_orig_bsky_mirror = publisher.bluesky.mirror
+analyzer.localize = lambda item: None
+_sent_tr = []
+publisher.send_message = lambda c, t, **kw: (_sent_tr.append(t) or {"ok": True, "result": {"message_id": 1}})
+publisher.edit_message_reply_markup = lambda *a, **k: {"ok": True}
+publisher.storylines.record = lambda *a, **k: True
+publisher.bale.mirror = lambda it: None
+publisher.bluesky.mirror = lambda it: None
+publisher.storage.load_published = lambda: []
+publisher.storage.save_published = lambda items: None
+_saved_tr = []
+publisher.storage.save_approved = lambda items: _saved_tr.extend(items)
+
+_tr_item = {"id": "tr-1", "title_fa": "خبر", "summary_fa": "خلاصه",
+            "link": "https://x.com/a", "translated": False, "hold_translation": True}
+_tr_state = {"daily_post_count": 0,
+             "daily_post_date": datetime.datetime.utcnow().date().isoformat()}
+publisher.publish_approved(_tr_state, [_tr_item])
+check("ترجمه: شکست اول یک راند در صف می‌ماند",
+      _tr_item.get("translate_tries") == 1 and _tr_item.get("hold_translation") is True
+      and not _sent_tr and _saved_tr)
+_tr_item["translated"] = True
+publisher.publish_approved(_tr_state, [_tr_item])
+check("ترجمه: بعد از موفقیت منتشر می‌شود",
+      _tr_item.get("hold_translation") is False and len(_sent_tr) == 1
+      and _tr_item.get("status") == "published")
+
+analyzer.localize = _orig_localize
+publisher.send_message = _orig_pub_send
+publisher.edit_message_reply_markup = _orig_pub_edit
+publisher.storylines.record = _orig_pub_story
+publisher.bale.mirror = _orig_bale_mirror
+publisher.bluesky.mirror = _orig_bsky_mirror
+
 print(f"\n{_passed} تست با موفقیت گذشت ✅")

@@ -1,11 +1,20 @@
+import re
 import requests
-from datetime import datetime, date
-from .config import BOT_TOKEN, CHANNEL_ID, ADMIN_ID, MAX_POSTS_PER_RUN, MAX_POSTS_PER_DAY
+from datetime import datetime, date, timedelta
+from urllib.parse import quote
+
+from .config import (
+    BOT_TOKEN, CHANNEL_ID, ADMIN_ID, MAX_POSTS_PER_RUN, MAX_POSTS_PER_DAY,
+    DISPLAY_TZ_OFFSET_MIN, PUBLISH_MIN_GAP_MIN, QUIET_HOURS, SHARE_BUTTON_ENABLED,
+    TRANSLATE_RETRY_MAX,
+)
 from . import storage
-from .bot import send_message, pin_message
+from .bot import send_message, pin_message, edit_message_reply_markup
 from . import bale
 from . import bluesky
-from .formatting import format_message  # noqa: F401  (re-export برای سازگاری)
+from . import storylines
+from . import views
+from .formatting import format_message, safe_link, clip  # noqa: F401  (re-export برای سازگاری)
 
 BASE = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
@@ -14,9 +23,68 @@ def _item_key(item):
     return item.get("id") or item.get("hash") or ""
 
 
+def _local_now(now=None):
+    return (now or datetime.utcnow()) + timedelta(minutes=DISPLAY_TZ_OFFSET_MIN)
+
+
+def _quiet_hours(now=None) -> bool:
+    """آیا الان در بازهٔ سکوت است؟ قالب: "0-7" یا "23-7" (به وقت ایران)."""
+    raw = str(QUIET_HOURS or "").strip()
+    if not raw:
+        return False
+    m = re.match(r"^(\d{1,2})\s*-\s*(\d{1,2})$", raw)
+    if not m:
+        return False
+    start, end = int(m.group(1)) % 24, int(m.group(2)) % 24
+    hour = _local_now(now).hour
+    if start == end:
+        return False
+    if start < end:
+        return start <= hour < end
+    return hour >= start or hour < end
+
+
+def _gap_ok(state, now=None) -> bool:
+    """حداقل فاصلهٔ بین دو راند انتشار (داخل یک راند اعمال نمی‌شود)."""
+    gap = max(0, int(PUBLISH_MIN_GAP_MIN or 0))
+    if not gap:
+        return True
+    last = str((state or {}).get("last_publish_at") or "").replace("Z", "")
+    if not last:
+        return True
+    try:
+        last_dt = datetime.fromisoformat(last)
+    except ValueError:
+        return True
+    return (now or datetime.utcnow()) - last_dt >= timedelta(minutes=gap)
+
+
+def _share_markup(item, message_id=None):
+    """دکمهٔ «فرستادن به دوست» — لینک پست کانال، وگرنه لینک منبع."""
+    if not SHARE_BUTTON_ENABLED:
+        return None
+    link = views.channel_post_link(message_id) or safe_link(item.get("link"))
+    if not link:
+        return None
+    title = clip(item.get("title_fa") or item.get("title") or "خبر AI", 120)
+    share = (
+        "https://t.me/share/url?url=" + quote(link, safe="")
+        + "&text=" + quote(title, safe="")
+    )
+    return {"inline_keyboard": [[{"text": "📤 فرستادن به دوست", "url": share}]]}
+
+
 def publish_approved(state, approved_items=None):
     if state.get("paused"):
         print("[INFO] Bot is paused, skipping publish")
+        return state
+
+    now_utc = datetime.utcnow()
+    if _quiet_hours(now_utc):
+        print(f"[INFO] Quiet hours ({QUIET_HOURS}) — keeping queue for later")
+        return state
+    if not _gap_ok(state, now_utc):
+        print(f"[INFO] Publish gap ({PUBLISH_MIN_GAP_MIN}m) not passed — keeping queue")
         return state
 
     today = date.today().isoformat()
@@ -82,6 +150,29 @@ def publish_approved(state, approved_items=None):
             remaining.append(item)
             continue
 
+        # 🔤 اگر ترجمه شکست خورده، یک راند دیگر صبر کن و دوباره تلاش کن
+        if item.get("hold_translation"):
+            tries = int(item.get("translate_tries") or 0)
+            if tries < max(0, TRANSLATE_RETRY_MAX):
+                try:
+                    from .analyzer import localize
+                    localize(item)
+                except Exception as e:  # noqa: BLE001
+                    print(f"[TRANSLATE] retry failed: {type(e).__name__}")
+                item["translate_tries"] = tries + 1
+                if item.get("translated") is not False:
+                    item["hold_translation"] = False
+                    print(f"[TRANSLATE] retry succeeded: {key}")
+                elif item["translate_tries"] >= max(1, TRANSLATE_RETRY_MAX):
+                    item["hold_translation"] = False
+                    print(f"[TRANSLATE] giving up after {item['translate_tries']} retry: {key}")
+                else:
+                    # هنوز یک راند دیگر فرصت دارد؛ این دور منتشر نشود
+                    remaining.append(item)
+                    continue
+            else:
+                item["hold_translation"] = False
+
         try:
             text = format_message(item)
         except Exception as e:
@@ -93,6 +184,7 @@ def publish_approved(state, approved_items=None):
 
         if result and result.get("ok"):
             state["daily_post_count"] += 1
+            state["last_publish_at"] = datetime.utcnow().isoformat() + "Z"
             item["status"] = "published"
             item["published_at"] = datetime.utcnow().isoformat() + "Z"
             msg_id = (result.get("result") or {}).get("message_id")
@@ -100,6 +192,18 @@ def publish_approved(state, approved_items=None):
             if msg_id:
                 # برای /undo و /editlast لازم است
                 entry["message_id"] = msg_id
+                # 📤 دکمهٔ اشتراک‌گذاری با لینک همین پست کانال
+                markup = _share_markup(item, msg_id)
+                if markup:
+                    try:
+                        edit_message_reply_markup(msg_id, markup)
+                    except Exception as e:  # noqa: BLE001
+                        print(f"[WARN] share button failed: {type(e).__name__}")
+                # 🧵 ثبت در تایم‌لاین موضوعی برای پست‌های بعدی
+                try:
+                    storylines.record(entry, msg_id)
+                except Exception as e:  # noqa: BLE001
+                    print(f"[WARN] storyline record failed: {type(e).__name__}")
             published_log.append(entry)
             to_mirror.append(dict(item))
             if key:
