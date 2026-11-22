@@ -1,0 +1,41 @@
+name: Tests
+
+# تست‌ها فقط وقتی کد عوض می‌شود اجرا می‌شوند؛ pipeline ساعتی دیگر هر بار ۵۰۰+ تست را اجرا نمی‌کند.
+on:
+  push:
+    paths-ignore: ['**.md', 'assets/**']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+      - run: pip install -r requirements.txt ruff
+      - name: Lint (خطاهای واقعی)
+        run: ruff check .
+      - name: Smoke tests
+        # خروجی تست‌ها شبیه‌سازی است؛ فقط در صورت شکست چاپ می‌شود
+        run: |
+          python tests/test_smoke.py > smoke.log 2>&1 || { cat smoke.log; exit 1; }
+          tail -n 1 smoke.log
+
+  worker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+      - name: Worker tests
+        run: node tests/test_worker.mjs

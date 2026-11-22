@@ -36,15 +36,9 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Run smoke tests
-        # خروجی تست‌ها شبیه‌سازی است (مدل و پست جعلی)؛ فقط در صورت شکست چاپ می‌شود تا با لاگ واقعی اشتباه گرفته نشود
-        run: |
-          python tests/test_smoke.py > smoke.log 2>&1 || { cat smoke.log; exit 1; }
-          tail -n 1 smoke.log
-
-      - name: Run Worker tests
-        # Worker همان بخشی است که ۲۴/۷ اجرا می‌شود (وبهوک ادمین)؛ نباید بدون تست دیپلوی شود.
-        run: node tests/test_worker.mjs
+      - name: Sanity check
+        # تست‌های کامل در tests.yml (روی هر push) اجرا می‌شوند؛ اینجا فقط بررسی سریع که کد import می‌شود
+        run: python -c "import main"
 
       - name: Run pipeline
         # ورودی dispatch مستقیم داخل shell نمی‌رود (جلوگیری از command injection)
