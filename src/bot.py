@@ -1,3 +1,4 @@
+from . import clock
 import re
 import requests
 from datetime import datetime, timedelta
@@ -222,7 +223,7 @@ def last_published():
     فقط پست‌هایی که message_id دارند و در پنجرهٔ EDIT_WINDOW_HOURS هستند.
     """
     log = storage.load_published()
-    now = datetime.utcnow()
+    now = clock.utcnow()
     for i in range(len(log) - 1, -1, -1):
         p = log[i]
         if not isinstance(p, dict) or not p.get("published"):
@@ -272,7 +273,7 @@ def do_undo(chat_id=None):
         send_message(chat_id or ADMIN_ID, f"⚠️ حذف نشد: {res}")
         return False
     item["deleted"] = True
-    item["deleted_at"] = datetime.utcnow().isoformat() + "Z"
+    item["deleted_at"] = clock.utcnow().isoformat() + "Z"
     storage.save_published(log)
     send_message(chat_id or ADMIN_ID, f"✅ حذف شد: «{_undo_title(item)}»")
     return True
@@ -301,7 +302,7 @@ def apply_published_edit(state, message_id, new_summary):
         if not isinstance(item, dict) or item.get("message_id") != message_id:
             continue
         item["summary_fa"] = clip(new_summary.strip(), 700)
-        item["edited_at"] = datetime.utcnow().isoformat() + "Z"
+        item["edited_at"] = clock.utcnow().isoformat() + "Z"
         res = edit_message_text(message_id, format_message(item))
         state["_editing_pub"] = None
         if res and res.get("ok"):
@@ -507,7 +508,7 @@ def _handle_callback(cb, state):
         if item:
             item["status"] = "approved"
             item["admin_action"] = "scheduled"
-            item["schedule_at"] = (datetime.utcnow() + timedelta(hours=hours)).isoformat() + "Z"
+            item["schedule_at"] = (clock.utcnow() + timedelta(hours=hours)).isoformat() + "Z"
             approved.append(item)
             storage.save_pending(pending)
             storage.save_approved(approved)
@@ -904,8 +905,7 @@ def _item_key(item):
     return item.get("id") or item.get("hash") or ""
 
 def _now():
-    from datetime import datetime
-    return datetime.utcnow().isoformat() + "Z"
+    return clock.utcnow().isoformat() + "Z"
 
 def _parse_iso(iso):
     from datetime import datetime
@@ -917,11 +917,10 @@ def _parse_iso(iso):
 
 def _ago_text(iso):
     """«۳ ساعت پیش» / «۱۲ دقیقه پیش» / «۲ روز پیش»"""
-    from datetime import datetime
     t = _parse_iso(iso)
     if not t:
         return "؟"
-    mins = max(0, int((datetime.utcnow() - t).total_seconds() // 60))
+    mins = max(0, int((clock.utcnow() - t).total_seconds() // 60))
     if mins < 60:
         return f"{mins} دقیقه پیش"
     if mins < 60 * 48:
@@ -1070,7 +1069,7 @@ def _send_review(item):
 def notify_admin_new(item):
     if not ADMIN_ID:
         return
-    text = f"🔔 خبر جدید (تایید خودکار — در صف انتشار):\n\n"
+    text = "🔔 خبر جدید (تایید خودکار — در صف انتشار):\n\n"
     text += f"<b>{_escape_html(item['title_fa'])}</b>\n"
     text += f"{_escape_html(item['summary_fa'])}\n\n"
     text += f"📌 {_escape_html(item['importance'])} | {_escape_html(item['confidence'])}\n"

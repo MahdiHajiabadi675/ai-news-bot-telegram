@@ -1,3 +1,4 @@
+from . import clock
 import calendar
 import feedparser
 import hashlib
@@ -173,7 +174,7 @@ def collect(seen: set) -> list:
     articles = []
     collected_ids = set()
     health = {}
-    now = datetime.utcnow()
+    now = clock.utcnow()
     oldest_ok = now - timedelta(hours=MAX_ITEM_AGE_HOURS)
 
     with ThreadPoolExecutor(max_workers=FETCH_WORKERS) as pool:
@@ -242,7 +243,7 @@ def collect(seen: set) -> list:
                 "link": link,
                 "summary": summary,
                 "published_at": published.isoformat() + "Z" if published else None,
-                "collected_at": datetime.utcnow().isoformat() + "Z",
+                "collected_at": clock.utcnow().isoformat() + "Z",
                 "status": "new",
                 "published": False
             })

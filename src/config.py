@@ -285,7 +285,6 @@ TRUST_SCORES = {
     "Mistral AI": 5,
     "Qwen Blog": 5,
     # تحلیل و خبرنامهٔ تخصصی
-    "AI News": 4,
     "Import AI": 4,
     "Interconnects": 4,
     "Simon Willison": 4,

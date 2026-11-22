@@ -14,6 +14,7 @@
 
 همهٔ خطاها بلعیده می‌شوند؛ این ماژول هرگز نباید انتشار خبر را متوقف کند.
 """
+from . import clock
 import re
 from datetime import datetime, timedelta
 from statistics import mean
@@ -95,7 +96,7 @@ def record_reactions(message_id, reactions, now=None) -> int:
         data[str(mid)] = {
             "total": total,
             "by": totals,
-            "at": (now or datetime.utcnow()).isoformat() + "Z",
+            "at": (now or clock.utcnow()).isoformat() + "Z",
         }
         if len(data) > 500:
             newest = sorted(
@@ -232,7 +233,7 @@ def sync(now=None, force: bool = False, log=None) -> dict:
         print("[VIEWS] no public channel handle (set CHANNEL_HANDLE=@your_channel)")
         return {"ok": False, "reason": "no_handle"}
 
-    now_utc = now or datetime.utcnow()
+    now_utc = now or clock.utcnow()
     if not force and _recent_hours(now_utc, VIEWS_MIN_INTERVAL_MIN):
         return {"ok": False, "reason": "too_soon"}
 
@@ -293,7 +294,7 @@ def _published_at(item):
 
 def stats(log, days: int = 14) -> dict:
     """میانگین محبوبیت (بازدید + واکنش) کل و هر دسته."""
-    cutoff = datetime.utcnow() - timedelta(days=max(1, days))
+    cutoff = clock.utcnow() - timedelta(days=max(1, days))
     data = load_reactions()
     rows = []
     for p in log or []:
@@ -360,7 +361,7 @@ def boost(items, log) -> int:
 
 def best_hours(log, days: int = 14, limit: int = 3) -> list:
     """بهترین ساعت‌های انتشار به وقت محلی بر اساس محبوبیت پست‌ها."""
-    cutoff = datetime.utcnow() - timedelta(days=max(1, days))
+    cutoff = clock.utcnow() - timedelta(days=max(1, days))
     data = load_reactions()
     buckets = {}
     for p in log or []:
@@ -382,7 +383,7 @@ def best_hours(log, days: int = 14, limit: int = 3) -> list:
 
 def top_items(log, days: int = 7, limit: int = 3) -> list:
     """پرمحبوبیت‌ترین خبرهای بازهٔ اخیر (برای جمع‌بندی هفتگی)."""
-    cutoff = datetime.utcnow() - timedelta(days=max(1, days))
+    cutoff = clock.utcnow() - timedelta(days=max(1, days))
     data = load_reactions()
     rows = []
     for p in log or []:

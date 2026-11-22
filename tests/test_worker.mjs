@@ -28,6 +28,10 @@ globalThis.fetch = async (url, opts) => {
   const method = String(url).split('/').pop();
   calls.push({ method, body });
   // پیام‌های تلگرام یک message_id برمی‌گردانند؛ /undo و /editlast به آن نیاز دارند
+  // مثل تلگرام واقعی: پیام بیش از ۴۰۹۶ کاراکتر رد می‌شود (باگ قدیمی /feeds همین بود)
+  if (method === 'sendMessage' && String(body.text || '').length > 4096) {
+    return { json: async () => ({ ok: false, error_code: 400, description: 'Bad Request: message is too long' }) };
+  }
   return { json: async () => (method === 'sendMessage' ? { ok: true, result: { message_id: 9000 + calls.length } } : { ok: true }) };
 };
 const env = { BOT_TOKEN: 't', CHANNEL_ID: '@chan', ADMIN_ID: String(ADMIN), KV, WEBHOOK_SECRET: 's3cret' };
@@ -121,6 +125,45 @@ check('/feeds: نمونهٔ ردشده‌ها', fr.includes('🚫 Phone review')
 set('feed_health', {});
 await send(msg('/feeds'));
 check('/feeds خالی', last('sendMessage').body.text.includes('هنوز'));
+
+console.log('Feed health — many feeds (message length):');
+{
+  const big = {};
+  for (let i = 0; i < 55; i++) {
+    big['Feed number ' + i] = { ok: i % 9 !== 0, items: 10, new: 2, filtered: 3, old: 1, err: 'HTTPError: 500',
+      filtered_titles: ['A fairly long filtered headline about phones and cameras ' + i, 'Another long headline that was filtered out ' + i, 'Third sample ' + i],
+      newest: new Date(Date.now() - 3600000).toISOString(), checked: '2026-10-25T10:00:00Z', fails: i % 9 === 0 ? 4 : 0 };
+  }
+  set('feed_health', big);
+  await send(cb('cmd:feeds'));
+  const sent = calls.filter(c => c.method === 'sendMessage');
+  const joined = sent.map(c => c.body.text).join('\n');
+  check('/feeds با ۵۵ فید: حداقل یک پیام واقعاً فرستاده شد', sent.length >= 1);
+  check('/feeds: هر پیام زیر سقف تلگرام', sent.every(c => c.body.text.length <= 4096));
+  check('/feeds: هیچ فیدی جا نمی‌افتد', Array.from({ length: 55 }, (_, i) => 'Feed number ' + i + (i % 9 === 0 ? '</b>' : ':')).every(n => joined.includes(n)));
+  check('/feeds: نمونهٔ ردشده‌ها محدود است', (joined.match(/🚫/g) || []).length <= 10);
+}
+
+console.log('Dashboard:');
+{
+  const nowIso = new Date().toISOString();
+  set('run_log', [{ t: nowIso, collected: true, fetched: 10, analyzed: 8, auto: 3, pending: 2, kv_put: 14, published: 3 }]);
+  set('published', [
+    { published: true, category: 'model_release', published_at: nowIso },
+    { published: false, reject_reason: 'low_score', rejected_at: nowIso },
+  ]);
+  set('heartbeat', { at: nowIso, modules: { views: { ok: false, fails: 3, err: 'KeyError: x' }, edu: { ok: true, fails: 0 } } });
+  set('edu_state', { queue: [1], pub_count: {}, usage: {} });
+  await send(cb('cmd:dashboard'));
+  const dtext = calls.filter(c => c.method === 'sendMessage').map(c => c.body.text).join('\n');
+  check('/dashboard: شمارش‌ها', dtext.includes('منتشرشده: 1') && dtext.includes('ردشده: 1'));
+  check('/dashboard: نرخ خودکار', dtext.includes('۶۰٪') || dtext.includes('60٪'));
+  check('/dashboard: ماژول خراب', dtext.includes('views') && dtext.includes('پیاپی: 3'));
+  check('/dashboard: نوشتن KV', dtext.includes('14'));
+  set('heartbeat', {}); set('run_log', []); set('published', []);
+  await send(msg('/dashboard'));
+  check('/dashboard خالی خطا نمی‌دهد', calls.some(c => c.method === 'sendMessage'));
+}
 
 console.log('Run log:');
 set('run_log', [

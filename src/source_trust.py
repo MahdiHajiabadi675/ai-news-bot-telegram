@@ -18,6 +18,7 @@
 پیاده‌سازی معادل این منطق در worker/index.js هم هست (ثبت تصمیم ادمین لحظه‌ای
 در Worker انجام می‌شود) — اگر اینجا را تغییر دادی، آنجا را هم عوض کن.
 """
+from . import clock
 import re
 from datetime import datetime
 
@@ -67,7 +68,7 @@ def compute_trust(prior: float, pos: float, neg: float) -> float:
 
 def trust_of(source: str, stats: dict, now=None) -> float:
     """اعتبار فعلی یک منبع (۱ تا ۵) با در نظر گرفتن زوال شواهد"""
-    now = now or datetime.utcnow()
+    now = now or clock.utcnow()
     entry = stats.get(source) or {}
     prior = prior_of(source)  # پیش‌فرض اولیه همیشه از config (ویرایش config اعمال می‌شود)
     f = _decay_factor(entry.get("updated"), now)
@@ -81,7 +82,7 @@ def record_decision(stats: dict, source: str, action: str, prior=None, now=None)
     """
     if action not in ("approve", "feature", "reject"):
         return stats
-    now = now or datetime.utcnow()
+    now = now or clock.utcnow()
     entry = stats.get(source) or {"prior": prior if prior is not None else prior_of(source), "pos": 0.0, "neg": 0.0}
     f = _decay_factor(entry.get("updated"), now)
     pos = float(entry.get("pos", 0)) * f

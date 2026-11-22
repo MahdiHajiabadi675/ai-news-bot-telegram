@@ -4,6 +4,7 @@ Gemini Budget — محدودیت سخت روی تعداد درخواست‌ها 
 
 این ماژول در Cloudflare KV ذخیره می‌شود تا بین اجراهای مختلف هم رعایت شود.
 """
+from . import clock
 from datetime import datetime
 from . import cloudflare_kv
 from .config import GEMINI_MIN_INTERVAL_MIN, GEMINI_MAX_CALLS_PER_DAY
@@ -18,7 +19,7 @@ def _load() -> dict:
     data = cloudflare_kv.get(KEY, {})
     if not isinstance(data, dict):
         data = {}
-    today = datetime.utcnow().date().isoformat()
+    today = clock.utcnow().date().isoformat()
     if data.get("date") != today:
         # روز جدید → شمارنده صفر
         data = {"date": today, "count": 0, "last_call_at": data.get("last_call_at")}
@@ -57,7 +58,7 @@ def can_call(min_interval_min=None) -> bool:
     if last and interval > 0:
         try:
             last_dt = datetime.fromisoformat(str(last).replace("Z", ""))
-            elapsed_min = (datetime.utcnow() - last_dt).total_seconds() / 60
+            elapsed_min = (clock.utcnow() - last_dt).total_seconds() / 60
             if elapsed_min < interval:
                 print(f"[BUDGET] Only {elapsed_min:.0f}m since last Gemini call "
                       f"(min {interval}m) — skipping")
@@ -74,5 +75,5 @@ def mark_called():
     _called_this_process = True
     data = _load()
     data["count"] = data.get("count", 0) + 1
-    data["last_call_at"] = datetime.utcnow().isoformat() + "Z"
+    data["last_call_at"] = clock.utcnow().isoformat() + "Z"
     cloudflare_kv.put(KEY, data)

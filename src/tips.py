@@ -4,6 +4,7 @@
 مخاطب می‌تواند سوژه/لینک بفرستد؛ ادمین با یک دکمه تایید یا رد می‌کند.
 بدون سرویس پولی، با محدودیت نرخ ساده در KV.
 """
+from . import clock
 from datetime import datetime, timedelta
 
 from . import cloudflare_kv
@@ -61,7 +62,7 @@ def add(chat_id, user, text, now=None):
         return False, f"متن کوتاه است (حداقل {MIN_LEN} کاراکتر).", None
     if len(body) > MAX_LEN:
         return False, f"متن بلند است (حداکثر {MAX_LEN} کاراکتر).", None
-    now = now or datetime.utcnow()
+    now = now or clock.utcnow()
     if _too_soon(chat_id, now):
         return False, f"سهمیهٔ این ساعت پر شده (حداکثر {TIPS_MAX_PER_HOUR} سوژه در ساعت).", None
     if DRY_RUN:
@@ -110,7 +111,7 @@ def mark(tip_id, status) -> bool:
     for tip in tips:
         if isinstance(tip, dict) and tip.get("id") == tip_id:
             tip["status"] = status
-            tip["reviewed_at"] = datetime.utcnow().isoformat() + "Z"
+            tip["reviewed_at"] = clock.utcnow().isoformat() + "Z"
             changed = True
             break
     if changed:

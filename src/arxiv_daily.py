@@ -11,8 +11,9 @@
     متن انگلیسی منتشر می‌شود (کانال نمی‌خوابد).
   • شناسه‌ها در `arxiv_state.used` نگه داشته می‌شوند تا تکرار نشود.
 """
+from . import clock
 import xml.etree.ElementTree as ET
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 import requests
 
@@ -31,7 +32,7 @@ TAG = "#مقاله_روز #هوش_مصنوعی"
 
 
 def local_now(now=None):
-    return (now or datetime.utcnow()) + timedelta(minutes=DISPLAY_TZ_OFFSET_MIN)
+    return (now or clock.utcnow()) + timedelta(minutes=DISPLAY_TZ_OFFSET_MIN)
 
 
 def _text(entry, tag):
@@ -107,7 +108,7 @@ def maybe_post(state: dict, now=None) -> dict:
             print("[DRY] arxiv skipped (dry-run)")
             return state
 
-        now_utc = now or datetime.utcnow()
+        now_utc = now or clock.utcnow()
         loc = local_now(now_utc)
         today = loc.date().isoformat()
 
@@ -146,7 +147,7 @@ def maybe_post(state: dict, now=None) -> dict:
             log = storage.load_published()
             item = {"id": f"arxiv-{entry['id']}", "title_fa": clip(title_fa, 120),
                     "source": "arXiv", "category": "paper", "published": True,
-                    "published_at": datetime.utcnow().isoformat() + "Z"}
+                    "published_at": clock.utcnow().isoformat() + "Z"}
             if mid:
                 item["message_id"] = mid
             log.append(item)

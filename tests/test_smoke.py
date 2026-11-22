@@ -2173,4 +2173,64 @@ publisher.storylines.record = _orig_pub_story
 publisher.bale.mirror = _orig_bale_mirror
 publisher.bluesky.mirror = _orig_bsky_mirror
 
+
+# ── سلامت ماژول‌ها، خطاگیر main، ساعت و شمارندهٔ KV ──
+print("Module health:")
+import main as _main  # noqa: E402
+import src.modhealth as modhealth  # noqa: E402
+import src.storage as _storage  # noqa: E402
+from src import clock as _clock  # noqa: E402
+
+modhealth.reset()
+check("clock.utcnow: naive و نزدیک به ساعت واقعی",
+      _clock.utcnow().tzinfo is None
+      and abs((_clock.utcnow() - datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)).total_seconds()) < 5)
+
+
+def _boom(*a, **k):
+    raise ValueError("خراب")
+
+
+check("_safe: خطای ماژول اختیاری pipeline را نمی‌خواباند", _main._safe("x", _boom, default="d") == "d")
+check("_safe: خطا ثبت می‌شود", modhealth.current()["x"]["ok"] is False and "ValueError" in modhealth.current()["x"]["err"])
+check("_safe: نتیجهٔ موفق برمی‌گردد", _main._safe("y", lambda v: v + 1, 1) == 2 and modhealth.current()["y"]["ok"])
+
+
+def _kverr(*a, **k):
+    raise _storage.KVError("kv")
+
+
+try:
+    _main._safe("z", _kverr)
+    _kv_passes = False
+except _storage.KVError:
+    _kv_passes = True
+check("_safe: KVError عبور می‌کند (خطر پست تکراری)", _kv_passes)
+
+_prev = {}
+for _i in range(3):
+    modhealth.reset()
+    modhealth.fail("views", ValueError("x"))
+    _prev, _al = modhealth.merge(_prev)
+check("هشدار دقیقاً در سومین خطای پیاپی", _al == ["views"] and _prev["views"]["fails"] == 3)
+modhealth.reset()
+modhealth.fail("views", ValueError("x"))
+_prev, _al = modhealth.merge(_prev)
+check("بعد از آستانه دوباره هشدار نمی‌دهد", _al == [] and _prev["views"]["fails"] == 4)
+modhealth.reset()
+modhealth.ok("views")
+_prev, _al = modhealth.merge(_prev)
+check("موفقیت شمارندهٔ خطا را صفر می‌کند", _prev["views"]["fails"] == 0 and _prev["views"]["ok"] and _prev["views"]["last_ok"])
+modhealth.reset()
+_prev2, _ = modhealth.merge(_prev)
+check("ماژولی که این اجرا نیامد سابقه‌اش حفظ می‌شود", "views" in _prev2)
+
+modhealth.reset()
+modhealth.fail("brief", RuntimeError("boom"))
+_alerts = _storage.heartbeat({"stage": "waiting"})
+_hb = _store.get("heartbeat", {})
+check("heartbeat: وضعیت ماژول‌ها و شمارندهٔ KV ذخیره می‌شود",
+      _hb.get("modules", {}).get("brief", {}).get("ok") is False and "kv" in _hb and _alerts == [])
+modhealth.reset()
+
 print(f"\n{_passed} تست با موفقیت گذشت ✅")

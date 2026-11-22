@@ -5,6 +5,7 @@ Storage — از Cloudflare KV استفاده می‌کنه
 اگر شکست را نادیده بگیریم، خبر در تلگرام منتشر می‌شود ولی «منتشر شد» ثبت نمی‌شود
 و اجرای بعدی دوباره همان خبر را می‌فرستد (پست تکراری).
 """
+from . import clock
 from . import cloudflare_kv
 from .config import DRY_RUN
 
@@ -28,20 +29,29 @@ def _put(key, value):
 
 def ensure_writable():
     """آزمون کوچک نوشتن قبل از انتشار — تا «منتشر شد ولی ثبت نشد» پیش نیاید."""
-    from datetime import datetime
-    _put("health_ping", {"at": datetime.utcnow().isoformat() + "Z"})
+    _put("health_ping", {"at": clock.utcnow().isoformat() + "Z"})
 
 
 def heartbeat(extra=None):
-    """ثبت زمان آخرین اجرا برای /health — شکست این نوشتن اجرا را متوقف نمی‌کند."""
-    from datetime import datetime
-    data = {"at": datetime.utcnow().isoformat() + "Z"}
+    """ثبت زمان آخرین اجرا برای /health — شکست این نوشتن اجرا را متوقف نمی‌کند.
+
+    وضعیت ماژول‌ها (src/modhealth.py) و شمارندهٔ KV هم همین‌جا ذخیره می‌شود تا نوشتن اضافه لازم نباشد.
+    برمی‌گرداند: نام ماژول‌هایی که همین الان به آستانهٔ هشدار رسیده‌اند.
+    """
+    from . import modhealth
+    data = {"at": clock.utcnow().isoformat() + "Z"}
     if isinstance(extra, dict):
         data.update(extra)
+    prev = cloudflare_kv.get("heartbeat", {})
+    mods, alerts = modhealth.merge(prev.get("modules") if isinstance(prev, dict) else {})
+    if mods:
+        data["modules"] = mods
+    data["kv"] = dict(cloudflare_kv.STATS)
     if DRY_RUN:
         print("[DRY] heartbeat skipped (dry-run)")
-        return
+        return alerts
     cloudflare_kv.put("heartbeat", data)
+    return alerts
 
 
 def load_state():
@@ -71,8 +81,7 @@ def save_state(state):
 
 def set_stage(state, stage, error=None):
     state["current_stage"] = stage
-    from datetime import datetime
-    state["stage_updated_at"] = datetime.utcnow().isoformat() + "Z"
+    state["stage_updated_at"] = clock.utcnow().isoformat() + "Z"
     if error:
         state["last_error"] = str(error)
     return state
@@ -140,8 +149,7 @@ def update_feed_health(current: dict) -> list:
     وضعیت فیدها را با سابقهٔ قبلی ادغام و در KV ذخیره می‌کند.
     برمی‌گرداند: نام فیدهایی که همین الان به آستانهٔ هشدار رسیده‌اند.
     """
-    from datetime import datetime
-    now = datetime.utcnow().isoformat() + "Z"
+    now = clock.utcnow().isoformat() + "Z"
     old = cloudflare_kv.get("feed_health", {})
     old = old if isinstance(old, dict) else {}
     merged, newly_failing = {}, []

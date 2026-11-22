@@ -1,5 +1,5 @@
+from . import clock
 import re
-import requests
 from datetime import datetime, date, timedelta
 from urllib.parse import quote
 
@@ -24,7 +24,7 @@ def _item_key(item):
 
 
 def _local_now(now=None):
-    return (now or datetime.utcnow()) + timedelta(minutes=DISPLAY_TZ_OFFSET_MIN)
+    return (now or clock.utcnow()) + timedelta(minutes=DISPLAY_TZ_OFFSET_MIN)
 
 
 def _quiet_hours(now=None) -> bool:
@@ -56,7 +56,7 @@ def _gap_ok(state, now=None) -> bool:
         last_dt = datetime.fromisoformat(last)
     except ValueError:
         return True
-    return (now or datetime.utcnow()) - last_dt >= timedelta(minutes=gap)
+    return (now or clock.utcnow()) - last_dt >= timedelta(minutes=gap)
 
 
 def _share_markup(item, message_id=None):
@@ -79,7 +79,7 @@ def publish_approved(state, approved_items=None):
         print("[INFO] Bot is paused, skipping publish")
         return state
 
-    now_utc = datetime.utcnow()
+    now_utc = clock.utcnow()
     if _quiet_hours(now_utc):
         print(f"[INFO] Quiet hours ({QUIET_HOURS}) — keeping queue for later")
         return state
@@ -140,7 +140,7 @@ def publish_approved(state, approved_items=None):
                 due = datetime.fromisoformat(str(sched).replace("Z", ""))
             except ValueError:
                 due = None
-            if due and due > datetime.utcnow():
+            if due and due > clock.utcnow():
                 print(f"[INFO] Scheduled for {sched} — keeping in queue")
                 remaining.append(item)
                 continue
@@ -184,9 +184,9 @@ def publish_approved(state, approved_items=None):
 
         if result and result.get("ok"):
             state["daily_post_count"] += 1
-            state["last_publish_at"] = datetime.utcnow().isoformat() + "Z"
+            state["last_publish_at"] = clock.utcnow().isoformat() + "Z"
             item["status"] = "published"
-            item["published_at"] = datetime.utcnow().isoformat() + "Z"
+            item["published_at"] = clock.utcnow().isoformat() + "Z"
             msg_id = (result.get("result") or {}).get("message_id")
             entry = {**item, "published": True}
             if msg_id:

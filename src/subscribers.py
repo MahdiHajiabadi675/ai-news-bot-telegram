@@ -4,7 +4,7 @@
 فقط کسانی که خودشان خواسته‌اند، هر صبح «صبحانهٔ AI» را در چت خصوصی می‌گیرند.
 ارسال با Bot API و کاملاً رایگان است؛ محدودیت نرخ با فاصلهٔ کوتاه رعایت می‌شود.
 """
-from datetime import datetime
+from . import clock
 
 from . import cloudflare_kv
 from .config import DM_DIGEST_MAX
@@ -36,7 +36,7 @@ def add(chat_id, user=None) -> bool:
     rows.append({
         "chat_id": chat_id,
         "user": clip(user or "", 60),
-        "at": datetime.utcnow().isoformat() + "Z",
+        "at": clock.utcnow().isoformat() + "Z",
     })
     save(rows)
     return True

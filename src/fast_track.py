@@ -4,7 +4,7 @@ Fast-track processor — انتشار فوری بدون تایید
 منابع انگلیسی: ترجمه با src/translator.py (متن اصلی زیر ترجمه)
 (فعلاً هیچ فیدی fast_track=True ندارد؛ فقط وقتی در collectors.py فعال شود کار می‌کند.)
 """
-from datetime import datetime
+from . import clock
 from .config import CHANNEL_ID, BOT_TOKEN, MAX_POSTS_PER_RUN
 from . import storage, bale
 from .classifier import is_ai_related
@@ -27,7 +27,7 @@ def process_fast_track(articles: list) -> list:
             continue
 
         state = storage.load_state()
-        today = datetime.utcnow().date().isoformat()
+        today = clock.utcnow().date().isoformat()
         if state.get("daily_post_date") != today:
             state["daily_post_date"] = today
             state["daily_post_count"] = 0
@@ -57,7 +57,7 @@ def process_fast_track(articles: list) -> list:
             state["daily_post_count"] += 1
             storage.save_state(state)
             item["status"] = "published"
-            item["published_at"] = datetime.utcnow().isoformat() + "Z"
+            item["published_at"] = clock.utcnow().isoformat() + "Z"
             published.append(item)
             print(f"[FAST] Published: {item['title_fa'][:50]}")
         else:

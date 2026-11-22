@@ -9,9 +9,10 @@
   • دستور /backup همین کار را فوری انجام می‌دهد.
   • بازیابی دستی: python -m src.backup --restore backup.json
 """
+from . import clock
 import json
 import sys
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 from . import bot, cloudflare_kv
 from .config import (
@@ -29,7 +30,7 @@ KEYS = (
 
 
 def _local_now(now=None):
-    return (now or datetime.utcnow()) + timedelta(minutes=DISPLAY_TZ_OFFSET_MIN)
+    return (now or clock.utcnow()) + timedelta(minutes=DISPLAY_TZ_OFFSET_MIN)
 
 
 def snapshot() -> dict:
@@ -42,7 +43,7 @@ def snapshot() -> dict:
     return {
         "format": "ai-news-bot-kv",
         "version": 1,
-        "generated_at": datetime.utcnow().isoformat() + "Z",
+        "generated_at": clock.utcnow().isoformat() + "Z",
         "keys": data,
     }
 
@@ -65,7 +66,7 @@ def send_now(chat_id=None) -> bool:
     except Exception as e:  # noqa: BLE001
         print(f"[BACKUP] snapshot failed: {type(e).__name__}: {e}")
         return False
-    name = "ai-news-bot-backup-" + datetime.utcnow().strftime("%Y%m%d-%H%M") + ".json"
+    name = "ai-news-bot-backup-" + clock.utcnow().strftime("%Y%m%d-%H%M") + ".json"
     res = bot.send_document(
         chat_id, name, body,
         caption=f"💾 پشتیبان KV — {len(body) // 1024}KB\nبازیابی: python -m src.backup --restore <file>",
@@ -94,7 +95,7 @@ def maybe_send(state, now=None) -> bool:
             return False
         if not send_now():
             return False
-        st.update({"last_date": today, "at": datetime.utcnow().isoformat() + "Z"})
+        st.update({"last_date": today, "at": clock.utcnow().isoformat() + "Z"})
         cloudflare_kv.put(KEY, st)
         return True
     except Exception as e:  # noqa: BLE001

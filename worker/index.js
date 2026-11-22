@@ -233,7 +233,7 @@ async function handleCallback(cb, env, BASE, CHANNEL_ID, ADMIN_ID) {
   const itemHash = parts[1] || '';
 
   // دکمه‌های منوی /start → همان دستورها را اجرا می‌کنند
-  const menuCommands = ['status', 'pending', 'sources', 'feeds', 'runs', 'stats', 'clear', 'auto', 'top', 'weekly', 'backup', 'tips'];
+  const menuCommands = ['status', 'pending', 'sources', 'feeds', 'runs', 'stats', 'clear', 'auto', 'top', 'weekly', 'backup', 'tips', 'dashboard'];
   if (action === 'cmd' && menuCommands.includes(itemHash)) {
     await answerCallback(BASE, cbId);
     await handleMessage({ text: '/' + itemHash, chat: { id: ADMIN_ID } }, env, BASE, CHANNEL_ID, ADMIN_ID);
@@ -607,6 +607,7 @@ async function handleMessage(msg, env, BASE, CHANNEL_ID, ADMIN_ID) {
             { text: '🗓 هفتگی', callback_data: 'cmd:weekly' }
           ],
           [
+            { text: '📟 داشبورد', callback_data: 'cmd:dashboard' },
             { text: '📣 سوژه‌ها', callback_data: 'cmd:tips' },
             { text: '💾 پشتیبان', callback_data: 'cmd:backup' }
           ],
@@ -705,11 +706,21 @@ async function handleMessage(msg, env, BASE, CHANNEL_ID, ADMIN_ID) {
   } else if (text === '/clear') {
     await askClearQueue(env, BASE, ADMIN_ID);
   } else if (text === '/runs') {
-    await sendMessage(BASE, ADMIN_ID, runsReport(await getJSON(env, 'run_log', []), env));
+    await sendLong(BASE, ADMIN_ID, runsReport(await getJSON(env, 'run_log', []), env));
+  } else if (text === '/dashboard') {
+    await sendLong(BASE, ADMIN_ID, dashboardReport({
+      runs: await getJSON(env, 'run_log', []),
+      published: await getJSON(env, 'published', []),
+      heartbeat: await getJSON(env, 'heartbeat', {}),
+      edu: await getJSON(env, 'edu_state', {}),
+      budget: await getJSON(env, 'gemini_budget', {}),
+      pending: await getJSON(env, 'pending', []),
+      approved: await getJSON(env, 'approved', []),
+    }, env));
   } else if (text === '/feeds') {
-    await sendMessage(BASE, ADMIN_ID, feedsReport(await getJSON(env, 'feed_health', {})));
+    await sendLong(BASE, ADMIN_ID, feedsReport(await getJSON(env, 'feed_health', {})));
   } else if (text === '/sources') {
-    await sendMessage(BASE, ADMIN_ID, sourcesReport(await getJSON(env, 'source_stats', {}), env));
+    await sendLong(BASE, ADMIN_ID, sourcesReport(await getJSON(env, 'source_stats', {}), env));
   } else if (text === '/pause') {
     await updateState(env, { paused: true });
     await sendMessage(BASE, ADMIN_ID, '⏸️ انتشار متوقف شد');
@@ -1180,10 +1191,79 @@ function runsReport(log, env, n = 12) {
       lines.push(`${tag} ${hhmm} — فید ${r.feeds_ok ?? '?'}/${r.feeds_total ?? '?'} | جدید ${r.fetched || 0} → تحلیل ${r.analyzed || 0} ` +
         `(🤖${r.auto || 0} 👀${r.pending || 0} ❌${(r.low_score || 0) + (r.rejected_keyword || 0)}) | ` +
         `📤 منتشر ${r.published || 0} | صف: ${r.queue_pending || 0} تایید، ${r.queue_approved || 0} آماده` +
-        (r.untranslated ? ` | 🔤 ${r.untranslated} ترجمه‌نشده` : ''));
+        (r.untranslated ? ` | 🔤 ${r.untranslated} ترجمه‌نشده` : '') +
+        (r.kv_put ? ` | 💾 ${r.kv_put} نوشتن` : '') +
+        (Array.isArray(r.mod_fail) && r.mod_fail.length ? ` | ⚠️ ${r.mod_fail.join('،')}` : ''));
     } else lines.push(`${tag} ${hhmm} — جمع‌آوری انجام نشد | منتشر: ${r.published || 0}`);
   }
   lines.push('\n🤖 خودکار | 👀 نیازمند تایید شما | ❌ ردشده (کم‌امتیاز/کلمه مشکوک)');
+  return lines.join('\n');
+}
+
+/**
+ * 📟 داشبورد ادمین: خلاصهٔ ۲۴ ساعت اخیر در یک پیام.
+ * فقط از دادهٔ موجود در KV می‌خواند (هیچ نوشتنی ندارد).
+ */
+function dashboardReport(d, env, now = Date.now()) {
+  const dayAgo = now - 24 * 3600000;
+  const runs = (Array.isArray(d.runs) ? d.runs : []).filter(r => Date.parse(r.t) >= dayAgo);
+  const sum = (k) => runs.reduce((a, r) => a + (Number(r[k]) || 0), 0);
+  const pub = (Array.isArray(d.published) ? d.published : []).filter(p => p && Date.parse(p.published_at || p.rejected_at || '') >= dayAgo);
+  const posted = pub.filter(p => p.published);
+  const rejected = pub.filter(p => !p.published);
+  const lines = ['📟 <b>داشبورد ۲۴ ساعت اخیر</b>\n'];
+
+  lines.push(`🏃 اجراها: ${runs.length} | جمع‌آوری‌شده: ${sum('fetched')} | تحلیل: ${sum('analyzed')}`);
+  lines.push(`📤 منتشرشده: ${posted.length} | ❌ ردشده: ${rejected.length} | 🤖 خودکار: ${sum('auto')} | 👀 نیازمند تایید: ${sum('pending')}`);
+  const decided = sum('auto') + sum('pending');
+  if (decided) lines.push(`🎯 نرخ انتشار خودکار: ${Math.round(100 * sum('auto') / decided)}٪`);
+  lines.push(`📋 صف: ${(d.pending || []).length} تایید | ${(d.approved || []).length} آماده`);
+
+  // دسته‌های منتشرشده
+  const cats = {};
+  for (const p of posted) cats[p.category || '؟'] = (cats[p.category || '؟'] || 0) + 1;
+  const topCats = Object.entries(cats).sort((a, b) => b[1] - a[1]).slice(0, 4).map(([c, n]) => `${c} ${n}`);
+  if (topCats.length) lines.push(`🏷 دسته‌ها: ${escapeHtml(topCats.join(' | '))}`);
+
+  // ساعات اوج انتشار (به وقت نمایش)
+  const off = (Number(env?.DISPLAY_TZ_OFFSET_MIN) || 210) * 60000;
+  const hours = {};
+  for (const p of posted) {
+    const t = Date.parse(p.published_at || '');
+    if (Number.isFinite(t)) { const h = new Date(t + off).getUTCHours(); hours[h] = (hours[h] || 0) + 1; }
+  }
+  const peak = Object.entries(hours).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([h, n]) => `${String(h).padStart(2, '0')}:00 (${n})`);
+  if (peak.length) lines.push(`🕒 ساعت‌های پرانتشار: ${peak.join(' | ')}`);
+
+  // علت ردها (برای تنظیم فیلتر)
+  const why = {};
+  for (const p of rejected) why[p.reject_reason || 'admin'] = (why[p.reject_reason || 'admin'] || 0) + 1;
+  const whyText = Object.entries(why).sort((a, b) => b[1] - a[1]).map(([k, n]) => `${k} ${n}`);
+  if (whyText.length) lines.push(`🚫 علت ردها: ${escapeHtml(whyText.join(' | '))}`);
+
+  // KV
+  const kvPuts = sum('kv_put');
+  if (runs.length) lines.push(`💾 نوشتن KV توسط pipeline: ${kvPuts} (میانگین ${Math.round(kvPuts / runs.length)} در هر اجرا؛ سقف رایگان روزانه ≈ ۱۰۰۰ برای کل حساب)`);
+
+  // مدل‌ها
+  const edu = d.edu || {};
+  const todayKey = new Date(now + off).toISOString().slice(0, 10);
+  const u = (edu.usage || {})[todayKey] || {};
+  const via = Object.entries(u.via || {}).map(([k, n]) => `${k} ${n}`).join('، ');
+  lines.push(`🎓 پست آموزشی امروز: ${Number((edu.pub_count || {})[todayKey] || 0)} منتشر | صف ${(edu.queue || []).length} | تلاش ${u.attempts || 0} (✅${u.ok || 0} ❌${u.fail || 0})` + (via ? ` | ${escapeHtml(via)}` : ''));
+  if (d.budget && d.budget.count != null) lines.push(`🤖 درخواست Gemini امروز: ${d.budget.count}`);
+
+  // ماژول‌ها
+  const mods = Object.entries((d.heartbeat || {}).modules || {});
+  const badMods = mods.filter(([, m]) => m && m.ok === false);
+  lines.push('');
+  if (!mods.length) lines.push('🧩 ماژول‌ها: هنوز گزارشی نیست (بعد از اجرای بعدی pipeline).');
+  else if (!badMods.length) lines.push(`🧩 ماژول‌ها: همه سالم (${mods.length})`);
+  else {
+    lines.push(`🧩 ماژول‌های دارای خطا (${badMods.length}/${mods.length}):`);
+    for (const [n, m] of badMods) lines.push(`   ⚠️ <b>${escapeHtml(n)}</b> — ${escapeHtml(clip(m.err || '?', 80))} (پیاپی: ${m.fails || 0})`);
+  }
+  if ((d.heartbeat || {}).at) lines.push(`🕐 آخرین اجرا: ${agoText(d.heartbeat.at, now)}`);
   return lines.join('\n');
 }
 
@@ -1196,10 +1276,15 @@ function feedsReport(health) {
   for (const [n, h] of bad) {
     lines.push(`❌ <b>${escapeHtml(n)}</b> — ${escapeHtml(h.err || '?')} (پیاپی: ${h.fails || 0})`);
   }
+  let samples = 0;  // نمونهٔ ردشده‌ها در کل گزارش حداکثر ۱۰ تا (قبلاً تا ۳ تا برای هر فید → گزارش از سقف تلگرام رد می‌شد)
   for (const [n, h] of good) {
     lines.push(`✅ ${escapeHtml(n)}: ${h.items || 0} آیتم، ${h.new || 0} جدید` + (h.filtered ? `، ${h.filtered} ردشده با فیلتر` : '') +
       (h.old ? `، ${h.old} کهنه` : '') + (h.newest ? ` | آخرین خبر فید: ${agoText(h.newest)}` : ''));
-    for (const t of (h.filtered_titles || []).slice(0, 3)) lines.push(`      🚫 ${escapeHtml(t)}`);
+    for (const t of (h.filtered_titles || []).slice(0, 2)) {
+      if (samples >= 10) break;
+      samples++;
+      lines.push(`      🚫 ${escapeHtml(clip(t, 70))}`);
+    }
   }
   const checked = entries.map(([, h]) => h.checked || '').sort().pop();
   if (checked) lines.push(`\n🕐 آخرین بررسی: ${checked.slice(0, 16).replace('T', ' ')} UTC`);
@@ -1670,6 +1755,37 @@ async function sendBluesky(env, item) {
   }
 }
 
+/**
+ * گزارش‌های بلند ادمین (/feeds, /sources, /runs, ...): تلگرام پیام بالای ۴۰۹۶ کاراکتر را با
+ * «message is too long» رد می‌کند و ادمین هیچ چیز نمی‌بیند. اینجا روی مرز خط تکه می‌شود؛
+ * هر خط گزارش‌ها تگ‌هایش را خودش می‌بندد، پس HTML نصفه نمی‌ماند.
+ * (برای پست‌های کانال استفاده نشود؛ آن‌ها برش و قالب مخصوص خودشان را دارند.)
+ */
+function splitLong(text, limit = 3800) {
+  const out = [];
+  let cur = '';
+  for (let line of String(text ?? '').split('\n')) {
+    while (line.length > limit) {          // خط تکی بسیار بلند
+      if (cur) { out.push(cur); cur = ''; }
+      out.push(line.slice(0, limit));
+      line = line.slice(limit);
+    }
+    if (cur && cur.length + 1 + line.length > limit) { out.push(cur); cur = line; }
+    else cur = cur ? cur + '\n' + line : line;
+  }
+  if (cur) out.push(cur);
+  return out.length ? out : [''];
+}
+
+async function sendLong(BASE, chatId, text, replyMarkup = null) {
+  const parts = splitLong(text);
+  let res = null;
+  for (let i = 0; i < parts.length; i++) {
+    res = await sendMessage(BASE, chatId, parts[i], i === parts.length - 1 ? replyMarkup : null);
+  }
+  return res;
+}
+
 async function sendMessage(BASE, chatId, text, replyMarkup = null) {
   const data = { chat_id: chatId, text, parse_mode: 'HTML' };
   if (replyMarkup) data.reply_markup = replyMarkup;
@@ -2005,6 +2121,7 @@ async function healthSnapshot(env) {
     lastHeartbeat: heartbeat.at || null,
     lastRunPublished: heartbeat.published ?? null,
     queue: { pending: pending.length, approved: approved.length },
+    modulesFailing: Object.entries(heartbeat.modules || {}).filter(([, m]) => m && m.ok === false).map(([n]) => n),
     published: published.filter(p => p && p.published).length,
     edu: {
       queue: (edu.queue || []).length,

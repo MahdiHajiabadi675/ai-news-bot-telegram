@@ -22,6 +22,7 @@
   • نسخهٔ متنی همان پست به کانال بله هم می‌رود (src/bale.py، فقط ارسال).
 هیچ خطایی از این ماژول بیرون نمی‌آید و انتشار اخبار را مختل نمی‌کند.
 """
+from . import clock
 import json
 import re
 import time
@@ -120,7 +121,7 @@ _NUMS = "۱۲۳۴۵۶"
 # ───────────── اسلات ۲ ساعته ─────────────
 
 def local_now(now=None):
-    now = now or datetime.utcnow()
+    now = now or clock.utcnow()
     return now + timedelta(minutes=DISPLAY_TZ_OFFSET_MIN)
 
 
@@ -800,7 +801,7 @@ def maybe_post(state: dict, now=None, force: bool = False) -> dict:
             queue_n = len(est.get("queue") or []) if isinstance(est, dict) else 0
             print(f"[DRY] edu generation/publish skipped (queue={queue_n})")
             return state
-        now_utc = now or datetime.utcnow()
+        now_utc = now or clock.utcnow()
         est = cloudflare_kv.get(KEY, {})
         est = est if isinstance(est, dict) else {}
         try:
@@ -984,7 +985,7 @@ def _log_quiz(quiz_data, message_id=None):
         question = str((quiz_data or {}).get("question") or "")
         entry = {"id": f"quiz-{local_now().date().isoformat()}-{len(log)}", "title_fa": question[:80],
                  "source": "آموزش AI", "category": "edu", "published": True,
-                 "published_at": datetime.utcnow().isoformat() + "Z",
+                 "published_at": clock.utcnow().isoformat() + "Z",
                  "quiz": {k: quiz_data.get(k) for k in ("question", "options", "correct", "explanation")}}
         if message_id:
             entry["message_id"] = message_id
@@ -1102,7 +1103,7 @@ def _publish_due(est, now_utc):
             recent = [r.get("title", "") for r in est.get("recent", []) if isinstance(r, dict)]
             post, tag = builtin_item(done + sent, recent)
             item = {"post": post, "tag": tag, "slot": "builtin", "via": "builtin/local",
-                    "made_at": datetime.utcnow().isoformat() + "Z"}
+                    "made_at": clock.utcnow().isoformat() + "Z"}
             from_builtin = True
 
         post, tag = item.get("post"), item.get("tag", "")
@@ -1121,7 +1122,7 @@ def _publish_due(est, now_utc):
         if from_builtin:
             recent_list = est.get("recent") if isinstance(est.get("recent"), list) else []
             recent_list.append({"title": post["title"], "tag": tag, "via": "builtin/local",
-                                "at": datetime.utcnow().isoformat() + "Z"})
+                                "at": clock.utcnow().isoformat() + "Z"})
             est["recent"] = recent_list[-EDU_RECENT_KEEP:]
         else:
             est["queue"] = (est.get("queue") or [])[1:]
@@ -1133,7 +1134,7 @@ def _publish_due(est, now_utc):
         try:
             log = storage.load_published()
             log.append({"id": f"edu-{item.get('slot', key)}", "title_fa": post["title"], "source": "آموزش AI",
-                        "category": "edu", "published": True, "published_at": datetime.utcnow().isoformat() + "Z"})
+                        "category": "edu", "published": True, "published_at": clock.utcnow().isoformat() + "Z"})
             storage.save_published(log)
         except Exception as e:  # noqa: BLE001
             print(f"[EDU] log failed: {type(e).__name__}")

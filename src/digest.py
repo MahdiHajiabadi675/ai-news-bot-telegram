@@ -11,6 +11,7 @@
   • اگر کمتر از ۳ خبر باشد، پست نمی‌شود (جمع‌بندی بی‌محتوا ارزش ندارد).
   • شناسهٔ هفته در `digest_state.last_week` ذخیره می‌شود تا دوبار پست نشود.
 """
+from . import clock
 from datetime import datetime, timedelta
 
 from . import bale, cloudflare_kv, storage
@@ -29,7 +30,7 @@ TG_LIMIT = 4000
 
 
 def local_now(now=None):
-    return (now or datetime.utcnow()) + timedelta(minutes=DISPLAY_TZ_OFFSET_MIN)
+    return (now or clock.utcnow()) + timedelta(minutes=DISPLAY_TZ_OFFSET_MIN)
 
 
 def week_key(loc) -> str:
@@ -144,7 +145,7 @@ def _log_digest(week: str, message_id=None):
         "source": "جمع‌بندی",
         "category": "digest",
         "published": True,
-        "published_at": datetime.utcnow().isoformat() + "Z",
+        "published_at": clock.utcnow().isoformat() + "Z",
     }
     if message_id:
         entry["message_id"] = message_id
@@ -162,7 +163,7 @@ def maybe_post(state: dict, now=None, force: bool = False) -> dict:
             print("[DRY] digest skipped (dry-run)")
             return state
 
-        now_utc = now or datetime.utcnow()
+        now_utc = now or clock.utcnow()
         loc = local_now(now_utc)
         if not force and (loc.weekday() != WEEKDAY or loc.hour not in HOURS):
             return state

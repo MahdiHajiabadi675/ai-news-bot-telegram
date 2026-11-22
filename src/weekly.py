@@ -12,6 +12,7 @@
 یعنی نتیجهٔ نظرسنجی به‌صورت قطعی روی «نوع پست بعدی» اثر می‌گذارد، نه
 اینکه یک مدل بخواهد حدس بزند.
 """
+from . import clock
 from datetime import datetime, timedelta
 
 from . import bale, cloudflare_kv, storage, views
@@ -41,7 +42,7 @@ FALLBACK_OPTIONS = ("model_release", "tool_release", "research", "funding")
 
 
 def _iso(now=None) -> str:
-    return (now or datetime.utcnow()).isoformat() + "Z"
+    return (now or clock.utcnow()).isoformat() + "Z"
 
 
 def _parse(raw):
@@ -52,7 +53,7 @@ def _parse(raw):
 
 
 def local_now(now=None):
-    return (now or datetime.utcnow()) + timedelta(minutes=DISPLAY_TZ_OFFSET_MIN)
+    return (now or clock.utcnow()) + timedelta(minutes=DISPLAY_TZ_OFFSET_MIN)
 
 
 def load_state() -> dict:
@@ -109,7 +110,7 @@ def category_counts(log, now, days: int = 7) -> list:
 
 def format_recap(items, log, now=None) -> str:
     """متن جمع‌بندی: ۳ خبر برتر + نوار روند دسته‌ها."""
-    now = now or datetime.utcnow()
+    now = now or clock.utcnow()
     lines = ["🗓 <b>جمع‌بندی هفته در AI</b>", "─" * 20]
     medals = ("🥇", "🥈", "🥉")
     for i, p in enumerate(items, 0):
@@ -145,7 +146,7 @@ def format_recap(items, log, now=None) -> str:
 
 
 def format_recap_plain(items, log, now=None) -> str:
-    now = now or datetime.utcnow()
+    now = now or clock.utcnow()
     lines = ["جمع‌بندی هفته در AI", ""]
     for i, p in enumerate(items, 1):
         lines.append(f"{i}. {clip(p.get('title_fa') or p.get('title'), 100)}")
@@ -180,7 +181,7 @@ def _poll_options(log, now) -> list:
 
 def refresh(now=None) -> dict:
     """اگر نظرسنجی به پایان رسیده، ببند و برنده را ذخیره کن."""
-    now = now or datetime.utcnow()
+    now = now or clock.utcnow()
     st = load_state()
     if DRY_RUN:
         return st
@@ -246,7 +247,7 @@ def result_active(now=None) -> dict:
     res = load_state().get("result")
     if not isinstance(res, dict) or not res.get("category"):
         return {}
-    now = now or datetime.utcnow()
+    now = now or clock.utcnow()
     expires = _parse(res.get("expires_at"))
     if expires and now >= expires:
         return {}
@@ -297,7 +298,7 @@ def maybe_post(state: dict, now=None, force: bool = False) -> dict:
     try:
         if not may_post(state, now, force):
             return state
-        now_utc = now or datetime.utcnow()
+        now_utc = now or clock.utcnow()
         loc = local_now(now_utc)
         today = loc.date().isoformat()
         st = load_state()
@@ -371,7 +372,7 @@ def maybe_post(state: dict, now=None, force: bool = False) -> dict:
 
 def report(now=None) -> str:
     """وضعیت جمع‌بندی/نظرسنجی برای دستور /weekly."""
-    now = now or datetime.utcnow()
+    now = now or clock.utcnow()
     st = load_state()
     lines = ["🗓 <b>جمع‌بندی هفتگی</b>"]
     if st.get("last_date"):

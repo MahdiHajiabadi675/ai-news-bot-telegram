@@ -4,6 +4,7 @@ AI News Bot — Telegram channel for AI model news
 Free tier: GitHub Actions + Cloudflare Worker/KV + Telegram Bot API
 (ترجمه با src/translator.py؛ Gemini فعلاً کنار گذاشته شده)
 """
+from src import clock
 import os
 import re
 import sys
@@ -21,7 +22,7 @@ from src.storage import set_stage
 from src.config import (
     DRY_RUN, COLLECT_INTERVAL_MIN, FAST_TRACK_ENABLED,
     HN_ENABLED, HN_MAX_ITEMS,
-    AUTO_PUBLISH_ENABLED, AUTO_PUBLISH_THRESHOLD, AUTO_REJECT_THRESHOLD, AUTO_TRUST_THRESHOLD, HOT_OFFICIAL_MIN,
+    AUTO_PUBLISH_ENABLED, AUTO_REJECT_THRESHOLD, AUTO_TRUST_THRESHOLD, HOT_OFFICIAL_MIN,
     MAX_ARTICLES_PER_RUN, MAX_REVIEWS_PER_RUN,
     TRUST_SCORES, REJECT_KEYWORDS, CATEGORY_WEIGHTS, ADMIN_ID,
     SCORE_SOURCE_WEIGHT, SCORE_IMPORTANCE_WEIGHT, SCORE_CONFIDENCE_WEIGHT, SCORE_CATEGORY_WEIGHT,
@@ -45,6 +46,8 @@ from src import weekly
 from src import storylines
 from src import backup
 from src import translator
+from src import modhealth
+from src import cloudflare_kv
 from src.config import TRANSLATE_RETRY_MAX
 
 
@@ -74,7 +77,7 @@ def calculate_score(item: dict) -> int:
 
 def _should_collect(force, last_collect, now=None, interval_min=None):
     """آیا الان باید اخبار را جمع‌آوری کرد؟"""
-    now = now or datetime.utcnow()
+    now = now or clock.utcnow()
     interval_min = COLLECT_INTERVAL_MIN if interval_min is None else interval_min
 
     if force:
@@ -92,6 +95,23 @@ def _should_collect(force, last_collect, now=None, interval_min=None):
         return True
 
 
+def _safe(name, fn, *args, default=None, **kwargs):
+    """اجرای یک ماژول اختیاری؛ خرابی‌اش pipeline (و انتشار خبر) را نمی‌خواباند.
+
+    KVError عمداً عبور می‌کند: شکست نوشتن در KV یعنی خطر پست تکراری و اجرا باید متوقف شود.
+    نتیجه در modhealth ثبت می‌شود و در /health و /dashboard دیده می‌شود.
+    """
+    try:
+        out = fn(*args, **kwargs)
+    except storage.KVError:
+        raise
+    except Exception as e:  # noqa: BLE001
+        modhealth.fail(name, e)
+        return default
+    modhealth.ok(name)
+    return out
+
+
 def run(force=False):
     """نقطهٔ ورود پایپ‌لاین.
 
@@ -107,12 +127,13 @@ def run(force=False):
 
 
 def _run(force=False):
-    print(f"[{datetime.utcnow().isoformat()}] Pipeline started")
+    print(f"[{clock.utcnow().isoformat()}] Pipeline started")
     if DRY_RUN:
         print("[DRY-RUN] هیچ پیامی ارسال نمی‌شود و هیچ چیزی در KV نوشته نمی‌شود؛ فقط پیش‌نمایش.")
     translator.reset()
+    modhealth.reset()
     # آمار «قیف» همین اجرا برای /runs: چند خبر پیدا شد و کجا کم شد
-    rl = {"t": datetime.utcnow().isoformat() + "Z", "forced": bool(force), "collected": False}
+    rl = {"t": clock.utcnow().isoformat() + "Z", "forced": bool(force), "collected": False}
 
     # 0. KV باید قابل نوشتن باشد، وگرنه هیچ چیز ثبت نمی‌شود ولی تلگرام پست می‌گیرد
     storage.ensure_writable()
@@ -124,7 +145,7 @@ def _run(force=False):
     # هر راند اجرا بودجه انتشار مستقل دارد (سقف MAX_POSTS_PER_RUN)
     # شمارنده در ابتدای هر اجرا صفر می‌شود تا هر اجرا تا ۱۵ پست برود
     state["daily_post_count"] = 0
-    state["daily_post_date"] = datetime.utcnow().date().isoformat()
+    state["daily_post_date"] = clock.utcnow().date().isoformat()
     storage.save_state(state)
 
     # 2. Poll bot updates (admin actions)
@@ -135,19 +156,13 @@ def _run(force=False):
     # 2.5 بازدید پست‌ها (رایگان، از پیش‌نمایش عمومی کانال) — قبل از هر نوشتن دیگری
     #     تا احتمال تداخل با انتشار اخبار کمتر شود. هرگز اجرا را متوقف نمی‌کند.
     if VIEWS_ENABLED:
-        try:
-            views.sync()
-        except Exception as e:  # noqa: BLE001
-            print(f"[VIEWS] skipped: {type(e).__name__}")
+        _safe("views", views.sync)
 
     # 2.6 بستن نظرسنجی هفتهٔ قبل و ثبت برنده (قبل از امتیازدهی همین اجرا)
-    try:
-        weekly.refresh()
-    except Exception as e:  # noqa: BLE001
-        print(f"[WEEKLY] refresh skipped: {type(e).__name__}")
+    _safe("weekly_refresh", weekly.refresh)
 
     # 3. Collect new articles (if interval passed or forced)
-    now = datetime.utcnow()
+    now = clock.utcnow()
     last_collect = state.get("last_collect_time")
     should_collect = _should_collect(force, last_collect, now)
 
@@ -217,8 +232,8 @@ def _run(force=False):
                     articles = [a for a in articles if not a.get("fast_track")]
 
             if articles:
+                # مرحلهٔ «analyzing» فقط در حافظه؛ نوشتن جداگانه در KV نمی‌ارزید (سقف روزانهٔ نوشتن)
                 state = set_stage(state, "analyzing")
-                storage.save_state(state)
                 print("[INFO] Analyzing (local classifier + dynamic source trust)...")
 
                 # اعتبار پویای منابع (از تصمیم‌های ادمین) + تایید چندمنبعی
@@ -240,7 +255,7 @@ def _run(force=False):
                 try:
                     rl["story_links"] = storylines.enrich(analyzed)
                 except Exception as e:  # noqa: BLE001
-                    print(f"[STORY] skipped: {type(e).__name__}")
+                    modhealth.fail("storylines", e)
 
                 # سیگنال Hacker News: اگر خبر واقعاً در HN داغ است، به جذابیت اضافه کن
                 if HN_ENABLED:
@@ -256,13 +271,13 @@ def _run(force=False):
                     try:
                         rl["views_boost"] = views.boost(analyzed, storage.load_published())
                     except Exception as e:  # noqa: BLE001
-                        print(f"[VIEWS] boost skipped: {type(e).__name__}")
+                        modhealth.fail("views_boost", e)
 
                 # 🗳 نتیجهٔ نظرسنجی هفتگی: دستهٔ برنده تا چند روز اولویت می‌گیرد
                 try:
                     rl["poll_boost"] = weekly.boost(analyzed)
                 except Exception as e:  # noqa: BLE001
-                    print(f"[WEEKLY] boost skipped: {type(e).__name__}")
+                    modhealth.fail("weekly_boost", e)
 
                 # بعد از تحلیل، خبر دیده‌شده محسوب می‌شود تا دوباره پردازش نشود.
                 for article in articles:
@@ -278,15 +293,15 @@ def _run(force=False):
                 pending_this_run = 0
                 translated_ok = translated_fail = 0
 
+                rejected_low = []  # یک‌جا ذخیره می‌شود (قبلاً برای هر خبر ردشده یک خواندن + یک نوشتن لیست ۱۵۰۰تایی)
+
                 for item in analyzed:
                     item["score"] = calculate_score(item)
 
                     if item["score"] < AUTO_REJECT_THRESHOLD:
                         rl["low_score"] += 1
                         print(f"[REJECT] Low score ({item['score']}): {item['title'][:50]}")
-                        pub = storage.load_published()
-                        pub.append({**item, "published": False, "rejected_at": _now(), "reject_reason": "low_score"})
-                        storage.save_published(pub)
+                        rejected_low.append({**item, "published": False, "rejected_at": _now(), "reject_reason": "low_score"})
                         continue
 
                     # ترجمه فقط برای خبرهای باقی‌مانده (همهٔ منابع)
@@ -331,6 +346,11 @@ def _run(force=False):
                             reviews_sent += 1
                         print(f"[PENDING] {item['title_fa'][:50]} (score: {item['score']}, trust: {source_trust_now}, hot: {item['hot']}/{item['hot_threshold']:.0f})")
 
+                if rejected_low:
+                    pub = storage.load_published()
+                    pub.extend(rejected_low)
+                    storage.save_published(pub)
+
                 rl["untranslated"] = translated_fail
                 if translated_fail:
                     print(f"[WARN] {translated_fail} item(s) could not be translated (published with 'ترجمه نشده' label)")
@@ -358,13 +378,13 @@ def _run(force=False):
     # 4. پست آموزشی (فقط متن) — قبل از انتشار اخبار، تا اگر انتشار طول کشید یا
     #    اجرا به تایم‌اوت نزدیک شد، اسلات آموزشی از دست نرود.
     #    Gemini اول، در صورت خطا مدل‌های رایگان OpenRouter، در آخر متن آمادهٔ محلی.
-    state = edu_post.maybe_post(state, force=force)
+    state = _safe("edu", edu_post.maybe_post, state, force=force, default=state)
 
     # 5. دایجست هفتگی (جمعه شب، حداکثر یک‌بار در هفته)
-    state = digest.maybe_post(state)
+    state = _safe("digest", digest.maybe_post, state, default=state)
 
     # 6. مقالهٔ روز arXiv (روزی یک‌بار، از ساعت مقرر به بعد)
-    state = arxiv_daily.maybe_post(state)
+    state = _safe("arxiv", arxiv_daily.maybe_post, state, default=state)
 
     # 7. Publish approved items
     state = set_stage(state, "publishing")
@@ -372,10 +392,10 @@ def _run(force=False):
     state = publish_approved(state, approved_to_publish)
 
     # 8. صبحانهٔ AI — بعد از انتشار، تا تازه‌ترین خبرهای همین ساعت هم داخلش باشند
-    state = brief.maybe_post(state)
+    state = _safe("brief", brief.maybe_post, state, default=state)
 
     # 9. جمع‌بندی و نظرسنجی هفتگی (شنبه شب، حداکثر یک‌بار در هفته)
-    state = weekly.maybe_post(state)
+    state = _safe("weekly", weekly.maybe_post, state, default=state)
 
     # 10. Save state
     state = set_stage(state, "waiting")
@@ -387,24 +407,30 @@ def _run(force=False):
         rl["published"] = state.get("daily_post_count", 0)
         rl["queue_pending"] = len(storage.load_pending())
         rl["queue_approved"] = len(storage.load_approved())
+        rl["kv_put"], rl["kv_get"] = cloudflare_kv.STATS["put"], cloudflare_kv.STATS["get"]
+        bad = [n for n, r in modhealth.current().items() if not r["ok"]]
+        if bad:
+            rl["mod_fail"] = bad
         storage.append_run_log(rl)
     except Exception as e:
         print(f"[WARN] run log failed: {e}")
 
     # زمان آخرین اجرا برای /health (شکستش اجرا را متوقف نمی‌کند)
+    # 💾 پشتیبان هفتگی KV (اختیاری) — قبل از heartbeat تا وضعیتش هم ثبت شود
+    _safe("backup", backup.maybe_send, state)
+
     try:
-        storage.heartbeat({"stage": state.get("current_stage"),
-                           "published": state.get("daily_post_count", 0)})
+        alerts = storage.heartbeat({"stage": state.get("current_stage"),
+                                    "published": state.get("daily_post_count", 0)})
+        for name in alerts or []:
+            err = (modhealth.current().get(name) or {}).get("err")
+            if ADMIN_ID:
+                send_message(ADMIN_ID, f"⚠️ ماژول «{name}» {modhealth.ALERT_AT} اجرای پیاپی خطا داده:\n{err}\n\nانتشار خبر ادامه دارد. وضعیت: /dashboard")
     except Exception as e:
         print(f"[WARN] heartbeat failed: {e}")
+    print(f"[KV] requests this run: put={cloudflare_kv.STATS['put']} get={cloudflare_kv.STATS['get']}")
 
-    # 💾 پشتیبان هفتگی KV (اختیاری، بعد از همهٔ نوشتن‌ها)
-    try:
-        backup.maybe_send(state)
-    except Exception as e:  # noqa: BLE001
-        print(f"[BACKUP] skipped: {type(e).__name__}")
-
-    print(f"[{datetime.utcnow().isoformat()}] Pipeline finished")
+    print(f"[{clock.utcnow().isoformat()}] Pipeline finished")
 
 
 _REJECT_RE = re.compile(
@@ -425,8 +451,7 @@ def auto_reject(articles: list) -> list:
 
 
 def _now():
-    from datetime import datetime
-    return datetime.utcnow().isoformat() + "Z"
+    return clock.utcnow().isoformat() + "Z"
 
 
 if __name__ == "__main__":

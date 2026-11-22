@@ -1,0 +1,12 @@
+# فقط برای ruff؛ بسته‌بندی پروژه نیست.
+[tool.ruff]
+line-length = 160
+target-version = "py311"
+extend-exclude = ["worker", "assets"]
+
+[tool.ruff.lint]
+# فقط خطاهای واقعی: syntax، import/متغیر بلااستفاده، نام ناتعریف. سبک‌ها (فرمت/نام‌گذاری) عمداً بیرون است.
+select = ["E9", "F"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["F401", "F811", "F841", "E402"]

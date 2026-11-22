@@ -11,6 +11,7 @@
   • کمتر از ۳ خبر → پست نمی‌شود.
   • شناسهٔ روز در `brief_state.last_date` ذخیره می‌شود تا تکرار نشود.
 """
+from . import clock
 from datetime import datetime, timedelta
 import time
 
@@ -30,7 +31,7 @@ TG_LIMIT = 3900
 
 
 def local_now(now=None):
-    return (now or datetime.utcnow()) + timedelta(minutes=DISPLAY_TZ_OFFSET_MIN)
+    return (now or clock.utcnow()) + timedelta(minutes=DISPLAY_TZ_OFFSET_MIN)
 
 
 def _published_at(item):
@@ -111,7 +112,7 @@ def _log_brief(day: str, message_id=None):
         "source": "صبحانه",
         "category": "brief",
         "published": True,
-        "published_at": datetime.utcnow().isoformat() + "Z",
+        "published_at": clock.utcnow().isoformat() + "Z",
     }
     if message_id:
         entry["message_id"] = message_id
@@ -129,7 +130,7 @@ def maybe_post(state: dict, now=None, force: bool = False) -> dict:
             print("[DRY] brief skipped (dry-run)")
             return state
 
-        now_utc = now or datetime.utcnow()
+        now_utc = now or clock.utcnow()
         loc = local_now(now_utc)
         # پنجرهٔ ۳ ساعته تا تأخیر چندساعتهٔ GitHub Actions صبحانه را از دست ندهد،
         # ولی پست تکراری/عصرگاهی هم نسازد.

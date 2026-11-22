@@ -9,6 +9,7 @@
 ذخیره‌سازی: KV با کلید `stories`:
     {"openai": [{id, title, message_id, published_at}, ...], ...}
 """
+from . import clock
 import re
 from datetime import datetime, timedelta
 
@@ -106,7 +107,7 @@ def enrich(items, now=None) -> int:
     """به خبرهای مرتبط، لینک ۱–۲ پست قبلی همان موضوع را اضافه می‌کند."""
     if not STORYLINES_ENABLED or not items or not handle():
         return 0
-    now = now or datetime.utcnow()
+    now = now or clock.utcnow()
     index = load_index()
     cutoff = now - timedelta(days=max(1, STORY_WINDOW_DAYS))
     linked = 0
@@ -158,7 +159,7 @@ def record(item, message_id, now=None) -> bool:
     entities = item.get("_story_entities") or extract(item)
     if not entities:
         return False
-    now = now or datetime.utcnow()
+    now = now or clock.utcnow()
     row = {
         "id": item.get("id") or item.get("hash") or "",
         "title": clip(item.get("title_fa") or item.get("title") or "", 120),

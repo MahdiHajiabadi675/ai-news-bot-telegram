@@ -23,6 +23,9 @@ HEADERS = {
     "Content-Type": "application/json"
 }
 
+# شمارندهٔ درخواست‌های همین اجرا (برای دیدن مصرف سقف روزانهٔ KV در /runs و /dashboard)
+STATS = {"get": 0, "put": 0}
+
 TIMEOUT_S = 10
 RETRIES = 3
 BACKOFF_S = (0.5, 1.0, 2.0)
@@ -35,6 +38,7 @@ def _retryable(status: int) -> bool:
 
 def get(key: str, default=None):
     """خواندن از KV — کلید ناموجود (404) خطا نیست؛ خطای گذرا retry می‌شود."""
+    STATS["get"] += 1
     last_err = None
     for attempt in range(RETRIES):
         try:
@@ -69,6 +73,7 @@ def put(key: str, value):
         print(f"[ERROR] KV put {key}: not JSON-serializable: {e}")
         return False
 
+    STATS["put"] += 1
     last_err = None
     for attempt in range(RETRIES):
         try:
