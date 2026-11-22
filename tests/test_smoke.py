@@ -2090,6 +2090,12 @@ check("سوژه: متن کاربر escape می‌شود",
       "<script>" not in tips.format_post({"user": "<x>", "text": "<script>alert(1)</script>"}))
 _ok3, _msg3, _tip3 = tips.add(902, "مریم", "سوژهٔ دوم از کاربر دیگر برای تست")
 check("سوژه: کاربر دیگر سهمیهٔ جدا دارد", _ok3 is True and _tip3 is not None)
+tips.TIPS_MAX_PER_HOUR = 2
+check("سوژه: تنظیم سقف ساعتی بیشتر رعایت می‌شود",
+      tips.add(903, "سارا", "سوژهٔ اول با سقف دو در ساعت")[0] is True
+      and tips.add(903, "سارا", "سوژهٔ دوم با سقف دو در ساعت")[0] is True
+      and tips.add(903, "سارا", "سوژهٔ سوم باید رد شود")[0] is False)
+tips.TIPS_MAX_PER_HOUR = 1
 tips.mark(_tip["id"], "approved")
 check("سوژه: بعد از بررسی از صف خارج می‌شود", all(t.get("id") != _tip["id"] for t in tips.pending()))
 

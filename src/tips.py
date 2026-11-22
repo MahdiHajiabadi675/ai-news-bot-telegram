@@ -31,15 +31,25 @@ def _rates() -> dict:
     return data if isinstance(data, dict) else {}
 
 
-def _too_soon(chat_id, now) -> bool:
-    last = _rates().get(str(chat_id))
-    if not last:
-        return False
+def _rate_count(chat_id, now):
+    """(تعداد سوژه در ساعت اخیر, زمان آخرین سوژه) — سازگار با مقدار قدیمی رشته‌ای."""
+    raw = _rates().get(str(chat_id))
+    if not raw:
+        return 0, None
+    if isinstance(raw, dict):
+        at_raw, count = raw.get("at"), int(raw.get("count") or 0)
+    else:
+        at_raw, count = raw, 1
     try:
-        when = datetime.fromisoformat(str(last).replace("Z", ""))
-    except ValueError:
-        return False
-    return now - when < timedelta(hours=1)
+        when = datetime.fromisoformat(str(at_raw).replace("Z", ""))
+    except (TypeError, ValueError):
+        return 0, None
+    return (count if now - when < timedelta(hours=1) else 0), when
+
+
+def _too_soon(chat_id, now) -> bool:
+    count, _when = _rate_count(chat_id, now)
+    return count >= max(1, TIPS_MAX_PER_HOUR)
 
 
 def add(chat_id, user, text, now=None):
@@ -60,7 +70,7 @@ def add(chat_id, user, text, now=None):
 
     tips = load()
     tip = {
-        "id": f"tip-{int(now.timestamp())}-{chat_id}",
+        "id": f"tip-{int(now.timestamp() * 1000)}-{chat_id}",
         "chat_id": chat_id,
         "user": clip(user or "", 60),
         "text": body,
@@ -71,12 +81,14 @@ def add(chat_id, user, text, now=None):
     save(tips)
 
     rates = _rates()
-    rates[str(chat_id)] = now.isoformat() + "Z"
+    used, _last = _rate_count(chat_id, now)
+    rates[str(chat_id)] = {"at": now.isoformat() + "Z", "count": used + 1}
     cutoff = now - timedelta(hours=24)
     clean = {}
     for key, value in rates.items():
+        raw_at = value.get("at") if isinstance(value, dict) else value
         try:
-            when = datetime.fromisoformat(str(value).replace("Z", ""))
+            when = datetime.fromisoformat(str(raw_at).replace("Z", ""))
         except (TypeError, ValueError):
             continue
         if when >= cutoff:

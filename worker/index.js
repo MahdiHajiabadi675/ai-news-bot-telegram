@@ -462,9 +462,16 @@ async function handlePublicMessage(msg, env, BASE, CHANNEL_ID, ADMIN_ID) {
     }
     if (body.length > 600) body = body.slice(0, 600);
     const rates = await getJSON(env, 'tip_rate', {});
-    const last = rates[String(chatId)];
-    if (last && Date.now() - Date.parse(last) < 3600 * 1000) {
-      await sendMessage(BASE, chatId, '⏳ سهمیهٔ این ساعت پر شده. یک ساعت دیگر دوباره تلاش کن.');
+    const rateKey = String(chatId);
+    const rawRate = rates[rateKey];
+    const rateAt = rawRate && typeof rawRate === 'object' ? rawRate.at : rawRate;
+    const rateCount = rawRate && typeof rawRate === 'object' ? Number(rawRate.count) || 0 : 1;
+    const limit = Math.max(1, Number(env.TIPS_MAX_PER_HOUR) || 1);
+    const inWindow = rateAt && Date.now() - Date.parse(rateAt) < 3600 * 1000;
+    const used = inWindow ? rateCount : 0;
+    if (used >= limit) {
+      await sendMessage(BASE, chatId,
+        `⏳ سهمیهٔ این ساعت پر شده (حداکثر ${limit} سوژه در ساعت). یک ساعت دیگر دوباره تلاش کن.`);
       return;
     }
     const tips = await getJSON(env, 'tips', []);
@@ -474,7 +481,7 @@ async function handlePublicMessage(msg, env, BASE, CHANNEL_ID, ADMIN_ID) {
     };
     tips.push(tip);
     await saveJSON(env, 'tips', tips.slice(-200));
-    rates[String(chatId)] = new Date().toISOString();
+    rates[rateKey] = { at: new Date().toISOString(), count: used + 1 };
     await saveJSON(env, 'tip_rate', rates);
     await sendMessage(BASE, chatId, '✅ سوژه ثبت شد. اگر تایید شود، با نام «از مخاطبان» منتشر می‌شود.');
     if (ADMIN_ID) {
