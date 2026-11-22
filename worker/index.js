@@ -4,7 +4,7 @@
  */
 
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     const BOT_TOKEN = env.BOT_TOKEN;
     const CHANNEL_ID = env.CHANNEL_ID;
     const ADMIN_ID = Number(env.ADMIN_ID);
@@ -12,6 +12,11 @@ export default {
 
     const url = new URL(request.url);
     const path = url.pathname.replace(/\/+$/, '') || '/';
+
+    // «کلید مرده» فقط روی مسیرهای کم‌ترافیک بررسی می‌شود (RSS/API عمومی نه).
+    if (ctx && typeof ctx.waitUntil === 'function' && (path === '/health' || path === '/webhook')) {
+      ctx.waitUntil(checkHeartbeat(env));
+    }
 
     // ── /rss.xml: خروجی RSS برای خوانندگان فید (بدون نیاز به تلگرام) ──
     if (path === '/rss.xml' && request.method === 'GET') {
@@ -124,6 +129,7 @@ export default {
    * (برای فعال‌سازی: Settings → Triggers → Cron = 17 * * * *)
    */
   async scheduled(event, env, ctx) {
+    ctx.waitUntil(checkHeartbeat(env));
     if (!env.GITHUB_TOKEN || !env.GITHUB_REPO) return;
     ctx.waitUntil(dispatchGithubWorkflow(env));
   }
@@ -224,7 +230,7 @@ async function handleCallback(cb, env, BASE, CHANNEL_ID, ADMIN_ID) {
   const itemHash = parts[1] || '';
 
   // دکمه‌های منوی /start → همان دستورها را اجرا می‌کنند
-  const menuCommands = ['status', 'pending', 'sources', 'feeds', 'runs', 'stats', 'clear', 'auto'];
+  const menuCommands = ['status', 'pending', 'sources', 'feeds', 'runs', 'stats', 'clear', 'auto', 'top'];
   if (action === 'cmd' && menuCommands.includes(itemHash)) {
     await answerCallback(BASE, cbId);
     await handleMessage({ text: '/' + itemHash, chat: { id: ADMIN_ID } }, env, BASE, CHANNEL_ID, ADMIN_ID);
@@ -445,6 +451,7 @@ async function handleMessage(msg, env, BASE, CHANNEL_ID, ADMIN_ID) {
       '<code>/sources</code> — اعتبار منابع\n' +
       '<code>/feeds</code> — سلامت فیدها\n' +
       '<code>/runs</code> — آمار اجراها\n' +
+      '<code>/top</code> — پربازدیدترین پست‌ها\n' +
       '<code>/stats</code> — آمار کلی\n\n' +
       '━━━━━━━━━━━━━━\n' +
       '💡 <i>از دکمه‌های زیر هم می‌توانی استفاده کنی.</i>',
@@ -461,6 +468,9 @@ async function handleMessage(msg, env, BASE, CHANNEL_ID, ADMIN_ID) {
           [
             { text: '📈 آمار', callback_data: 'cmd:stats' },
             { text: '🗞 اجراها', callback_data: 'cmd:runs' }
+          ],
+          [
+            { text: '👁 پربازدید', callback_data: 'cmd:top' }
           ],
           [
             { text: '🤖 روشن', callback_data: 'auto_on' },
@@ -734,6 +744,25 @@ async function handleMessage(msg, env, BASE, CHANNEL_ID, ADMIN_ID) {
       `صف: ${h.queue.pending} در انتظار · ${h.queue.approved} آماده انتشار\n` +
       `منتشرشده (کل): ${h.published}\n` +
       `آموزشی امروز: ${h.edu.today}/${target} (صف: ${h.edu.queue})`);
+  } else if (text === '/top') {
+    const published = await getJSON(env, 'published', []);
+    const rows = published
+      .filter(p => p && p.published && !p.deleted && Number(p.views) > 0)
+      .sort((a, b) => Number(b.views) - Number(a.views))
+      .slice(0, 10);
+    if (!rows.length) {
+      const hint = env.CHANNEL_HANDLE
+        ? ''
+        : '\n\n⚠️ برای فعال‌شدن، متغیر <code>CHANNEL_HANDLE</code> را مثل <code>@your_channel</code> تنظیم کن.';
+      await sendMessage(BASE, ADMIN_ID, '📈 هنوز بازدیدی ثبت نشده است.' + hint);
+    } else {
+      const lines = rows.map((p, i) =>
+        `${i + 1}. <b>${fmtViews(p.views)}</b> — ${escapeHtml(String(p.title_fa || p.title || '').slice(0, 70))}` +
+        (p.source ? `\n   <i>${escapeHtml(String(p.source).slice(0, 40))}</i>` : '')
+      ).join('\n');
+      await sendMessage(BASE, ADMIN_ID,
+        `📈 <b>پربازدیدترین‌های اخیر</b>\n${'─'.repeat(20)}\n${lines}\n\n<i>نمونه: ${rows.length} پست</i>`);
+    }
   } else if (text === '/stats') {
     const published = await getJSON(env, 'published', []);
     const totalPublished = published.filter(p => p.published).length;
@@ -1557,6 +1586,46 @@ function escapeHtml(value) {
     .replaceAll('<', '&lt;')
     .replaceAll('>', '&gt;')
     .replaceAll('"', '&quot;');
+}
+
+function fmtViews(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return '—';
+  if (n >= 1000000) return `${(n / 1000000).toFixed(1)}M`;
+  if (n >= 1000) return `${(n / 1000).toFixed(1)}K`;
+  return String(Math.round(n));
+}
+
+/**
+ * «کلید مرده»: اگر بیش از ۳ ساعت هیچ اجرای موفقی ثبت نشده باشد، به ادمین هشدار بده.
+ * heartbeat فقط در پایان اجرای موفق نوشته می‌شود (src/storage.py)؛ پس کهنه‌بودنش
+ * یعنی پایپ‌لاین یا GitHub Actions از کار افتاده. حداکثر هر ۳ ساعت یک هشدار.
+ */
+async function checkHeartbeat(env) {
+  try {
+    const ADMIN_ID = Number(env.ADMIN_ID);
+    if (!env.BOT_TOKEN || !ADMIN_ID) return;
+    const hb = await getJSON(env, 'heartbeat', {});
+    const at = Date.parse(hb.at || '');
+    if (!Number.isFinite(at)) return;
+    const ageH = (Date.now() - at) / 3600000;
+    if (ageH < 3) return;
+
+    const alerts = await getJSON(env, 'alert_state', {});
+    const last = Date.parse(alerts.heartbeat_at || '');
+    if (Number.isFinite(last) && Date.now() - last < 3 * 3600000) return;
+
+    const BASE = `https://api.telegram.org/bot${env.BOT_TOKEN}`;
+    await sendMessage(BASE, ADMIN_ID,
+      `⚠️ <b>پایپ‌لاین از کار افتاده؟</b>\n\n` +
+      `آخرین اجرای موفق: <b>${Math.floor(ageH)} ساعت پیش</b>\n` +
+      `یعنی چند اجرای ساعتی انجام نشده است.\n` +
+      `GitHub Actions و Secrets را چک کن، بعد /health را بفرست.`);
+    await saveJSON(env, 'alert_state', { ...alerts, heartbeat_at: new Date().toISOString() });
+    console.log('[heartbeat] stale alert sent');
+  } catch (e) {
+    console.error('[heartbeat] alert failed:', (e && e.message) || e);
+  }
 }
 
 async function answerCallback(BASE, cbId, text, showAlert = false) {

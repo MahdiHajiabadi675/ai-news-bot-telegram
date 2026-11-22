@@ -24,7 +24,8 @@ from src.config import (
     AUTO_PUBLISH_ENABLED, AUTO_PUBLISH_THRESHOLD, AUTO_REJECT_THRESHOLD, AUTO_TRUST_THRESHOLD, HOT_OFFICIAL_MIN,
     MAX_ARTICLES_PER_RUN, MAX_REVIEWS_PER_RUN,
     TRUST_SCORES, REJECT_KEYWORDS, CATEGORY_WEIGHTS, ADMIN_ID,
-    SCORE_SOURCE_WEIGHT, SCORE_IMPORTANCE_WEIGHT, SCORE_CONFIDENCE_WEIGHT, SCORE_CATEGORY_WEIGHT
+    SCORE_SOURCE_WEIGHT, SCORE_IMPORTANCE_WEIGHT, SCORE_CONFIDENCE_WEIGHT, SCORE_CATEGORY_WEIGHT,
+    VIEWS_ENABLED
 )
 from src.collectors import collect, FEEDS, interleave_by_source
 from src.analyzer import analyze_articles, localize
@@ -38,6 +39,8 @@ from src.publisher import publish_approved
 from src import edu_post
 from src import digest
 from src import arxiv_daily
+from src import brief
+from src import views
 from src import translator
 
 
@@ -124,6 +127,14 @@ def _run(force=False):
     state, updates = poll_updates(state)
     if updates:
         print(f"[INFO] Processed {len(updates)} bot updates")
+
+    # 2.5 بازدید پست‌ها (رایگان، از پیش‌نمایش عمومی کانال) — قبل از هر نوشتن دیگری
+    #     تا احتمال تداخل با انتشار اخبار کمتر شود. هرگز اجرا را متوقف نمی‌کند.
+    if VIEWS_ENABLED:
+        try:
+            views.sync()
+        except Exception as e:  # noqa: BLE001
+            print(f"[VIEWS] skipped: {type(e).__name__}")
 
     # 3. Collect new articles (if interval passed or forced)
     now = datetime.utcnow()
@@ -224,6 +235,13 @@ def _run(force=False):
                 if topic_list:
                     rl["topic_hits"] = topic_prefs.boost(analyzed, topic_list)
 
+                # بازخورد بازدید: دسته‌هایی که واقعاً خوانده شده‌اند کمی اولویت می‌گیرند
+                if VIEWS_ENABLED:
+                    try:
+                        rl["views_boost"] = views.boost(analyzed, storage.load_published())
+                    except Exception as e:  # noqa: BLE001
+                        print(f"[VIEWS] boost skipped: {type(e).__name__}")
+
                 # بعد از تحلیل، خبر دیده‌شده محسوب می‌شود تا دوباره پردازش نشود.
                 for article in articles:
                     news_id = article.get("id", article.get("hash", ""))
@@ -323,12 +341,15 @@ def _run(force=False):
     # 6. مقالهٔ روز arXiv (روزی یک‌بار، از ساعت مقرر به بعد)
     state = arxiv_daily.maybe_post(state)
 
-    # 5. Publish approved items
+    # 7. Publish approved items
     state = set_stage(state, "publishing")
     storage.save_state(state)
     state = publish_approved(state, approved_to_publish)
 
-    # 5. Save state
+    # 8. صبحانهٔ AI — بعد از انتشار، تا تازه‌ترین خبرهای همین ساعت هم داخلش باشند
+    state = brief.maybe_post(state)
+
+    # 9. Save state
     state = set_stage(state, "waiting")
     storage.save_state(state)
 

@@ -17,6 +17,7 @@
 from urllib.parse import urlsplit
 
 from .config import SHOW_ORIGINAL_TEXT, CHANNEL_SIGNATURE
+from .why import why_it_matters
 
 TG_LIMIT = 4000  # سقف تلگرام ۴۰۹۶ است؛ کمی حاشیه
 
@@ -103,7 +104,13 @@ def _render(item: dict, summary_len: int, show_original: bool, tag_count: int = 
         body = f"<b>{orig_title}</b>" + (f"\n\n{orig_summary}" if orig_summary else "")
         original = f"\n\n🌐 <b>متن اصلی</b>\n<blockquote expandable>{body}</blockquote>"
 
-    text = f"{emoji} <b>{title}</b>\n{divider}\n\n{summary}{original}\n\n{divider}\n"
+    why = ""
+    if item.get("source") and item.get("category") not in ("edu", "digest", "paper", "brief"):
+        reason = why_it_matters(item)
+        if reason:
+            why = f"\n\n🎯 <b>چرا مهم است</b>\n{escape_html(reason)}"
+
+    text = f"{emoji} <b>{title}</b>\n{divider}\n\n{summary}{why}{original}\n\n{divider}\n"
     link = safe_link(item.get("link"))
     if link:
         text += f'📰 منبع: <a href="{link}">{source}</a>'

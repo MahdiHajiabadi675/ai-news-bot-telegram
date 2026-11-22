@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 from .config import (
     BOT_TOKEN, CHANNEL_ID, ADMIN_ID, AUTO_TRUST_THRESHOLD, DISPLAY_TZ_OFFSET_MIN, START_BANNER_URL, DRY_RUN
 )
-from . import storage, source_trust
+from . import storage, source_trust, views
 from .formatting import escape_html as _escape_html_fmt, clip, is_untranslated, format_message
 
 BASE = f"https://api.telegram.org/bot{BOT_TOKEN}"
@@ -360,7 +360,7 @@ def _handle_callback(cb, state):
     item_hash = parts[1] if len(parts) > 1 else ""
 
     # دکمه‌های منوی /start → همان دستورها را اجرا می‌کنند
-    menu_commands = {"status", "pending", "sources", "feeds", "runs", "stats", "clear", "auto"}
+    menu_commands = {"status", "pending", "sources", "feeds", "runs", "stats", "clear", "auto", "top"}
     if action == "cmd" and item_hash in menu_commands:
         answer_callback(cb_id)
         _handle_message({"text": "/" + item_hash, "chat": {"id": ADMIN_ID}}, state)
@@ -559,6 +559,7 @@ def _handle_message(msg, state):
             "<code>/sources</code> — اعتبار منابع\n"
             "<code>/feeds</code> — سلامت فیدها\n"
             "<code>/runs</code> — آمار اجراها\n"
+            "<code>/top</code> — پربازدیدترین پست‌ها\n"
             "<code>/stats</code> — آمار کلی\n\n"
             "━━━━━━━━━━━━━━\n"
             "💡 <i>از دکمه‌های زیر هم می‌توانی استفاده کنی.</i>"
@@ -576,6 +577,9 @@ def _handle_message(msg, state):
                 [
                     {"text": "📈 آمار", "callback_data": "cmd:stats"},
                     {"text": "🗞 اجراها", "callback_data": "cmd:runs"},
+                ],
+                [
+                    {"text": "👁 پربازدید", "callback_data": "cmd:top"},
                 ],
                 [
                     {"text": "🤖 روشن", "callback_data": "auto_on"},
@@ -641,6 +645,9 @@ def _handle_message(msg, state):
 
     elif text == "/runs":
         send_message(chat_id, runs_report(storage.load_run_log()))
+
+    elif text == "/top":
+        send_message(chat_id, views.top_report(storage.load_published()))
 
     elif text == "/feeds":
         send_message(chat_id, feeds_report(storage.load_feed_health()))

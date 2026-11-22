@@ -572,6 +572,35 @@ console.log('Engagement features:');
 
   check('/welcome: متن حرفه‌ای با منبع‌ها و دعوت به فوروارد',
     welcomeMsg.body.text.includes('۳۷ منبع') && welcomeMsg.body.text.includes('فوروارد'));
+
+  // 👁 پربازدیدترین‌ها (بازخورد بازدید)
+  set('published', [
+    { id: 'v1', title_fa: 'خبر پربازدید', published: true, views: 4200, source: 'منبع' },
+    { id: 'v2', title_fa: 'خبر کم‌بازدید', published: true, views: 120, source: 'منبع' },
+    { id: 'v3', title_fa: 'بدون بازدید', published: true, source: 'منبع' },
+  ]);
+  await send(msg('/top'));
+  const topText = last('sendMessage').body.text;
+  check('/top: پربازدیدترین اول می‌آید',
+    topText.includes('خبر پربازدید') && topText.indexOf('خبر پربازدید') < topText.indexOf('خبر کم‌بازدید'));
+  check('/top: بازدید خلاصه‌شده (4.2K)', topText.includes('4.2K'));
+
+  // ⚠️ کلید مرده: heartbeat کهنه باید به ادمین هشدار بدهد
+  set('heartbeat', { at: new Date(Date.now() - 5 * 3600 * 1000).toISOString() });
+  store.delete('alert_state');
+  calls.length = 0;
+  const pends = [];
+  await worker.fetch(new Request('https://w.example/health'), env, { waitUntil: p => pends.push(p) });
+  await Promise.all(pends);
+  const staleAlert = calls.find(c => c.method === 'sendMessage' && String(c.body.text).includes('از کار افتاده'));
+  check('هشدار: پایپ‌لاین کهنه به ادمین اطلاع می‌دهد', !!staleAlert);
+
+  calls.length = 0;
+  const pends2 = [];
+  await worker.fetch(new Request('https://w.example/health'), env, { waitUntil: p => pends2.push(p) });
+  await Promise.all(pends2);
+  const secondAlert = calls.find(c => c.method === 'sendMessage' && String(c.body.text).includes('از کار افتاده'));
+  check('هشدار: حداکثر هر ۳ ساعت یک‌بار تکرار می‌شود', !secondAlert);
 }
 
 console.log(`\n${passed} تست Worker با موفقیت گذشت ✅`);

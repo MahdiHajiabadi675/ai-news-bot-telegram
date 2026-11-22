@@ -127,6 +127,30 @@ MAX_ITEM_AGE_HOURS = _int_env("MAX_ITEM_AGE_HOURS", 72)
 # فقط برای نمایش ساعت در گزارش‌ها (ایران = ۲۱۰ دقیقه)
 DISPLAY_TZ_OFFSET_MIN = _int_env("DISPLAY_TZ_OFFSET_MIN", 210)
 
+# ───────── بازخورد بازدید (src/views.py) ─────────
+# تلگرام Bot API بازدید نمی‌دهد؛ از پیش‌نمایش عمومی کانال (t.me/s/...) خوانده می‌شود.
+# برای کانال با آیدی عددی، CHANNEL_HANDLE را دستی تنظیم کن: @your_channel
+VIEWS_ENABLED = os.getenv("VIEWS_ENABLED", "true").strip().lower() not in ("0", "false", "no", "off")
+CHANNEL_HANDLE = (os.getenv("CHANNEL_HANDLE", "") or "").strip()
+# حداقل فاصلهٔ دو همگام‌سازی بازدید (دقیقه) — هر اجرای ساعتی، حداکثر یک‌بار می‌خواند
+VIEWS_MIN_INTERVAL_MIN = _int_env("VIEWS_MIN_INTERVAL_MIN", 30)
+# چند صفحهٔ آخر (هر صفحه ~۲۰ پست)
+VIEWS_PAGES = _int_env("VIEWS_PAGES", 2)
+# حداکثر امتیاز «جذابیت» که دستهٔ پرخوان به خبر اضافه می‌کند
+VIEWS_BOOST_MAX = _int_env("VIEWS_BOOST_MAX", 8)
+
+# ───────── صبحانهٔ AI (src/brief.py) ─────────
+BRIEF_ENABLED = os.getenv("BRIEF_ENABLED", "true").strip().lower() not in ("0", "false", "no", "off")
+# ساعت انتشار به وقت ایران (۰ تا ۲۳)
+BRIEF_HOUR = _int_env("BRIEF_HOUR", 8)
+BRIEF_ITEMS = _int_env("BRIEF_ITEMS", 5)
+
+# ───────── «چرا مهم است» (src/why.py) ─────────
+# یک خط تحلیل محلی و بدون مدل زیر هر خبر
+SHOW_WHY_IT_MATTERS = os.getenv(
+    "SHOW_WHY_IT_MATTERS", "true"
+).strip().lower() not in ("0", "false", "no", "off")
+
 # سقف پردازش در هر اجرا — جلوگیری از تایم‌اوت و اسپم تلگرام
 MAX_ARTICLES_PER_RUN = _int_env("MAX_ARTICLES_PER_RUN", 30)
 # حداکثر پیام «در انتظار تایید» که در هر اجرا به ادمین می‌رود
