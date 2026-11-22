@@ -2233,4 +2233,18 @@ check("heartbeat: وضعیت ماژول‌ها و شمارندهٔ KV ذخیره
       _hb.get("modules", {}).get("brief", {}).get("ok") is False and "kv" in _hb and _alerts == [])
 modhealth.reset()
 
+# ── بانک سؤال برای Worker ──
+print("Quiz bank sync:")
+_qb = quiz.bank_for_worker()
+check("بانک Worker: همهٔ سؤال‌ها با ۴ گزینه و اندیس درست معتبر", len(_qb) == len(quiz.QUIZ_BANK) and all(len(q["o"]) == 4 and 0 <= q["c"] < 4 for q in _qb))
+check("بانک Worker: id یکتا و برای callback_data کوتاه (<۴۰)", len({q["id"] for q in _qb}) == len(_qb) and all(len(q["id"]) < 40 and ":" not in q["id"] for q in _qb))
+_store.pop("quiz_bank", None); _store.pop("quiz_bank_ver", None)
+check("sync_bank: بار اول می‌نویسد", quiz.sync_bank() is True and _store["quiz_bank_ver"] == quiz.bank_version() and len(_store["quiz_bank"]) == len(_qb))
+check("sync_bank: بار دوم بدون تغییر چیزی نمی‌نویسد", (lambda before: quiz.sync_bank() is False and _store["quiz_bank"] is before)(_store["quiz_bank"]))
+_orig_bank = list(quiz.QUIZ_BANK)
+quiz.QUIZ_BANK.append({**_orig_bank[0], "id": "zz-new"})
+check("sync_bank: با تغییر بانک دوباره نوشته می‌شود", quiz.sync_bank() is True and any(q["id"] == "zz-new" for q in _store["quiz_bank"]))
+quiz.QUIZ_BANK[:] = _orig_bank
+quiz.sync_bank()
+
 print(f"\n{_passed} تست با موفقیت گذشت ✅")

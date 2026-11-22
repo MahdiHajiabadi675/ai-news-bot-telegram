@@ -38,6 +38,7 @@ from src.fast_track import process_fast_track
 from src.bot import poll_updates, _send_review, notify_admin_new, send_message
 from src.publisher import publish_approved
 from src import edu_post
+from src import quiz
 from src import digest
 from src import arxiv_daily
 from src import brief
@@ -374,6 +375,9 @@ def _run(force=False):
 
         state["last_collect_time"] = now.isoformat() + "Z"
         storage.save_state(state)
+
+    # 3.9 بانک سؤال کوییز خصوصی (/quiz در چت ربات) → KV؛ فقط وقتی بانک عوض شده نوشته می‌شود
+    _safe("quiz_bank", quiz.sync_bank)
 
     # 4. پست آموزشی (فقط متن) — قبل از انتشار اخبار، تا اگر انتشار طول کشید یا
     #    اجرا به تایم‌اوت نزدیک شد، اسلات آموزشی از دست نرود.

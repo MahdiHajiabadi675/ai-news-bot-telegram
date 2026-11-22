@@ -289,7 +289,7 @@ check('/start: طول کپشن مجاز (زیر ۱۰۲۴)', startMsg.caption.len
 {
   // قاعدهٔ پروژه: هر دستور منو هم دکمه دارد و هم در لیست متن /start آمده است
   const btns = startMsg.reply_markup.inline_keyboard.flat().map(b => b.callback_data);
-  for (const c of ['status', 'pending', 'sources', 'feeds', 'runs', 'dashboard', 'ask', 'stats', 'top', 'weekly', 'tips', 'backup', 'clear']) {
+  for (const c of ['status', 'pending', 'sources', 'feeds', 'runs', 'dashboard', 'ask', 'quizboard', 'stats', 'top', 'weekly', 'tips', 'backup', 'clear']) {
     check(`/start: دکمهٔ ${c}`, btns.includes('cmd:' + c));
   }
   check('/start: /dashboard در لیست متن', startMsg.caption.includes('/dashboard'));
@@ -801,6 +801,108 @@ console.log('Archive search (/ask):');
   check('دکمهٔ منوی جست‌وجو راهنما می‌دهد', last('sendMessage').body.text.includes('/ask OpenAI'));
   await send(dm('/help', 906));
   check('راهنمای عمومی: /ask معرفی شده', last('sendMessage').body.text.includes('/ask'));
+}
+
+
+// ───────── کوییز امتیازی خصوصی ─────────
+console.log('Scored quiz (/quiz):');
+{
+  const dm = (text, chatId = 1001, name = 'سارا') => ({ message: { text, chat: { id: chatId, type: 'private' }, from: { id: chatId, first_name: name } } });
+  const qbank = [
+    { id: 'q-alpha', q: 'سؤال اول؟', o: ['غلط۱', 'درست۱', 'غلط۲', 'غلط۳'], c: 1, e: 'توضیح اول' },
+    { id: 'q-beta', q: 'سؤال دوم؟', o: ['غلط۱', 'درست۲', 'غلط۲', 'غلط۳'], c: 1, e: 'توضیح دوم' },
+    { id: 'q-gamma', q: 'سؤال سوم؟', o: ['غلط۱', 'درست۳', 'غلط۲', 'غلط۳'], c: 1, e: 'توضیح سوم' },
+  ];
+  const answerCb = (data, chatId, mid = 50) => ({ callback_query: { id: 'cbq', data, from: { id: chatId, first_name: 'سارا' }, message: { chat: { id: chatId }, message_id: mid } } });
+  const served = () => {
+    const m = [...calls].reverse().find(c => c.method === 'sendMessage' && c.body.reply_markup);
+    const btns = m.body.reply_markup.inline_keyboard[0];
+    const id = btns[0].callback_data.split(':')[1];
+    const q = qbank.find(x => x.id === id);
+    const right = btns.find(b => Number(b.callback_data.split(':')[2]) === q.c).callback_data;
+    const wrong = btns.find(b => Number(b.callback_data.split(':')[2]) !== q.c).callback_data;
+    return { m, btns, id, q, right, wrong };
+  };
+
+  store.delete('quiz_scores');
+  await send(dm('/quiz'));
+  check('/quiz بدون بانک: پیام آماده‌نبودن', last('sendMessage').body.text.includes('هنوز آماده نیست'));
+  set('quiz_bank', qbank);
+  await send(dm('/quiz'));
+  let sv = served();
+  check('/quiz: ۴ دکمه با برچسب الف تا د', sv.btns.length === 4 && sv.btns.map(b => b.text).join('') === 'الفبجد');
+  check('/quiz: callback_data کوتاه‌تر از ۶۴ بایت', sv.btns.every(b => new TextEncoder().encode(b.callback_data).length <= 64));
+  check('/quiz: پاسخ درست داخل متن پیام لو نمی‌رود', !sv.m.body.text.includes('توضیح'));
+  check('/quiz: سؤال برای کاربر ثبت می‌شود', get('quiz_scores').users['1001'].seen.includes(sv.id));
+
+  await send(answerCb(sv.right, 1001));
+  let edit = last('editMessageText');
+  let u = get('quiz_scores').users['1001'];
+  check('پاسخ درست: ۱۰ امتیاز و توضیح', u.t === 10 && u.ok === 1 && u.tot === 1 && edit.body.text.includes('+10') && edit.body.text.includes('توضیح'));
+  check('پاسخ درست: دکمهٔ سؤال بعدی', JSON.stringify(edit.body.reply_markup).includes('qz:next'));
+  check('پاسخ درست: امتیاز هفتگی ثبت می‌شود', u.w && u.w.pts === 10);
+  await send(answerCb(sv.right, 1001));
+  check('پاسخ دوباره به همان سؤال امتیاز نمی‌دهد', get('quiz_scores').users['1001'].t === 10 && String(last('answerCallbackQuery').body.text).includes('قبلاً'));
+  await send(answerCb('qz:q-zzz:1', 1001));
+  check('سؤال ناموجود رد می‌شود', String(last('answerCallbackQuery').body.text).includes('دیگر در دسترس'));
+  const other = qbank.find(x => x.id !== sv.id).id;
+  await send(answerCb(`qz:${other}:1`, 1001));
+  check('سؤالی که برای او فرستاده نشده امتیاز ندارد', get('quiz_scores').users['1001'].t === 10 && String(last('answerCallbackQuery').body.text).includes('مال تو نبود'));
+
+  await send(answerCb('qz:next', 1001));
+  sv = served();
+  await send(answerCb(sv.wrong, 1001));
+  u = get('quiz_scores').users['1001'];
+  check('پاسخ غلط: امتیاز نمی‌دهد ولی شمرده می‌شود', u.t === 10 && u.tot === 2 && last('editMessageText').body.text.includes('این نبود'));
+
+  await send(dm('/me'));
+  const me = last('sendMessage').body.text;
+  check('/me: امتیاز، رتبه و دقت', me.includes('<b>10</b>') && me.includes('رتبهٔ 1') && me.includes('1/2') && me.includes('50'));
+  await send(dm('/leaderboard', 1002, 'علی'));
+  check('/leaderboard: نام و امتیاز', last('sendMessage').body.text.includes('سارا') && last('sendMessage').body.text.includes('<b>10</b>'));
+  await send(dm('/hide'));
+  await send(dm('/leaderboard', 1002, 'علی'));
+  check('/hide: نام ناشناس می‌شود', !last('sendMessage').body.text.includes('سارا') && last('sendMessage').body.text.includes('ناشناس'));
+  await send(dm('/hide'));
+
+  // سقف روزانهٔ هر کاربر
+  store.delete('quiz_scores');
+  env.QUIZ_MAX_PER_DAY = '2';
+  await send(dm('/quiz', 1003)); await send(dm('/quiz', 1003));
+  await send(dm('/quiz', 1003));
+  check('سقف روزانهٔ هر کاربر', last('sendMessage').body.text.includes('امروز 2 سؤال'));
+  delete env.QUIZ_MAX_PER_DAY;
+  // سقف روزانهٔ کل (حفظ سقف نوشتن KV)
+  env.QUIZ_MAX_SENDS_PER_DAY = '10';
+  store.delete('quiz_scores');
+  for (let i = 0; i < 10; i++) await send(dm('/quiz', 2000 + i));
+  await send(dm('/quiz', 2999));
+  check('سقف روزانهٔ کل ارسال‌ها', last('sendMessage').body.text.includes('ظرفیت کوییز امروز پر شده'));
+  delete env.QUIZ_MAX_SENDS_PER_DAY;
+
+  // ترتیب گزینه‌ها تصادفی است (جلوگیری از «همیشه ب»)
+  store.delete('quiz_scores');
+  const positions = new Set();
+  for (let i = 0; i < 25; i++) {
+    await send(dm('/quiz', 3000 + i));
+    const x = served();
+    positions.add(x.btns.findIndex(b => Number(b.callback_data.split(':')[2]) === x.q.c));
+  }
+  check('ترتیب گزینه‌ها تصادفی است', positions.size >= 3);
+
+  // ادمین
+  store.delete('quiz_scores');
+  await send(dm('/quiz', 4000, 'رضا'));
+  sv = served();
+  await send(answerCb(sv.right, 4000));
+  await send(msg('/quizboard'));
+  const qb = last('sendMessage');
+  check('/quizboard: جدول و دکمهٔ انتشار', qb.body.text.includes('سارا') && JSON.stringify(qb.body.reply_markup).includes('qzpost'));
+  await send(cb('qzpost'));
+  const chPost = calls.find(c => c.method === 'sendMessage' && c.body.chat_id === '@chan');
+  check('qzpost: جدول در کانال منتشر می‌شود', !!chPost && chPost.body.text.includes('سارا') && chPost.body.text.includes('/quiz'));
+  await send(cb('qzpost', 12345));
+  check('qzpost: غیرادمین رد می‌شود', !calls.some(c => c.method === 'sendMessage' && c.body.chat_id === '@chan'));
 }
 
 console.log(`\n${passed} تست Worker با موفقیت گذشت ✅`);

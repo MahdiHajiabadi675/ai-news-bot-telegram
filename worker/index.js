@@ -222,6 +222,11 @@ function jsonResponse(body, status = 200) {
 
 async function handleCallback(cb, env, BASE, CHANNEL_ID, ADMIN_ID) {
   // Never trust callback data without checking the Telegram user who clicked it.
+  // دکمه‌های کوییز برای همهٔ کاربران است (قبل از دروازهٔ ادمین)
+  if (String(cb.data || '').startsWith('qz:')) {
+    await handleQuizCallback(cb, env, BASE, CHANNEL_ID);
+    return;
+  }
   if (Number(cb.from?.id) !== ADMIN_ID) {
     await answerCallback(BASE, cb.id, '⛔️ دسترسی ندارید', true);
     return;
@@ -233,7 +238,7 @@ async function handleCallback(cb, env, BASE, CHANNEL_ID, ADMIN_ID) {
   const itemHash = parts[1] || '';
 
   // دکمه‌های منوی /start → همان دستورها را اجرا می‌کنند
-  const menuCommands = ['status', 'pending', 'sources', 'feeds', 'runs', 'stats', 'clear', 'auto', 'top', 'weekly', 'backup', 'tips', 'dashboard', 'ask'];
+  const menuCommands = ['status', 'pending', 'sources', 'feeds', 'runs', 'stats', 'clear', 'auto', 'top', 'weekly', 'backup', 'tips', 'dashboard', 'ask', 'quizboard'];
   if (action === 'cmd' && menuCommands.includes(itemHash)) {
     await answerCallback(BASE, cbId);
     await handleMessage({ text: '/' + itemHash, chat: { id: ADMIN_ID } }, env, BASE, CHANNEL_ID, ADMIN_ID);
@@ -399,6 +404,11 @@ async function handleCallback(cb, env, BASE, CHANNEL_ID, ADMIN_ID) {
     await doUndo(env, BASE, CHANNEL_ID, ADMIN_ID);
   } else if (action === 'undo_no') {
     await answerCallback(BASE, cbId, 'انصراف داده شد');
+  } else if (action === 'qzpost') {
+    const off = (Number(env.DISPLAY_TZ_OFFSET_MIN) || 210) * 60000;
+    const txt = leaderboardText(normScores(await getJSON(env, 'quiz_scores', {})), quizWeekId(Date.now(), off));
+    const res = await sendMessage(BASE, CHANNEL_ID, txt.replace(/\n<i>.*<\/i>$/s, '\n<i>شرکت در کوییز: در چت ربات /quiz بزن.</i>'));
+    await answerCallback(BASE, cbId, res && res.ok ? '📣 در کانال منتشر شد' : '⚠️ ارسال نشد', !(res && res.ok));
   } else if (action === 'pause') {
     await updateState(env, { paused: true });
     await answerCallback(BASE, cbId, '⏸️ متوقف');
@@ -484,7 +494,7 @@ function askReport(query, result, env, CHANNEL_ID, now = Date.now()) {
 /** سهمیهٔ /ask برای کاربران عادی: ساعتی برای هر نفر + سقف روزانهٔ کل (برای حفظ سقف نوشتن KV). */
 async function askAllowed(env, chatId, now = Date.now()) {
   const perHour = Math.max(1, Number(env.ASK_MAX_PER_HOUR) || 10);
-  const perDay = Math.max(10, Number(env.ASK_MAX_PER_DAY) || 300);
+  const perDay = Math.max(10, Number(env.ASK_MAX_PER_DAY) || 200);
   const rates = await getJSON(env, 'ask_rate', {});
   const day = new Date(now).toISOString().slice(0, 10);
   const total = rates._day && rates._day.d === day ? Number(rates._day.n) || 0 : 0;
@@ -517,6 +527,196 @@ async function handleAsk(text, env, BASE, chatId, CHANNEL_ID, isAdmin) {
   await sendLong(BASE, chatId, askReport(query, result, env, CHANNEL_ID));
 }
 
+// ───────────── 🧠 کوییز امتیازی در چت خصوصی (/quiz /me /leaderboard) ─────────────
+// نظرسنجی کانال در تلگرام ناشناس است و پاسخ هر نفر قابل ثبت نیست؛ پس کوییز امتیازی با دکمه‌های
+// شیشه‌ای در چت خصوصی انجام می‌شود. بانک سؤال را pipeline در KV (quiz_bank) می‌گذارد.
+// سقف نوشتن KV: هر سؤال = یک نوشتن برای ارسال + یک برای پاسخ؛ تعداد ارسال روزانهٔ کل محدود است.
+
+const QUIZ_POINTS = 10;
+const QUIZ_LABELS = ['الف', 'ب', 'ج', 'د'];
+
+function quizCfg(env) {
+  return {
+    perUser: Math.max(1, Number(env.QUIZ_MAX_PER_DAY) || 10),
+    perDayTotal: Math.max(10, Number(env.QUIZ_MAX_SENDS_PER_DAY) || 150),
+  };
+}
+
+/** شناسهٔ هفته = تاریخ آخرین شنبه (به وقت نمایش)؛ هفتهٔ فارسی از شنبه شروع می‌شود. */
+function quizWeekId(now, offMs) {
+  const d = new Date(now + offMs);
+  const back = (d.getUTCDay() + 1) % 7;   // شنبه=۰ ... جمعه=۶
+  return new Date(d.getTime() - back * 86400000).toISOString().slice(0, 10);
+}
+
+function normScores(raw) {
+  const sc = raw && typeof raw === 'object' ? raw : {};
+  if (!sc.users || typeof sc.users !== 'object') sc.users = {};
+  return sc;
+}
+
+async function saveScores(env, sc) {
+  const ids = Object.keys(sc.users);
+  if (ids.length > 1500) {                // رشد بی‌پایان ندارد: غیرفعال‌ترین‌ها حذف می‌شوند
+    ids.sort((a, b) => String(sc.users[a].last || '').localeCompare(String(sc.users[b].last || '')));
+    for (const id of ids.slice(0, ids.length - 1500)) delete sc.users[id];
+  }
+  await saveJSON(env, 'quiz_scores', sc);
+}
+
+function quizUser(sc, from, now) {
+  const id = String(from.id);
+  const u = sc.users[id] || { t: 0, ok: 0, tot: 0, seen: [], ans: [] };
+  u.n = String(from.first_name || from.username || 'کاربر').slice(0, 20);
+  u.last = new Date(now).toISOString();
+  sc.users[id] = u;
+  return u;
+}
+
+function quizWeekly(u, weekId) {
+  if (!u.w || u.w.id !== weekId) u.w = { id: weekId, pts: 0, ok: 0 };
+  return u.w;
+}
+
+function quizDisplayName(u) {
+  return u.hide ? 'ناشناس' : escapeHtml(u.n || 'کاربر');
+}
+
+async function sendQuizQuestion(env, BASE, chatId, from, now = Date.now()) {
+  const bank = await getJSON(env, 'quiz_bank', []);
+  if (!Array.isArray(bank) || !bank.length) {
+    await sendMessage(BASE, chatId, '🧠 بانک سؤال هنوز آماده نیست؛ بعد از اجرای بعدی ربات دوباره امتحان کن.');
+    return;
+  }
+  const cfg = quizCfg(env);
+  const sc = normScores(await getJSON(env, 'quiz_scores', {}));
+  const day = new Date(now).toISOString().slice(0, 10);
+  if (!sc._meta || sc._meta.d !== day) sc._meta = { d: day, n: 0 };
+  if (sc._meta.n >= cfg.perDayTotal) {
+    await sendMessage(BASE, chatId, '⏳ ظرفیت کوییز امروز پر شده؛ فردا دوباره بیا.');
+    return;
+  }
+  const u = quizUser(sc, from, now);
+  if (!u.dd || u.dd.d !== day) u.dd = { d: day, n: 0 };
+  if (u.dd.n >= cfg.perUser) {
+    await sendMessage(BASE, chatId, `✅ امروز ${cfg.perUser} سؤال را پاسخ دادی. فردا ادامه بده!\nامتیازت: <code>/me</code> · جدول: <code>/leaderboard</code>`);
+    return;
+  }
+  let pool = bank.filter(q => q && !u.seen.includes(q.id));
+  if (!pool.length) { u.seen = []; pool = bank.filter(Boolean); }   // همهٔ سؤال‌ها را دیده: دور تازه
+  const q = pool[Math.floor(Math.random() * pool.length)];
+  const perm = [0, 1, 2, 3].slice(0, q.o.length);
+  for (let i = perm.length - 1; i > 0; i--) {   // ترتیب نمایش تصادفی (در بانک پاسخ درست معمولاً گزینهٔ دوم است)
+    const j = Math.floor(Math.random() * (i + 1));
+    [perm[i], perm[j]] = [perm[j], perm[i]];
+  }
+  u.seen.push(q.id); u.seen = u.seen.slice(-60);
+  u.dd.n++; sc._meta.n++;
+  await saveScores(env, sc);
+  const body = perm.map((orig, i) => `${QUIZ_LABELS[i]}) ${escapeHtml(q.o[orig])}`).join('\n');
+  await sendMessage(BASE, chatId,
+    `🧠 <b>کوییز</b> (${u.dd.n}/${cfg.perUser} امروز)\n\n${escapeHtml(q.q)}\n\n${body}`,
+    { inline_keyboard: [perm.map((orig, i) => ({ text: QUIZ_LABELS[i], callback_data: `qz:${q.id}:${orig}` }))] });
+}
+
+async function handleQuizCallback(cb, env, BASE, CHANNEL_ID, now = Date.now()) {
+  const cbId = cb.id;
+  const chatId = cb.message && cb.message.chat && cb.message.chat.id;
+  const parts = String(cb.data || '').split(':');
+  if (parts[1] === 'next') {
+    await answerCallback(BASE, cbId);
+    if (chatId) await sendQuizQuestion(env, BASE, chatId, cb.from || {}, now);
+    return;
+  }
+  const qid = parts[1];
+  const idx = Number(parts[2]);
+  const bank = await getJSON(env, 'quiz_bank', []);
+  const q = Array.isArray(bank) ? bank.find(x => x && x.id === qid) : null;
+  if (!q || !Number.isInteger(idx) || idx < 0 || idx >= q.o.length) {
+    await answerCallback(BASE, cbId, 'این سؤال دیگر در دسترس نیست', true);
+    return;
+  }
+  const off = (Number(env.DISPLAY_TZ_OFFSET_MIN) || 210) * 60000;
+  const sc = normScores(await getJSON(env, 'quiz_scores', {}));
+  const u = quizUser(sc, cb.from || {}, now);
+  if (!u.seen.includes(qid)) {            // فقط سؤالی که همین ربات برای خود او فرستاده امتیاز دارد
+    await answerCallback(BASE, cbId, 'این سؤال مال تو نبود؛ /quiz بزن', true);
+    return;
+  }
+  if (u.ans.includes(qid)) {
+    await answerCallback(BASE, cbId, 'قبلاً به این سؤال پاسخ داده‌ای', true);
+    return;
+  }
+  const correct = idx === q.c;
+  const w = quizWeekly(u, quizWeekId(now, off));
+  u.tot++; u.ans.push(qid); u.ans = u.ans.slice(-80);
+  if (correct) { u.t += QUIZ_POINTS; u.ok++; w.pts += QUIZ_POINTS; w.ok++; }
+  await saveScores(env, sc);
+  await answerCallback(BASE, cbId, correct ? '✅ درست!' : '❌ نادرست');
+  if (cb.message && cb.message.message_id) {
+    await telegramCall(BASE, 'editMessageText', {
+      chat_id: chatId, message_id: cb.message.message_id, parse_mode: 'HTML',
+      text: `${correct ? `✅ <b>آفرین! +${QUIZ_POINTS} امتیاز</b>` : '❌ <b>این نبود</b>'}\n\n${escapeHtml(q.q)}\n\n` +
+        `✔️ پاسخ درست: ${escapeHtml(q.o[q.c])}\n\n💡 ${escapeHtml(q.e || '')}\n\n` +
+        `⭐️ امتیاز تو: <b>${u.t}</b> | این هفته: <b>${w.pts}</b>`,
+      reply_markup: { inline_keyboard: [[{ text: '➡️ سؤال بعدی', callback_data: 'qz:next' }]] },
+    });
+  }
+}
+
+function quizRank(sc, id, key, weekId) {
+  const rows = Object.entries(sc.users)
+    .map(([k, u]) => [k, key === 'w' ? (u.w && u.w.id === weekId ? u.w.pts : 0) : (u.t || 0)])
+    .filter(([, v]) => v > 0)
+    .sort((a, b) => b[1] - a[1]);
+  const i = rows.findIndex(([k]) => k === String(id));
+  return i < 0 ? null : i + 1;
+}
+
+function leaderboardText(sc, weekId) {
+  const medals = ['🥇', '🥈', '🥉'];
+  const top = (key, n) => Object.values(sc.users)
+    .map(u => ({ u, v: key === 'w' ? (u.w && u.w.id === weekId ? u.w.pts : 0) : (u.t || 0) }))
+    .filter(x => x.v > 0).sort((a, b) => b.v - a.v).slice(0, n);
+  const fmt = (rows) => rows.map((x, i) => `${medals[i] || `${i + 1}.`} ${quizDisplayName(x.u)} — <b>${x.v}</b>`).join('\n');
+  const wk = top('w', 10), all = top('t', 5);
+  if (!wk.length && !all.length) return '🏆 هنوز کسی امتیاز نگرفته. با <code>/quiz</code> اولین نفر باش!';
+  return '🏆 <b>جدول کوییز</b>\n\n' +
+    (wk.length ? `📅 <b>این هفته</b>\n${fmt(wk)}\n\n` : '') +
+    (all.length ? `⭐️ <b>همیشگی</b>\n${fmt(all)}\n\n` : '') +
+    '<i>شرکت: ربات را باز کن و /quiz بزن. نام کوچکت نمایش داده می‌شود؛ برای ناشناس‌شدن /hide.</i>';
+}
+
+async function handleQuizCommand(text, env, BASE, chatId, from, now = Date.now()) {
+  const off = (Number(env.DISPLAY_TZ_OFFSET_MIN) || 210) * 60000;
+  const weekId = quizWeekId(now, off);
+  if (/^\/quiz\b/i.test(text)) {
+    await sendQuizQuestion(env, BASE, chatId, from, now);
+  } else if (/^\/leaderboard\b/i.test(text)) {
+    await sendLong(BASE, chatId, leaderboardText(normScores(await getJSON(env, 'quiz_scores', {})), weekId));
+  } else if (/^\/me\b/i.test(text)) {
+    const sc = normScores(await getJSON(env, 'quiz_scores', {}));
+    const u = sc.users[String(from.id)];
+    if (!u || !u.tot) {
+      await sendMessage(BASE, chatId, 'هنوز به سؤالی پاسخ نداده‌ای. با <code>/quiz</code> شروع کن!');
+      return;
+    }
+    const wp = u.w && u.w.id === weekId ? u.w.pts : 0;
+    const rw = quizRank(sc, from.id, 'w', weekId), ra = quizRank(sc, from.id, 't', weekId);
+    await sendMessage(BASE, chatId,
+      `🙋 <b>${escapeHtml(u.n || 'تو')}</b>${u.hide ? ' (ناشناس در جدول)' : ''}\n\n` +
+      `⭐️ امتیاز کل: <b>${u.t}</b>${ra ? ` (رتبهٔ ${ra})` : ''}\n` +
+      `📅 این هفته: <b>${wp}</b>${rw ? ` (رتبهٔ ${rw})` : ''}\n` +
+      `🎯 دقت: ${u.ok}/${u.tot} (${Math.round(100 * u.ok / u.tot)}٪)`);
+  } else if (/^\/hide\b/i.test(text)) {
+    const sc = normScores(await getJSON(env, 'quiz_scores', {}));
+    const u = quizUser(sc, from, now);
+    u.hide = !u.hide;
+    await saveScores(env, sc);
+    await sendMessage(BASE, chatId, u.hide ? '🙈 از این به بعد در جدول «ناشناس» نمایش داده می‌شوی.' : '👀 نام کوچکت دوباره در جدول نمایش داده می‌شود.');
+  }
+}
+
 async function handlePublicMessage(msg, env, BASE, CHANNEL_ID, ADMIN_ID) {
   const text = (msg.text || '').trim();
   const chat = msg.chat || {};
@@ -532,6 +732,7 @@ async function handlePublicMessage(msg, env, BASE, CHANNEL_ID, ADMIN_ID) {
       '• <code>/subscribe</code> — دریافت خلاصهٔ صبح در چت خصوصی\n' +
       '• <code>/unsubscribe</code> — قطع اشتراک\n' +
       '• <code>/ask کلمه</code> — جست‌وجو در آرشیو کانال\n' +
+      '• <code>/quiz</code> — کوییز امتیازی · <code>/me</code> امتیاز من · <code>/leaderboard</code> جدول\n' +
       '• <code>/tip متن سوژه</code> — فرستادن خبر/لینک برای بررسی\n\n' +
       '<i>کانال خبری جدا از این چت است.</i>');
     return;
@@ -539,6 +740,11 @@ async function handlePublicMessage(msg, env, BASE, CHANNEL_ID, ADMIN_ID) {
 
   if (/^\/ask\b/i.test(text)) {
     await handleAsk(text, env, BASE, chatId, CHANNEL_ID, false);
+    return;
+  }
+
+  if (/^\/(quiz|me|leaderboard|hide)\b/i.test(text)) {
+    await handleQuizCommand(text, env, BASE, chatId, from);
     return;
   }
 
@@ -607,7 +813,7 @@ async function handlePublicMessage(msg, env, BASE, CHANNEL_ID, ADMIN_ID) {
     return;
   }
 
-  await sendMessage(BASE, chatId, 'دستورها: /ask کلمه · /subscribe · /unsubscribe · /tip متن سوژه');
+  await sendMessage(BASE, chatId, 'دستورها: /ask کلمه · /quiz · /me · /leaderboard · /subscribe · /unsubscribe · /tip متن سوژه');
 }
 
 async function handleMessage(msg, env, BASE, CHANNEL_ID, ADMIN_ID) {
@@ -688,7 +894,7 @@ async function handleMessage(msg, env, BASE, CHANNEL_ID, ADMIN_ID) {
       '<code>/pause</code> · <code>/resume</code> · <code>/clear</code> — توقف، ادامه، پاک‌کردن صف\n' +
       '<code>/undo</code> · <code>/editlast</code> · <code>/welcome</code> — حذف/ویرایش آخرین پست، خوش‌آمد\n' +
       '<code>/sources</code> · <code>/feeds</code> · <code>/runs</code> — منابع، فیدها، اجراها\n' +
-      '<code>/dashboard</code> · <code>/top</code> · <code>/weekly</code> — داشبورد، پربازدید، هفتگی\n' +
+      '<code>/dashboard</code> · <code>/top</code> · <code>/weekly</code> · <code>/quizboard</code> — داشبورد، پربازدید، هفتگی، جدول کوییز\n' +
       '<code>/ask</code> کلمه — جست‌وجو در آرشیو\n\n' +
       '━━━━━━━━━━━━━━\n' +
       '💡 <i>از دکمه‌های زیر هم می‌توانی استفاده کنی.</i>',
@@ -709,6 +915,9 @@ async function handleMessage(msg, env, BASE, CHANNEL_ID, ADMIN_ID) {
           [
             { text: '📟 داشبورد', callback_data: 'cmd:dashboard' },
             { text: '🔎 جست‌وجو', callback_data: 'cmd:ask' }
+          ],
+          [
+            { text: '🏆 جدول کوییز', callback_data: 'cmd:quizboard' }
           ],
           [
             { text: '👁 پربازدید', callback_data: 'cmd:top' },
@@ -816,6 +1025,12 @@ async function handleMessage(msg, env, BASE, CHANNEL_ID, ADMIN_ID) {
     await sendLong(BASE, ADMIN_ID, runsReport(await getJSON(env, 'run_log', []), env));
   } else if (/^\/ask\b/i.test(text)) {
     await handleAsk(text, env, BASE, ADMIN_ID, CHANNEL_ID, true);
+  } else if (/^\/(quiz|me|leaderboard|hide)\b/i.test(text)) {
+    await handleQuizCommand(text, env, BASE, ADMIN_ID, msg.from || { id: ADMIN_ID, first_name: 'ادمین' });
+  } else if (text === '/quizboard') {
+    const off = (Number(env.DISPLAY_TZ_OFFSET_MIN) || 210) * 60000;
+    await sendLong(BASE, ADMIN_ID, leaderboardText(normScores(await getJSON(env, 'quiz_scores', {})), quizWeekId(Date.now(), off)),
+      { inline_keyboard: [[{ text: '📣 انتشار در کانال', callback_data: 'qzpost' }]] });
   } else if (text === '/dashboard') {
     await sendLong(BASE, ADMIN_ID, dashboardReport({
       runs: await getJSON(env, 'run_log', []),

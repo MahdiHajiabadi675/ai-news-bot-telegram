@@ -9,7 +9,11 @@
 در `edu_state.quiz_used` نگه داشته می‌شوند تا تکرار نشوند.
 """
 
+import hashlib
+import json
 import re
+
+from . import cloudflare_kv
 
 QUIZ_BANK = [
     {
@@ -355,4 +359,36 @@ def validate(data):
     explanation = _clean(data.get("explanation"), 200)
     return {"question": question, "options": options, "correct": correct,
             "explanation": explanation}
+
+
+# ─────────── بانک سؤال برای Worker (کوییز خصوصی با امتیاز: /quiz در چت ربات) ───────────
+# Worker به پایتون دسترسی ندارد؛ بانک یک‌بار به KV منتقل می‌شود و فقط وقتی بانک عوض شود دوباره نوشته می‌شود
+# (هر اجرا فقط یک خواندن کوچک از کلید نسخه).
+
+QUIZ_BANK_KEY = "quiz_bank"
+QUIZ_BANK_VER_KEY = "quiz_bank_ver"
+
+
+def bank_for_worker() -> list:
+    """فرم فشردهٔ بانک: id، سؤال، گزینه‌ها، اندیس درست، توضیح."""
+    return [
+        {"id": q["id"], "q": q["question"], "o": list(q["options"]), "c": int(q["correct"]), "e": q.get("explanation", "")}
+        for q in QUIZ_BANK
+    ]
+
+
+def bank_version() -> str:
+    raw = json.dumps(bank_for_worker(), ensure_ascii=False, sort_keys=True)
+    return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:12]
+
+
+def sync_bank() -> bool:
+    """بانک سؤال را فقط در صورت تغییر به KV می‌نویسد. True = نوشته شد، False = تغییری نبود."""
+    ver = bank_version()
+    if cloudflare_kv.get(QUIZ_BANK_VER_KEY) == ver:
+        return False
+    if cloudflare_kv.put(QUIZ_BANK_KEY, bank_for_worker()) is False or cloudflare_kv.put(QUIZ_BANK_VER_KEY, ver) is False:
+        raise RuntimeError("quiz bank sync: KV write failed")
+    print(f"[QUIZ] bank synced to KV ({len(QUIZ_BANK)} questions, v{ver})")
+    return True
 
