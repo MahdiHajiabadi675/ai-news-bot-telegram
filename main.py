@@ -41,7 +41,11 @@ from src import digest
 from src import arxiv_daily
 from src import brief
 from src import views
+from src import weekly
+from src import storylines
+from src import backup
 from src import translator
+from src.config import TRANSLATE_RETRY_MAX
 
 
 def calculate_score(item: dict) -> int:
@@ -136,6 +140,12 @@ def _run(force=False):
         except Exception as e:  # noqa: BLE001
             print(f"[VIEWS] skipped: {type(e).__name__}")
 
+    # 2.6 بستن نظرسنجی هفتهٔ قبل و ثبت برنده (قبل از امتیازدهی همین اجرا)
+    try:
+        weekly.refresh()
+    except Exception as e:  # noqa: BLE001
+        print(f"[WEEKLY] refresh skipped: {type(e).__name__}")
+
     # 3. Collect new articles (if interval passed or forced)
     now = datetime.utcnow()
     last_collect = state.get("last_collect_time")
@@ -226,6 +236,12 @@ def _run(force=False):
                 if rl["merged"]:
                     print(f"[INFO] Merged {rl['merged']} duplicate stories")
 
+                # 🧵 پیش‌زمینهٔ موضوعی: لینک پست‌های قبلی همان موجودیت (OpenAI، Gemini...)
+                try:
+                    rl["story_links"] = storylines.enrich(analyzed)
+                except Exception as e:  # noqa: BLE001
+                    print(f"[STORY] skipped: {type(e).__name__}")
+
                 # سیگنال Hacker News: اگر خبر واقعاً در HN داغ است، به جذابیت اضافه کن
                 if HN_ENABLED:
                     analyzed = hn.enrich(analyzed, limit=HN_MAX_ITEMS)
@@ -241,6 +257,12 @@ def _run(force=False):
                         rl["views_boost"] = views.boost(analyzed, storage.load_published())
                     except Exception as e:  # noqa: BLE001
                         print(f"[VIEWS] boost skipped: {type(e).__name__}")
+
+                # 🗳 نتیجهٔ نظرسنجی هفتگی: دستهٔ برنده تا چند روز اولویت می‌گیرد
+                try:
+                    rl["poll_boost"] = weekly.boost(analyzed)
+                except Exception as e:  # noqa: BLE001
+                    print(f"[WEEKLY] boost skipped: {type(e).__name__}")
 
                 # بعد از تحلیل، خبر دیده‌شده محسوب می‌شود تا دوباره پردازش نشود.
                 for article in articles:
@@ -286,6 +308,9 @@ def _run(force=False):
                     by_hot = (not item.get("official")) and item["hot"] >= item["hot_threshold"]
                     should_auto = auto_enabled and not_rumor and (by_official or by_hot)
                     item["auto_reason"] = "official" if by_official else ("hot" if by_hot else "")
+                    if item.get("translated") is False and TRANSLATE_RETRY_MAX > 0:
+                        # یک راند در صف می‌ماند تا ترجمه دوباره تلاش شود
+                        item["hold_translation"] = True
 
                     if should_auto:
                         rl["auto"] += 1
@@ -349,7 +374,10 @@ def _run(force=False):
     # 8. صبحانهٔ AI — بعد از انتشار، تا تازه‌ترین خبرهای همین ساعت هم داخلش باشند
     state = brief.maybe_post(state)
 
-    # 9. Save state
+    # 9. جمع‌بندی و نظرسنجی هفتگی (شنبه شب، حداکثر یک‌بار در هفته)
+    state = weekly.maybe_post(state)
+
+    # 10. Save state
     state = set_stage(state, "waiting")
     storage.save_state(state)
 
@@ -369,6 +397,12 @@ def _run(force=False):
                            "published": state.get("daily_post_count", 0)})
     except Exception as e:
         print(f"[WARN] heartbeat failed: {e}")
+
+    # 💾 پشتیبان هفتگی KV (اختیاری، بعد از همهٔ نوشتن‌ها)
+    try:
+        backup.maybe_send(state)
+    except Exception as e:  # noqa: BLE001
+        print(f"[BACKUP] skipped: {type(e).__name__}")
 
     print(f"[{datetime.utcnow().isoformat()}] Pipeline finished")
 

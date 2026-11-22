@@ -73,6 +73,81 @@ def send_poll(chat_id, question, options, correct_option_id, explanation=None):
         return None
 
 
+def send_regular_poll(chat_id, question, options):
+    """نظرسنجی عادی (چند گزینه، بدون پاسخ درست) برای بازخورد مخاطبان."""
+    if DRY_RUN:
+        print(f"[DRY] sendPoll → {chat_id}: {question} ({len(options)} options)")
+        return {"ok": True, "dry_run": True, "result": {"message_id": 0}}
+    data = {
+        "chat_id": chat_id,
+        "question": str(question)[:300],
+        "options": [str(o)[:100] for o in options][:10],
+        "type": "regular",
+        "is_anonymous": True,
+        "allows_multiple_answers": False,
+    }
+    try:
+        resp = requests.post(f"{BASE}/sendPoll", json=data, timeout=15)
+        return resp.json()
+    except Exception as e:
+        print(f"[ERROR] send_regular_poll: {e}")
+        return None
+
+
+def stop_poll(message_id, chat_id=None):
+    """بستن نظرسنجی و گرفتن نتیجهٔ نهایی (voter_count هر گزینه)."""
+    if DRY_RUN:
+        print(f"[DRY] stopPoll → {chat_id or CHANNEL_ID} #{message_id}")
+        return {"ok": True, "dry_run": True, "result": {"poll": {"options": []}}}
+    try:
+        resp = requests.post(
+            f"{BASE}/stopPoll",
+            json={"chat_id": chat_id or CHANNEL_ID, "message_id": message_id},
+            timeout=15,
+        )
+        return resp.json()
+    except Exception as e:
+        print(f"[ERROR] stop_poll: {e}")
+        return None
+
+
+def edit_message_reply_markup(message_id, reply_markup, chat_id=None):
+    """افزودن/حذف دکمه‌های شیشه‌ای یک پیام (مثلاً دکمهٔ اشتراک‌گذاری بعد از ارسال)."""
+    if DRY_RUN:
+        print(f"[DRY] editMessageReplyMarkup → {chat_id or CHANNEL_ID} #{message_id}")
+        return {"ok": True, "dry_run": True}
+    try:
+        resp = requests.post(
+            f"{BASE}/editMessageReplyMarkup",
+            json={"chat_id": chat_id or CHANNEL_ID, "message_id": message_id,
+                  "reply_markup": reply_markup},
+            timeout=15,
+        )
+        return resp.json()
+    except Exception as e:
+        print(f"[ERROR] edit_message_reply_markup: {e}")
+        return None
+
+
+def send_document(chat_id, filename, content: bytes, caption=None):
+    """ارسال فایل (پشتیبان JSON) به ادمین."""
+    if DRY_RUN:
+        print(f"[DRY] sendDocument → {chat_id}: {filename} ({len(content)} bytes)")
+        return {"ok": True, "dry_run": True}
+    try:
+        resp = requests.post(
+            f"{BASE}/sendDocument",
+            data={"chat_id": chat_id, "caption": caption or ""},
+            files={"document": (filename, content, "application/json")},
+            timeout=30,
+        )
+        return resp.json()
+    except Exception as e:
+        print(f"[ERROR] send_document: {e}")
+        return None
+
+
+
 def answer_callback(callback_query_id, text=None, show_alert=False):
     if DRY_RUN:
         return
@@ -244,7 +319,7 @@ def poll_updates(state):
     try:
         resp = requests.get(f"{BASE}/getUpdates", params={
             "offset": offset + 1,
-            "allowed_updates": ["message", "callback_query"]
+            "allowed_updates": ["message", "callback_query", "message_reaction_count"]
         }, timeout=30)
         updates = resp.json().get("result") or []
     except Exception as e:
@@ -261,6 +336,10 @@ def poll_updates(state):
         elif "message" in upd:
             _handle_message(upd["message"], state)
             handled.append(upd)
+        elif "message_reaction_count" in upd:
+            mrc = upd.get("message_reaction_count") or {}
+            if views.record_reactions(mrc.get("message_id"), mrc.get("reactions") or []):
+                handled.append(upd)
 
     return state, handled
 
@@ -355,12 +434,44 @@ def _handle_callback(cb, state):
         send_message(ADMIN_ID, f"انتشار خودکار: {label}")
         return
 
+    if data.startswith(("tipok:", "tipno:")):
+        from . import tips
+        action, tip_id = data.split(":", 1)
+        tip = tips.find(tip_id)
+        if not tip:
+            answer_callback(cb_id, "❌ سوژه پیدا نشد", show_alert=True)
+            return
+        if action == "tipok" and tip.get("status") == "approved":
+            answer_callback(cb_id, "ℹ️ قبلاً منتشر شده", show_alert=True)
+            return
+        if action == "tipno" and tip.get("status") == "rejected":
+            answer_callback(cb_id, "ℹ️ قبلاً رد شده", show_alert=True)
+            return
+        if action == "tipok":
+            res = send_message(CHANNEL_ID, tips.format_post(tip))
+            if not (res and res.get("ok")):
+                answer_callback(cb_id, "⚠️ انتشار نشد", show_alert=True)
+                return
+            tips.mark(tip_id, "approved")
+            answer_callback(cb_id, "✅ منتشر شد")
+            send_message(ADMIN_ID, "✅ سوژهٔ مخاطب در کانال منتشر شد.")
+        else:
+            tips.mark(tip_id, "rejected")
+            answer_callback(cb_id, "❌ رد شد")
+        mid = (cb.get("message") or {}).get("message_id")
+        if mid:
+            try:
+                edit_message_reply_markup(mid, {"inline_keyboard": []}, chat_id=ADMIN_ID)
+            except Exception:  # noqa: BLE001
+                pass
+        return
+
     parts = data.split(":")
     action = parts[0]
     item_hash = parts[1] if len(parts) > 1 else ""
 
     # دکمه‌های منوی /start → همان دستورها را اجرا می‌کنند
-    menu_commands = {"status", "pending", "sources", "feeds", "runs", "stats", "clear", "auto", "top"}
+    menu_commands = {"status", "pending", "sources", "feeds", "runs", "stats", "clear", "auto", "top", "weekly", "backup", "tips"}
     if action == "cmd" and item_hash in menu_commands:
         answer_callback(cb_id)
         _handle_message({"text": "/" + item_hash, "chat": {"id": ADMIN_ID}}, state)
@@ -482,6 +593,65 @@ def _handle_callback(cb, state):
         state["paused"] = False
         answer_callback(cb_id, "▶️ ربات فعال شد")
 
+def _handle_public_message(msg, state):
+    """پیام‌های غیرادمین: اشتراک خلاصهٔ صبح و ارسال سوژه (`/tip`)."""
+    text = (msg.get("text") or "").strip()
+    chat_id = (msg.get("chat") or {}).get("id", 0)
+    chat_type = (msg.get("chat") or {}).get("type", "")
+    if not chat_id or chat_type != "private":
+        return
+
+    from . import subscribers, tips
+
+    sender = msg.get("from") or {}
+    user = " ".join(filter(None, [
+        str(sender.get("first_name") or ""),
+        ("@" + str(sender.get("username"))) if sender.get("username") else "",
+    ])).strip()
+
+    if text in ("/start", "/help"):
+        send_message(
+            chat_id,
+            "🤖 <b>ربات خبری AI</b>\n\n"
+            "• <code>/subscribe</code> — دریافت خلاصهٔ صبح در چت خصوصی\n"
+            "• <code>/unsubscribe</code> — قطع اشتراک\n"
+            "• <code>/tip متن سوژه</code> — فرستادن خبر/لینک برای بررسی\n\n"
+            "<i>کانال خبری جدا از این چت است.</i>",
+        )
+        return
+
+    if text == "/subscribe":
+        added = subscribers.add(chat_id, user)
+        send_message(
+            chat_id,
+            "✅ اشتراک فعال شد. هر صبح خلاصهٔ «صبحانهٔ AI» را همین‌جا می‌گیری."
+            if added else "ℹ️ از قبل مشترک بودی. برای قطع: <code>/unsubscribe</code>",
+        )
+        return
+
+    if text in ("/unsubscribe", "/stop"):
+        removed = subscribers.remove(chat_id)
+        send_message(chat_id, "✅ اشتراک قطع شد." if removed else "ℹ️ اشتراکی ثبت نشده بود.")
+        return
+
+    if text.startswith("/tip"):
+        body = text[len("/tip"):].strip()
+        ok, message, tip = tips.add(chat_id, user, body)
+        send_message(chat_id, message)
+        if ok and tip and ADMIN_ID:
+            send_message(
+                ADMIN_ID,
+                tips.format_admin(tip),
+                reply_markup={"inline_keyboard": [[
+                    {"text": "✅ انتشار", "callback_data": f"tipok:{tip['id']}"},
+                    {"text": "❌ رد", "callback_data": f"tipno:{tip['id']}"},
+                ]]},
+            )
+        return
+
+    send_message(chat_id, "دستورها: /subscribe · /unsubscribe · /tip متن سوژه")
+
+
 def _handle_message(msg, state):
     text = msg.get("text", "").strip()
     chat_id = msg.get("chat", {}).get("id", 0)
@@ -489,6 +659,7 @@ def _handle_message(msg, state):
     # احراز هویت: فقط ادمین. این چک باید *قبل از هر نوشتن* باشد؛ قبلاً پایین‌تر،
     # بعد از بلوک «ویرایش»، بود و هر کاربری می‌توانست متن خبر در صف را عوض کند.
     if not ADMIN_ID or chat_id != ADMIN_ID:
+        _handle_public_message(msg, state)
         return
 
     pending = storage.load_pending()
@@ -560,6 +731,9 @@ def _handle_message(msg, state):
             "<code>/feeds</code> — سلامت فیدها\n"
             "<code>/runs</code> — آمار اجراها\n"
             "<code>/top</code> — پربازدیدترین پست‌ها\n"
+            "<code>/weekly</code> — جمع‌بندی و نتیجهٔ نظرسنجی\n"
+            "<code>/tips</code> — سوژه‌های مخاطبان\n"
+            "<code>/backup</code> — پشتیبان‌گیری KV\n"
             "<code>/stats</code> — آمار کلی\n\n"
             "━━━━━━━━━━━━━━\n"
             "💡 <i>از دکمه‌های زیر هم می‌توانی استفاده کنی.</i>"
@@ -580,6 +754,10 @@ def _handle_message(msg, state):
                 ],
                 [
                     {"text": "👁 پربازدید", "callback_data": "cmd:top"},
+                    {"text": "🗓 هفتگی", "callback_data": "cmd:weekly"},
+                ],
+                [
+                    {"text": "💾 پشتیبان", "callback_data": "cmd:backup"},
                 ],
                 [
                     {"text": "🤖 روشن", "callback_data": "auto_on"},
@@ -648,6 +826,29 @@ def _handle_message(msg, state):
 
     elif text == "/top":
         send_message(chat_id, views.top_report(storage.load_published()))
+
+    elif text == "/weekly":
+        from . import weekly
+        send_message(chat_id, weekly.report())
+
+    elif text == "/backup":
+        from . import backup
+        send_message(chat_id, "💾 در حال ساخت پشتیبان…")
+        backup.send_now(chat_id)
+
+    elif text == "/tips":
+        from . import tips
+        rows = tips.pending(5)
+        if not rows:
+            send_message(chat_id, "📭 سوژهٔ تازه‌ای از مخاطبان نیست.")
+        for tip in rows:
+            send_message(
+                chat_id, tips.format_admin(tip),
+                reply_markup={"inline_keyboard": [[
+                    {"text": "✅ انتشار", "callback_data": f"tipok:{tip['id']}"},
+                    {"text": "❌ رد", "callback_data": f"tipno:{tip['id']}"},
+                ]]},
+            )
 
     elif text == "/feeds":
         send_message(chat_id, feeds_report(storage.load_feed_health()))

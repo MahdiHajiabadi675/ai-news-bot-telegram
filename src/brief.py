@@ -12,10 +12,14 @@
   • شناسهٔ روز در `brief_state.last_date` ذخیره می‌شود تا تکرار نشود.
 """
 from datetime import datetime, timedelta
+import time
 
-from . import bale, cloudflare_kv, storage
+from . import bale, cloudflare_kv, storage, subscribers
 from .bot import send_message
-from .config import BRIEF_ENABLED, BRIEF_HOUR, BRIEF_ITEMS, CHANNEL_ID, DISPLAY_TZ_OFFSET_MIN, DRY_RUN
+from .config import (
+    ADMIN_ID, BRIEF_ENABLED, BRIEF_HOUR, BRIEF_ITEMS, CHANNEL_ID,
+    DISPLAY_TZ_OFFSET_MIN, DM_DIGEST_ENABLED, DM_DIGEST_MAX, DRY_RUN,
+)
 from .formatting import clip, escape_html, safe_link
 
 KEY = "brief_state"
@@ -52,8 +56,15 @@ def recent_news(log, now_utc, hours: int = 26):
 
 
 def pick(items, limit: int = BRIEF_ITEMS):
+    """اولویت: اهمیت، سپس انتخاب مخاطبان در نظرسنجی هفتگی، سپس امتیاز."""
+    try:
+        from . import weekly
+        winner = weekly.winner_category()
+    except Exception:  # noqa: BLE001
+        winner = ""
     return sorted(items, key=lambda p: (
         IMPORTANCE_ORDER.get(p.get("importance"), 2),
+        0 if winner and str(p.get("category") or "other") == winner else 1,
         -int(p.get("score") or 0),
         -_published_at(p).timestamp(),
     ))[:limit]
@@ -148,6 +159,32 @@ def maybe_post(state: dict, now=None, force: bool = False) -> dict:
         print(f"[BRIEF] published {len(items)} items for {today}")
         bale.reset()
         bale.send_text(format_plain(items))
+
+        # 📬 همان خلاصه برای مشترکان چت خصوصی (فقط کسانی که /subscribe زده‌اند)
+        if DM_DIGEST_ENABLED:
+            _send_dm_digest(items)
     except Exception as e:  # noqa: BLE001
         print(f"[BRIEF] error: {type(e).__name__}: {e}")
     return state
+
+
+def _send_dm_digest(items) -> int:
+    """ارسال خلاصه به مشترکان؛ خطای 403 یعنی بلاک شده و حذف می‌شود."""
+    rows = subscribers.load()
+    if not rows:
+        return 0
+    text = format_plain(items)
+    sent = 0
+    for sub in rows[:max(1, DM_DIGEST_MAX)]:
+        chat_id = sub.get("chat_id")
+        if not chat_id or str(chat_id) == str(ADMIN_ID or ""):
+            continue
+        res = send_message(chat_id, text)
+        if res and res.get("ok"):
+            sent += 1
+        elif isinstance(res, dict) and res.get("error_code") in (400, 403):
+            subscribers.remove(chat_id)
+        time.sleep(0.05)  # زیر سقف ~۳۰ پیام/ثانیهٔ تلگرام
+    if sent:
+        print(f"[BRIEF] DM digest sent to {sent} subscriber(s)")
+    return sent

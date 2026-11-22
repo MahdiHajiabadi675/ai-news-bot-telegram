@@ -93,6 +93,9 @@ export default {
         await handleCallback(update.callback_query, env, BASE, CHANNEL_ID, ADMIN_ID);
       } else if (update.message) {
         await handleMessage(update.message, env, BASE, CHANNEL_ID, ADMIN_ID);
+      } else if (update.message_reaction_count) {
+        // 📊 واکنش‌های کانال (ناشناس، تجمیعی) — ذخیره برای /top و بوست دسته‌ها
+        await recordReactionCount(env, update.message_reaction_count);
       }
 
       await rememberUpdate(env, update);
@@ -230,7 +233,7 @@ async function handleCallback(cb, env, BASE, CHANNEL_ID, ADMIN_ID) {
   const itemHash = parts[1] || '';
 
   // دکمه‌های منوی /start → همان دستورها را اجرا می‌کنند
-  const menuCommands = ['status', 'pending', 'sources', 'feeds', 'runs', 'stats', 'clear', 'auto', 'top'];
+  const menuCommands = ['status', 'pending', 'sources', 'feeds', 'runs', 'stats', 'clear', 'auto', 'top', 'weekly', 'backup', 'tips'];
   if (action === 'cmd' && menuCommands.includes(itemHash)) {
     await answerCallback(BASE, cbId);
     await handleMessage({ text: '/' + itemHash, chat: { id: ADMIN_ID } }, env, BASE, CHANNEL_ID, ADMIN_ID);
@@ -242,6 +245,45 @@ async function handleCallback(cb, env, BASE, CHANNEL_ID, ADMIN_ID) {
   const autoChoice = parseAutoChoice(data);
   if (autoChoice !== null) {
     await setAutoPublish(env, BASE, ADMIN_ID, cbId, autoChoice);
+    return;
+  }
+
+  if (action === 'tipok' || action === 'tipno') {
+    const tips = await getJSON(env, 'tips', []);
+    const tip = tips.find(t => t && t.id === itemHash);
+    if (!tip) {
+      await answerCallback(BASE, cbId, '❌ سوژه پیدا نشد', true);
+      return;
+    }
+    if (action === 'tipok' && tip.status === 'approved') {
+      await answerCallback(BASE, cbId, 'ℹ️ قبلاً منتشر شده', true);
+      return;
+    }
+    if (action === 'tipno' && tip.status === 'rejected') {
+      await answerCallback(BASE, cbId, 'ℹ️ قبلاً رد شده', true);
+      return;
+    }
+    if (action === 'tipok') {
+      const res = await sendMessage(BASE, CHANNEL_ID, formatTipPost(tip));
+      if (!res || !res.ok) {
+        await answerCallback(BASE, cbId, '⚠️ انتشار نشد', true);
+        return;
+      }
+      tip.status = 'approved';
+    } else {
+      tip.status = 'rejected';
+    }
+    tip.reviewed_at = new Date().toISOString();
+    await saveJSON(env, 'tips', tips);
+    await answerCallback(BASE, cbId, action === 'tipok' ? '✅ منتشر شد' : '❌ رد شد');
+    if (cb.message && cb.message.message_id) {
+      try {
+        await telegramCall(BASE, 'editMessageReplyMarkup', {
+          chat_id: ADMIN_ID, message_id: cb.message.message_id,
+          reply_markup: { inline_keyboard: [] },
+        });
+      } catch (e) { /* نادیده */ }
+    }
     return;
   }
 
@@ -369,11 +411,101 @@ async function handleCallback(cb, env, BASE, CHANNEL_ID, ADMIN_ID) {
   }
 }
 
+async function handlePublicMessage(msg, env, BASE, CHANNEL_ID, ADMIN_ID) {
+  const text = (msg.text || '').trim();
+  const chat = msg.chat || {};
+  const chatId = chat.id;
+  if (!chatId || chat.type !== 'private') return;
+  const from = msg.from || {};
+  const user = [from.first_name || '', from.username ? '@' + from.username : '']
+    .filter(Boolean).join(' ').slice(0, 60);
+
+  if (/^\/(start|help)\b/i.test(text)) {
+    await sendMessage(BASE, chatId,
+      '🤖 <b>ربات خبری AI</b>\n\n' +
+      '• <code>/subscribe</code> — دریافت خلاصهٔ صبح در چت خصوصی\n' +
+      '• <code>/unsubscribe</code> — قطع اشتراک\n' +
+      '• <code>/tip متن سوژه</code> — فرستادن خبر/لینک برای بررسی\n\n' +
+      '<i>کانال خبری جدا از این چت است.</i>');
+    return;
+  }
+
+  if (/^\/subscribe\b/i.test(text)) {
+    const subs = await getJSON(env, 'subscribers', []);
+    const cap = Math.min(500, Math.max(1, Number(env.DM_DIGEST_MAX) || 200));
+    if (subs.some(s => String(s.chat_id) === String(chatId))) {
+      await sendMessage(BASE, chatId, 'ℹ️ از قبل مشترک بودی. برای قطع: <code>/unsubscribe</code>');
+    } else if (subs.length >= cap) {
+      await sendMessage(BASE, chatId, '⚠️ ظرفیت اشتراک پر شده است.');
+    } else {
+      subs.push({ chat_id: chatId, user, at: new Date().toISOString() });
+      await saveJSON(env, 'subscribers', subs);
+      await sendMessage(BASE, chatId, '✅ اشتراک فعال شد. هر صبح خلاصهٔ «صبحانهٔ AI» را همین‌جا می‌گیری.');
+    }
+    return;
+  }
+
+  if (/^\/(unsubscribe|stop)\b/i.test(text)) {
+    const subs = await getJSON(env, 'subscribers', []);
+    const next = subs.filter(s => String(s.chat_id) !== String(chatId));
+    await saveJSON(env, 'subscribers', next);
+    await sendMessage(BASE, chatId,
+      next.length === subs.length ? 'ℹ️ اشتراکی ثبت نشده بود.' : '✅ اشتراک قطع شد.');
+    return;
+  }
+
+  if (/^\/tip\b/i.test(text)) {
+    let body = text.replace(/^\/tip\s*/i, '').replace(/\s+/g, ' ').trim();
+    if (body.length < 12) {
+      await sendMessage(BASE, chatId, 'متن کوتاه است (حداقل ۱۲ کاراکتر). مثال:\n<code>/tip OpenAI مدل جدیدی معرفی کرد</code>');
+      return;
+    }
+    if (body.length > 600) body = body.slice(0, 600);
+    const rates = await getJSON(env, 'tip_rate', {});
+    const rateKey = String(chatId);
+    const rawRate = rates[rateKey];
+    const rateAt = rawRate && typeof rawRate === 'object' ? rawRate.at : rawRate;
+    const rateCount = rawRate && typeof rawRate === 'object' ? Number(rawRate.count) || 0 : 1;
+    const limit = Math.max(1, Number(env.TIPS_MAX_PER_HOUR) || 1);
+    const inWindow = rateAt && Date.now() - Date.parse(rateAt) < 3600 * 1000;
+    const used = inWindow ? rateCount : 0;
+    if (used >= limit) {
+      await sendMessage(BASE, chatId,
+        `⏳ سهمیهٔ این ساعت پر شده (حداکثر ${limit} سوژه در ساعت). یک ساعت دیگر دوباره تلاش کن.`);
+      return;
+    }
+    const tips = await getJSON(env, 'tips', []);
+    const tip = {
+      id: `tip-${Date.now()}-${chatId}`, chat_id: chatId, user, text: body,
+      at: new Date().toISOString(), status: 'new',
+    };
+    tips.push(tip);
+    await saveJSON(env, 'tips', tips.slice(-200));
+    rates[rateKey] = { at: new Date().toISOString(), count: used + 1 };
+    await saveJSON(env, 'tip_rate', rates);
+    await sendMessage(BASE, chatId, '✅ سوژه ثبت شد. اگر تایید شود، با نام «از مخاطبان» منتشر می‌شود.');
+    if (ADMIN_ID) {
+      await sendMessage(BASE, ADMIN_ID,
+        `📣 <b>سوژهٔ تازه</b>\nاز: ${escapeHtml(user || String(chatId))}\n\n${escapeHtml(body)}`,
+        { inline_keyboard: [[
+          { text: '✅ انتشار', callback_data: `tipok:${tip.id}` },
+          { text: '❌ رد', callback_data: `tipno:${tip.id}` },
+        ]] });
+    }
+    return;
+  }
+
+  await sendMessage(BASE, chatId, 'دستورها: /subscribe · /unsubscribe · /tip متن سوژه');
+}
+
 async function handleMessage(msg, env, BASE, CHANNEL_ID, ADMIN_ID) {
   const text = (msg.text || '').trim();
   const chatId = msg.chat.id;
 
-  if (chatId !== ADMIN_ID) return;
+  if (chatId !== ADMIN_ID) {
+    await handlePublicMessage(msg, env, BASE, CHANNEL_ID, ADMIN_ID);
+    return;
+  }
 
   const pending = await getJSON(env, 'pending', []);
   const approved = await getJSON(env, 'approved', []);
@@ -452,6 +584,7 @@ async function handleMessage(msg, env, BASE, CHANNEL_ID, ADMIN_ID) {
       '<code>/feeds</code> — سلامت فیدها\n' +
       '<code>/runs</code> — آمار اجراها\n' +
       '<code>/top</code> — پربازدیدترین پست‌ها\n' +
+      '<code>/weekly</code> — جمع‌بندی و نظرسنجی\n' +
       '<code>/stats</code> — آمار کلی\n\n' +
       '━━━━━━━━━━━━━━\n' +
       '💡 <i>از دکمه‌های زیر هم می‌توانی استفاده کنی.</i>',
@@ -470,7 +603,12 @@ async function handleMessage(msg, env, BASE, CHANNEL_ID, ADMIN_ID) {
             { text: '🗞 اجراها', callback_data: 'cmd:runs' }
           ],
           [
-            { text: '👁 پربازدید', callback_data: 'cmd:top' }
+            { text: '👁 پربازدید', callback_data: 'cmd:top' },
+            { text: '🗓 هفتگی', callback_data: 'cmd:weekly' }
+          ],
+          [
+            { text: '📣 سوژه‌ها', callback_data: 'cmd:tips' },
+            { text: '💾 پشتیبان', callback_data: 'cmd:backup' }
           ],
           [
             { text: '🤖 روشن', callback_data: 'auto_on' },
@@ -746,23 +884,77 @@ async function handleMessage(msg, env, BASE, CHANNEL_ID, ADMIN_ID) {
       `آموزشی امروز: ${h.edu.today}/${target} (صف: ${h.edu.queue})`);
   } else if (text === '/top') {
     const published = await getJSON(env, 'published', []);
+    const reactions = await getJSON(env, 'reactions', {});
+    const rxWeight = Math.max(0, Number(env.REACTIONS_WEIGHT) || 10);
+    const rxOn = String(env.REACTIONS_ENABLED ?? 'true').toLowerCase() !== 'false';
     const rows = published
-      .filter(p => p && p.published && !p.deleted && Number(p.views) > 0)
-      .sort((a, b) => Number(b.views) - Number(a.views))
+      .filter(p => p && p.published && !p.deleted)
+      .map(p => {
+        const rx = (rxOn && reactions[String(p.message_id)]) || {};
+        const by = (rx && rx.by) || {};
+        const topEmoji = Object.keys(by).sort((a, b) => Number(by[b]) - Number(by[a]))[0] || '';
+        const reactionTotal = Number(rx.total) || 0;
+        const views = Number(p.views) || 0;
+        return { item: p, views, reactionTotal, topEmoji,
+          engagement: views + (rxOn ? reactionTotal * rxWeight : 0) };
+      })
+      .filter(r => r.engagement > 0)
+      .sort((a, b) => b.engagement - a.engagement)
       .slice(0, 10);
     if (!rows.length) {
       const hint = env.CHANNEL_HANDLE
         ? ''
         : '\n\n⚠️ برای فعال‌شدن، متغیر <code>CHANNEL_HANDLE</code> را مثل <code>@your_channel</code> تنظیم کن.';
-      await sendMessage(BASE, ADMIN_ID, '📈 هنوز بازدیدی ثبت نشده است.' + hint);
+      await sendMessage(BASE, ADMIN_ID, '📈 هنوز بازدید/واکنشی ثبت نشده است.' + hint);
     } else {
-      const lines = rows.map((p, i) =>
-        `${i + 1}. <b>${fmtViews(p.views)}</b> — ${escapeHtml(String(p.title_fa || p.title || '').slice(0, 70))}` +
-        (p.source ? `\n   <i>${escapeHtml(String(p.source).slice(0, 40))}</i>` : '')
-      ).join('\n');
+      const lines = rows.map((r, i) => {
+        const p = r.item;
+        const stats = [];
+        if (r.views > 0) stats.push(`👁 ${fmtViews(r.views)}`);
+        if (r.reactionTotal > 0) stats.push(`${r.topEmoji || '❤️'} ${fmtViews(r.reactionTotal)}`);
+        return `${i + 1}. <b>${stats.join(' · ')}</b> — ${escapeHtml(String(p.title_fa || p.title || '').slice(0, 70))}` +
+          (p.source ? `\n   <i>${escapeHtml(String(p.source).slice(0, 40))}</i>` : '');
+      }).join('\n');
       await sendMessage(BASE, ADMIN_ID,
         `📈 <b>پربازدیدترین‌های اخیر</b>\n${'─'.repeat(20)}\n${lines}\n\n<i>نمونه: ${rows.length} پست</i>`);
     }
+  } else if (text === '/weekly') {
+    const ws = await getJSON(env, 'weekly_state', {});
+    const lines = ['🗓 <b>جمع‌بندی هفتگی</b>'];
+    if (ws.last_date) lines.push(`آخرین اجرا: ${escapeHtml(ws.last_date)}`);
+    if (ws.poll) {
+      if (ws.poll.closed) {
+        lines.push(`نظرسنجی: بسته ✅ (کل رأی: ${ws.poll.total_votes || 0})`);
+      } else {
+        lines.push(`نظرسنجی: باز — بسته‌شدن: ${escapeHtml(String(ws.poll.closes_at || '').slice(0, 16))}`);
+      }
+    } else {
+      lines.push('نظرسنجی: هنوز شروع نشده');
+    }
+    const result = ws.result || {};
+    if (result.category && (!result.expires_at || Date.parse(result.expires_at) > Date.now())) {
+      lines.push(`🏆 انتخاب مخاطبان: <b>${escapeHtml(result.label || result.category)}</b> ` +
+        `(${result.votes || 0}/${result.total || 0} رأی)`);
+      lines.push(`⏳ اثر بوست تا: ${escapeHtml(String(result.expires_at || '').slice(0, 10))}`);
+    }
+    await sendMessage(BASE, ADMIN_ID, lines.join('\n'));
+  } else if (text === '/tips') {
+    const tips = await getJSON(env, 'tips', []);
+    const rows = tips.filter(t => t && t.status === 'new').slice(-5);
+    if (!rows.length) {
+      await sendMessage(BASE, ADMIN_ID, '📭 سوژهٔ تازه‌ای از مخاطبان نیست.');
+    }
+    for (const tip of rows) {
+      await sendMessage(BASE, ADMIN_ID,
+        `📣 <b>سوژهٔ تازه</b>\nاز: ${escapeHtml(String(tip.user || tip.chat_id || '?'))}\n\n` +
+        `${escapeHtml(String(tip.text || '').slice(0, 600))}`,
+        { inline_keyboard: [[
+          { text: '✅ انتشار', callback_data: `tipok:${tip.id}` },
+          { text: '❌ رد', callback_data: `tipno:${tip.id}` },
+        ]] });
+    }
+  } else if (text === '/backup') {
+    await sendBackup(env, BASE, ADMIN_ID);
   } else if (text === '/stats') {
     const published = await getJSON(env, 'published', []);
     const totalPublished = published.filter(p => p.published).length;
@@ -1055,8 +1247,25 @@ function safeLink(link) {
   }
 }
 
-/**
- * ساخت پیام با طول‌های مشخص — تنها جایی که HTML کانال تولید می‌شود.
+const WHY_TEXT = {
+  model_release: 'یک گزینهٔ تازه برای انتخاب ابزار؛ ارزش واقعی‌اش را با همان کار روزمرهٔ خودت بسنج، نه فقط با تیتر.',
+  benchmark: 'بنچمارک فقط یک زاویه از کیفیت را نشان می‌دهد؛ برای تصمیم، مدل را روی کار واقعی خودت امتحان کن.',
+  funding: 'جهت رشد بازار در ۶ تا ۱۲ ماه آینده را نشان می‌دهد: ابزار بیشتر، رقابت شدیدتر و احتمال تغییر قیمت‌ها.',
+  policy: 'قانون و سیاست تعیین می‌کند چه ابزاری در دسترس باشد و با چه محدودیتی؛ اثرش مستقیم روی انتخاب‌های روزمره است.',
+  research: 'پژوهش معمولاً با تأخیر به محصول می‌رسد؛ سیگنال آینده است، نه ابزار قابل استفادهٔ امروز.',
+  tool_release: 'یعنی می‌توانی همین امروز یک کار مشخص را سریع‌تر انجام دهی؛ قبل از جایگزینی، خروجی‌اش را با روش فعلی مقایسه کن.',
+  industry: 'تغییر در صنعت روی قیمت، دسترسی و پشتیبانی ابزارهایی که استفاده می‌کنی اثر می‌گذارد.',
+};
+const WHY_RUMOR = 'هنوز رسمی نیست؛ تا تأیید، روی آن برنامه‌ریزی نکن و منتظر منبع اصلی بمان.';
+
+function whyItMatters(item, env) {
+  if (String(env?.SHOW_WHY_IT_MATTERS ?? 'true').toLowerCase() === 'false') return '';
+  if (!item || ['edu', 'digest', 'paper', 'brief', 'weekly'].includes(item.category)) return '';
+  if (item.confidence === 'rumor') return WHY_RUMOR;
+  return WHY_TEXT[item.category] || '';
+}
+
+/** ساخت پیام با طول‌های مشخص — تنها جایی که HTML کانال تولید می‌شود.
  * برش نهایی هرگز روی HTML انجام نمی‌شود (تگ نصفه = خطای 400 تلگرام).
  */
 function renderChannelMessage(item, env, summaryLen, showOriginal, tagCount = -1) {
@@ -1083,7 +1292,20 @@ function renderChannelMessage(item, env, summaryLen, showOriginal, tagCount = -1
     original = `\n\n🌐 <b>متن اصلی</b>\n<blockquote expandable>${body}</blockquote>`;
   }
 
-  let text = `${emoji} <b>${title}</b>\n${divider}\n\n${summary}${original}\n\n${divider}\n`;
+  const reason = whyItMatters(item, env);
+  const why = reason ? `\n\n🎯 <b>چرا مهم است</b>\n${escapeHtml(reason)}` : '';
+
+  let background = '';
+  if (Array.isArray(item.background) && item.background.length) {
+    const rows = item.background.slice(0, 2).map(row => {
+      const url = safeLink(row && row.link);
+      const headline = escapeHtml(clip(row && row.title, 80));
+      return url && headline ? `• <a href="${url}">${headline}</a>` : '';
+    }).filter(Boolean);
+    if (rows.length) background = `\n\n🧵 <b>پیش‌زمینه</b>\n${rows.join('\n')}`;
+  }
+
+  let text = `${emoji} <b>${title}</b>\n${divider}\n\n${summary}${why}${background}${original}\n\n${divider}\n`;
   const link = safeLink(item.link);
   text += link ? `📰 منبع: <a href="${link}">${source}</a>` : `📰 منبع: ${source}`;
   if (hashtags) text += `\n🏷️ ${hashtags}`;
@@ -1238,6 +1460,21 @@ async function publishItem(env, BASE, CHANNEL_ID, ADMIN_ID, item) {
     publishedLog.push({ ...item, published: true, published_at: new Date().toISOString(),
       ...(msgId ? { message_id: msgId } : {}) });
     await saveJSON(env, 'published', publishedLog);
+    // 📤 دکمهٔ اشتراک‌گذاری (لینک پست کانال، وگرنه منبع)
+    if (msgId && String(env.SHARE_BUTTON_ENABLED || 'true').toLowerCase() !== 'false') {
+      const handle = String(CHANNEL_ID || '').startsWith('@') ? String(CHANNEL_ID).slice(1) : '';
+      const link = handle ? `https://t.me/${handle}/${msgId}` : (item.link || '');
+      if (link) {
+        const share = `https://t.me/share/url?url=${encodeURIComponent(link)}` +
+          `&text=${encodeURIComponent(String(item.title_fa || item.title || 'خبر AI').slice(0, 120))}`;
+        try {
+          await telegramCall(BASE, 'editMessageReplyMarkup', {
+            chat_id: CHANNEL_ID, message_id: msgId,
+            reply_markup: { inline_keyboard: [[{ text: '📤 فرستادن به دوست', url: share }]] },
+          });
+        } catch (e) { /* نادیده */ }
+      }
+    }
     // از صف approved حذف کن تا دوباره منتشر نشه
     const approvedList = await getJSON(env, 'approved', []);
     await saveJSON(env, 'approved', approvedList.filter(i => itemKey(i) !== key));
@@ -1580,6 +1817,13 @@ async function sendStartMessage(BASE, chatId, text, replyMarkup = null, bannerUr
   return sendMessage(BASE, chatId, text, replyMarkup);
 }
 
+function formatTipPost(tip) {
+  const who = escapeHtml(String(tip.user || 'مخاطب کانال').slice(0, 40));
+  const body = escapeHtml(String(tip.text || '').slice(0, 600));
+  return '📣 <b>از مخاطبان کانال</b>\n' + '─'.repeat(20) + '\n\n' +
+    `<blockquote>${body}</blockquote>\n\n— ${who}\n🏷️ #از_مخاطبان`;
+}
+
 function escapeHtml(value) {
   return String(value ?? '')
     .replaceAll('&', '&amp;')
@@ -1659,6 +1903,58 @@ async function dispatchGithubWorkflow(env) {
     console.log('[scheduled] GitHub dispatch status:', resp.status);
   } catch (e) {
     console.error('[scheduled] dispatch failed:', e);
+  }
+}
+
+async function sendBackup(env, BASE, ADMIN_ID) {
+  try {
+    const keys = {};
+    const names = ['state', 'seen', 'pending', 'approved', 'published', 'source_stats',
+      'feed_health', 'run_log', 'brief_state', 'views_state', 'weekly_state', 'stories',
+      'reactions', 'edu_state', 'digest_state', 'arxiv_state', 'subscribers', 'tips', 'tip_rate'];
+    for (const key of names) {
+      const value = await getJSON(env, key, null);
+      if (value !== null) keys[key] = value;
+    }
+    const body = JSON.stringify({
+      format: 'ai-news-bot-kv', version: 1,
+      generated_at: new Date().toISOString(), keys,
+    }, null, 1);
+    const form = new FormData();
+    form.append('chat_id', String(ADMIN_ID));
+    form.append('caption', '💾 پشتیبان KV — بازیابی: python -m src.backup --restore <file>');
+    form.append('document', new Blob([body], { type: 'application/json' }),
+      `ai-news-bot-backup-${new Date().toISOString().slice(0, 10)}.json`);
+    const res = await fetch(`${BASE}/sendDocument`, { method: 'POST', body: form });
+    const data = await res.json().catch(() => ({}));
+    await sendMessage(BASE, ADMIN_ID, data.ok ? '✅ پشتیبان ارسال شد.' : '⚠️ ارسال پشتیبان نشد.');
+  } catch (e) {
+    await sendMessage(BASE, ADMIN_ID, '⚠️ ساخت پشتیبان ناموفق بود.');
+  }
+}
+
+async function recordReactionCount(env, update) {
+  try {
+    const mid = Number(update.message_id);
+    if (!mid) return;
+    const by = {};
+    let total = 0;
+    for (const r of (update.reactions || [])) {
+      const n = Number(r.total_count || 0);
+      if (n <= 0) continue;
+      const emoji = String(r.type?.emoji || '?');
+      by[emoji] = (by[emoji] || 0) + n;
+      total += n;
+    }
+    if (!total) return;
+    const data = await getJSON(env, 'reactions', {});
+    data[String(mid)] = { total, by, at: new Date().toISOString() };
+    // فقط ۵۰۰ پست آخر نگه داشته شود
+    const entries = Object.entries(data).sort((a, b) =>
+      String(b[1]?.at || '').localeCompare(String(a[1]?.at || ''))).slice(0, 500);
+    await saveJSON(env, 'reactions', Object.fromEntries(entries));
+  } catch (e) {
+    console.error('[reactions] failed:', (e && e.message) || e);
   }
 }
 

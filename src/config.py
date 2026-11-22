@@ -139,11 +139,65 @@ VIEWS_PAGES = _int_env("VIEWS_PAGES", 2)
 # حداکثر امتیاز «جذابیت» که دستهٔ پرخوان به خبر اضافه می‌کند
 VIEWS_BOOST_MAX = _int_env("VIEWS_BOOST_MAX", 8)
 
+# ───────── واکنش‌های تلگرام (Reactions) ─────────
+# واکنش‌ها را Worker (webhook) در KV ذخیره می‌کند؛ دقیق‌تر و سریع‌تر از بازدید است.
+REACTIONS_ENABLED = os.getenv("REACTIONS_ENABLED", "true").strip().lower() not in ("0", "false", "no", "off")
+# هر واکنش معادل چند بازدید در محاسبهٔ محبوبیت دسته‌ها
+REACTIONS_WEIGHT = _int_env("REACTIONS_WEIGHT", 10)
+# حداکثر امتیاز جذابیتی که واکنش‌ها به دستهٔ محبوب می‌دهند
+REACTIONS_BOOST_MAX = _int_env("REACTIONS_BOOST_MAX", 6)
+
+# ───────── بهداشت انتشار ─────────
+# ساعت‌های سکوت به وقت ایران، مثل "0-7" یا "23-7". خالی = خاموش.
+QUIET_HOURS = (os.getenv("QUIET_HOURS", "") or "").strip()
+# حداقل فاصلهٔ بین دو «راند» انتشار (دقیقه). 0 = خاموش. داخل یک راند اعمال نمی‌شود.
+PUBLISH_MIN_GAP_MIN = _int_env("PUBLISH_MIN_GAP_MIN", 0)
+# دکمهٔ «فرستادن به دوست» زیر پست‌های خبری
+SHARE_BUTTON_ENABLED = os.getenv("SHARE_BUTTON_ENABLED", "true").strip().lower() not in ("0", "false", "no", "off")
+
 # ───────── صبحانهٔ AI (src/brief.py) ─────────
 BRIEF_ENABLED = os.getenv("BRIEF_ENABLED", "true").strip().lower() not in ("0", "false", "no", "off")
 # ساعت انتشار به وقت ایران (۰ تا ۲۳)
 BRIEF_HOUR = _int_env("BRIEF_HOUR", 8)
 BRIEF_ITEMS = _int_env("BRIEF_ITEMS", 5)
+
+# ───────── جمع‌بندی و نظرسنجی هفتگی (src/weekly.py) ─────────
+WEEKLY_ENABLED = os.getenv("WEEKLY_ENABLED", "true").strip().lower() not in ("0", "false", "no", "off")
+# روز هفته به وقت ایران: دوشنبه=0 ... شنبه=5 یکشنبه=6
+WEEKLY_DAY = _int_env("WEEKLY_DAY", 5)
+WEEKLY_HOUR = _int_env("WEEKLY_HOUR", 21)
+WEEKLY_ITEMS = _int_env("WEEKLY_ITEMS", 3)
+# نظرسنجی بعد از این‌همه ساعت بسته و نتیجه‌اش خودکار اعمال می‌شود
+POLL_CLOSE_HOURS = _int_env("POLL_CLOSE_HOURS", 48)
+# کمتر از این تعداد رأی → نتیجه اعمال نمی‌شود (نویز)
+POLL_MIN_VOTES = _int_env("POLL_MIN_VOTES", 3)
+# امتیاز جذابیتی که دستهٔ برندهٔ نظرسنجی می‌گیرد
+POLL_BOOST = _int_env("POLL_BOOST", 6)
+# چند روز این بوست فعال بماند
+POLL_BOOST_DAYS = _int_env("POLL_BOOST_DAYS", 7)
+
+# ───────── پیش‌زمینهٔ موضوعی / تایم‌لاین (src/storylines.py) ─────────
+STORYLINES_ENABLED = os.getenv("STORYLINES_ENABLED", "true").strip().lower() not in ("0", "false", "no", "off")
+STORY_WINDOW_DAYS = _int_env("STORY_WINDOW_DAYS", 45)
+STORY_LINKS_MAX = _int_env("STORY_LINKS_MAX", 2)
+
+# ───────── تلاش مجدد ترجمه ─────────
+# اگر ترجمه شکست بخورد، خبر یک راند در صف می‌ماند و دوباره تلاش می‌شود.
+TRANSLATE_RETRY_MAX = _int_env("TRANSLATE_RETRY_MAX", 2)
+
+# ───────── پشتیبان‌گیری KV (src/backup.py) ─────────
+BACKUP_ENABLED = os.getenv("BACKUP_ENABLED", "true").strip().lower() not in ("0", "false", "no", "off")
+# یکشنبه=6
+BACKUP_DAY = _int_env("BACKUP_DAY", 6)
+BACKUP_HOUR = _int_env("BACKUP_HOUR", 3)
+
+# ───────── خبرنگار مردمی (src/tips.py) ─────────
+TIPS_ENABLED = os.getenv("TIPS_ENABLED", "true").strip().lower() not in ("0", "false", "no", "off")
+TIPS_MAX_PER_HOUR = _int_env("TIPS_MAX_PER_HOUR", 1)
+
+# ───────── خلاصهٔ خصوصی برای مشترکان (src/subscribers.py) ─────────
+DM_DIGEST_ENABLED = os.getenv("DM_DIGEST_ENABLED", "true").strip().lower() not in ("0", "false", "no", "off")
+DM_DIGEST_MAX = _int_env("DM_DIGEST_MAX", 200)
 
 # ───────── «چرا مهم است» (src/why.py) ─────────
 # یک خط تحلیل محلی و بدون مدل زیر هر خبر

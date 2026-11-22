@@ -105,12 +105,26 @@ def _render(item: dict, summary_len: int, show_original: bool, tag_count: int = 
         original = f"\n\n🌐 <b>متن اصلی</b>\n<blockquote expandable>{body}</blockquote>"
 
     why = ""
-    if item.get("source") and item.get("category") not in ("edu", "digest", "paper", "brief"):
+    if item.get("source") and item.get("category") not in ("edu", "digest", "paper", "brief", "weekly"):
         reason = why_it_matters(item)
         if reason:
             why = f"\n\n🎯 <b>چرا مهم است</b>\n{escape_html(reason)}"
 
-    text = f"{emoji} <b>{title}</b>\n{divider}\n\n{summary}{why}{original}\n\n{divider}\n"
+    background = ""
+    bg = item.get("background")
+    if isinstance(bg, list) and bg:
+        rows = []
+        for row in bg[:2]:
+            if not isinstance(row, dict):
+                continue
+            url = safe_link(row.get("link"))
+            headline = escape_html(clip(row.get("title") or "", 80))
+            if url and headline:
+                rows.append(f'• <a href="{url}">{headline}</a>')
+        if rows:
+            background = "\n\n🧵 <b>پیش‌زمینه</b>\n" + "\n".join(rows)
+
+    text = f"{emoji} <b>{title}</b>\n{divider}\n\n{summary}{why}{background}{original}\n\n{divider}\n"
     link = safe_link(item.get("link"))
     if link:
         text += f'📰 منبع: <a href="{link}">{source}</a>'
