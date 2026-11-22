@@ -233,7 +233,7 @@ async function handleCallback(cb, env, BASE, CHANNEL_ID, ADMIN_ID) {
   const itemHash = parts[1] || '';
 
   // دکمه‌های منوی /start → همان دستورها را اجرا می‌کنند
-  const menuCommands = ['status', 'pending', 'sources', 'feeds', 'runs', 'stats', 'clear', 'auto', 'top', 'weekly', 'backup', 'tips', 'dashboard'];
+  const menuCommands = ['status', 'pending', 'sources', 'feeds', 'runs', 'stats', 'clear', 'auto', 'top', 'weekly', 'backup', 'tips', 'dashboard', 'ask'];
   if (action === 'cmd' && menuCommands.includes(itemHash)) {
     await answerCallback(BASE, cbId);
     await handleMessage({ text: '/' + itemHash, chat: { id: ADMIN_ID } }, env, BASE, CHANNEL_ID, ADMIN_ID);
@@ -411,6 +411,112 @@ async function handleCallback(cb, env, BASE, CHANNEL_ID, ADMIN_ID) {
   }
 }
 
+// ───────────── 🔎 /ask: جست‌وجوی آرشیو (بدون مدل، بدون هزینه) ─────────────
+
+const ASK_STOP = new Set(['و', 'در', 'به', 'از', 'که', 'را', 'این', 'آن', 'با', 'برای', 'یا', 'خبر', 'اخبار', 'درباره', 'دربارهٔ', 'چیه', 'چیست', 'the', 'a', 'an', 'of', 'in', 'on', 'about', 'for', 'and', 'to', 'is']);
+
+/** یکسان‌سازی متن فارسی/انگلیسی برای جست‌وجو: ی/ک عربی، نیم‌فاصله، ارقام، حروف بزرگ، اعراب. */
+function normSearch(s) {
+  return String(s ?? '').toLowerCase()
+    .replace(/[يى]/g, 'ی').replace(/ك/g, 'ک')
+    .replace(/[‌‏‎]/g, ' ')
+    .replace(/[ً-ٰٟ]/g, '')
+    .replace(/[۰-۹]/g, d => String('۰۱۲۳۴۵۶۷۸۹'.indexOf(d)))
+    .replace(/[٠-٩]/g, d => String('٠١٢٣٤٥٦٧٨٩'.indexOf(d)));
+}
+
+function searchTokens(q) {
+  const out = [];
+  for (const t of normSearch(q).split(/[^\p{L}\p{N}]+/u)) {
+    if (!t || ASK_STOP.has(t)) continue;
+    if (t.length < 2 && !/\d/.test(t)) continue;
+    if (!out.includes(t)) out.push(t);
+  }
+  return out.slice(0, 6);
+}
+
+/**
+ * جست‌وجوی متنی در پست‌های منتشرشده. امتیاز: عنوان ۳، برچسب/دسته/منبع ۲، خلاصه ۱ برای هر کلمه؛
+ * حداقل نصف کلمه‌ها باید پیدا شوند. هم‌امتیازها: جدیدتر اول. (آخرین ۶۰۰ پست؛ سقف CPU رایگان Worker.)
+ */
+function searchArchive(published, query, limit = 5) {
+  const tokens = searchTokens(query);
+  if (!tokens.length) return { tokens, hits: [] };
+  const items = (Array.isArray(published) ? published : [])
+    .filter(p => p && p.published && !p.deleted).slice(-600);
+  const need = Math.max(1, Math.ceil(tokens.length / 2));
+  const hits = [];
+  items.forEach((p, idx) => {
+    const title = normSearch(`${p.title_fa || ''} ${p.title || ''}`);
+    const meta = normSearch(`${(p.hashtags || []).join(' ')} ${p.category || ''} ${p.source || ''}`);
+    const body = normSearch(p.summary_fa || p.summary || '');
+    let score = 0, found = 0;
+    for (const t of tokens) {
+      const sc = (title.includes(t) ? 3 : 0) + (meta.includes(t) ? 2 : 0) + (body.includes(t) ? 1 : 0);
+      if (sc) { found++; score += sc; }
+    }
+    if (found >= need) hits.push({ p, score, idx });
+  });
+  hits.sort((a, b) => b.score - a.score || b.idx - a.idx);
+  return { tokens, hits: hits.slice(0, limit).map(h => h.p) };
+}
+
+function askReport(query, result, env, CHANNEL_ID, now = Date.now()) {
+  const handle = String(CHANNEL_ID || '').startsWith('@') ? String(CHANNEL_ID).slice(1) : '';
+  if (!result.tokens.length) {
+    return '🔎 <b>جست‌وجو در آرشیو</b>\n\nبعد از دستور، کلمهٔ مورد نظر را بنویس. مثال:\n' +
+      '<code>/ask OpenAI</code>\n<code>/ask مدل متن‌باز</code>';
+  }
+  if (!result.hits.length) {
+    return `🔎 برای «${escapeHtml(clip(query, 60))}» چیزی در آرشیو پیدا نشد.\n\n` +
+      'کلمهٔ کوتاه‌تر یا نام شرکت/مدل را امتحان کن (مثلاً <code>/ask Gemini</code>).';
+  }
+  const lines = [`🔎 <b>نتایج برای «${escapeHtml(clip(query, 60))}»</b>\n`];
+  result.hits.forEach((p, i) => {
+    const title = escapeHtml(clip(p.title_fa || p.title || '', 90));
+    const link = (handle && p.message_id) ? `https://t.me/${handle}/${p.message_id}` : safeLink(p.link);
+    const when = p.published_at ? ` — ${agoText(p.published_at, now)}` : '';
+    lines.push(`${i + 1}. ${link ? `<a href="${link}">${title}</a>` : title}${when}`);
+  });
+  return lines.join('\n');
+}
+
+/** سهمیهٔ /ask برای کاربران عادی: ساعتی برای هر نفر + سقف روزانهٔ کل (برای حفظ سقف نوشتن KV). */
+async function askAllowed(env, chatId, now = Date.now()) {
+  const perHour = Math.max(1, Number(env.ASK_MAX_PER_HOUR) || 10);
+  const perDay = Math.max(10, Number(env.ASK_MAX_PER_DAY) || 300);
+  const rates = await getJSON(env, 'ask_rate', {});
+  const day = new Date(now).toISOString().slice(0, 10);
+  const total = rates._day && rates._day.d === day ? Number(rates._day.n) || 0 : 0;
+  if (total >= perDay) return { ok: false, why: 'day' };
+  const mine = rates[String(chatId)];
+  const used = mine && now - Date.parse(mine.at) < 3600000 ? Number(mine.count) || 0 : 0;
+  if (used >= perHour) return { ok: false, why: 'hour', perHour };
+  const next = { _day: { d: day, n: total + 1 } };
+  for (const [k, v] of Object.entries(rates)) {      // فقط ورودی‌های داخل پنجرهٔ ساعت می‌مانند (رشد بی‌پایان ندارد)
+    if (k !== '_day' && v && now - Date.parse(v.at) < 3600000) next[k] = v;
+  }
+  next[String(chatId)] = { at: mine && used ? mine.at : new Date(now).toISOString(), count: used + 1 };
+  await saveJSON(env, 'ask_rate', next);
+  return { ok: true };
+}
+
+async function handleAsk(text, env, BASE, chatId, CHANNEL_ID, isAdmin) {
+  const query = text.replace(/^\/ask(@\w+)?\s*/i, '').replace(/\s+/g, ' ').trim().slice(0, 120);
+  if (query && !isAdmin) {
+    const gate = await askAllowed(env, chatId);
+    if (!gate.ok) {
+      await sendMessage(BASE, chatId, gate.why === 'day'
+        ? '⏳ امروز سهمیهٔ جست‌وجو پر شده؛ فردا دوباره امتحان کن.'
+        : `⏳ در هر ساعت حداکثر ${gate.perHour} جست‌وجو. کمی بعد دوباره امتحان کن.`);
+      return;
+    }
+  }
+  const published = query ? await getJSON(env, 'published', []) : [];
+  const result = searchArchive(published, query);
+  await sendLong(BASE, chatId, askReport(query, result, env, CHANNEL_ID));
+}
+
 async function handlePublicMessage(msg, env, BASE, CHANNEL_ID, ADMIN_ID) {
   const text = (msg.text || '').trim();
   const chat = msg.chat || {};
@@ -425,8 +531,14 @@ async function handlePublicMessage(msg, env, BASE, CHANNEL_ID, ADMIN_ID) {
       '🤖 <b>ربات خبری AI</b>\n\n' +
       '• <code>/subscribe</code> — دریافت خلاصهٔ صبح در چت خصوصی\n' +
       '• <code>/unsubscribe</code> — قطع اشتراک\n' +
+      '• <code>/ask کلمه</code> — جست‌وجو در آرشیو کانال\n' +
       '• <code>/tip متن سوژه</code> — فرستادن خبر/لینک برای بررسی\n\n' +
       '<i>کانال خبری جدا از این چت است.</i>');
+    return;
+  }
+
+  if (/^\/ask\b/i.test(text)) {
+    await handleAsk(text, env, BASE, chatId, CHANNEL_ID, false);
     return;
   }
 
@@ -495,7 +607,7 @@ async function handlePublicMessage(msg, env, BASE, CHANNEL_ID, ADMIN_ID) {
     return;
   }
 
-  await sendMessage(BASE, chatId, 'دستورها: /subscribe · /unsubscribe · /tip متن سوژه');
+  await sendMessage(BASE, chatId, 'دستورها: /ask کلمه · /subscribe · /unsubscribe · /tip متن سوژه');
 }
 
 async function handleMessage(msg, env, BASE, CHANNEL_ID, ADMIN_ID) {
@@ -571,22 +683,13 @@ async function handleMessage(msg, env, BASE, CHANNEL_ID, ADMIN_ID) {
       `└ 📤 آماده انتشار: <b>${faNum(approved.length)}</b>\n\n` +
       '━━━━━━━━━━━━━━\n' +
       '⌨️ <b>دستورهای پرکاربرد</b>\n' +
-      '<code>/status</code> — وضعیت کامل\n' +
-      '<code>/pending</code> — بررسی صف تایید\n' +
-      '<code>/auto</code> — روشن/خاموش کردن انتشار خودکار\n' +
-      '<code>/edu</code> — روشن/خاموش کردن پست آموزشی\n' +
-      '<code>/welcome</code> — پست خوش‌آمد و سنجاق آن\n' +
-      '<code>/pause</code> · <code>/resume</code> — توقف/ادامهٔ انتشار\n' +
-      '<code>/clear</code> — پاک‌کردن صف\n' +
-      '<code>/undo</code> — حذف آخرین پست کانال\n' +
-      '<code>/editlast</code> — ویرایش خلاصهٔ آخرین پست\n' +
-      '<code>/sources</code> — اعتبار منابع\n' +
-      '<code>/feeds</code> — سلامت فیدها\n' +
-      '<code>/runs</code> — آمار اجراها\n' +
-      '<code>/dashboard</code> — خلاصهٔ ۲۴ ساعت\n' +
-      '<code>/top</code> — پربازدیدترین پست‌ها\n' +
-      '<code>/weekly</code> — جمع‌بندی و نظرسنجی\n' +
-      '<code>/stats</code> — آمار کلی\n\n' +
+      '<code>/status</code> · <code>/pending</code> · <code>/stats</code> — وضعیت، صف تایید، آمار\n' +
+      '<code>/auto</code> · <code>/edu</code> — انتشار خودکار، پست آموزشی\n' +
+      '<code>/pause</code> · <code>/resume</code> · <code>/clear</code> — توقف، ادامه، پاک‌کردن صف\n' +
+      '<code>/undo</code> · <code>/editlast</code> · <code>/welcome</code> — حذف/ویرایش آخرین پست، خوش‌آمد\n' +
+      '<code>/sources</code> · <code>/feeds</code> · <code>/runs</code> — منابع، فیدها، اجراها\n' +
+      '<code>/dashboard</code> · <code>/top</code> · <code>/weekly</code> — داشبورد، پربازدید، هفتگی\n' +
+      '<code>/ask</code> کلمه — جست‌وجو در آرشیو\n\n' +
       '━━━━━━━━━━━━━━\n' +
       '💡 <i>از دکمه‌های زیر هم می‌توانی استفاده کنی.</i>',
       {
@@ -604,7 +707,8 @@ async function handleMessage(msg, env, BASE, CHANNEL_ID, ADMIN_ID) {
             { text: '🗞 اجراها', callback_data: 'cmd:runs' }
           ],
           [
-            { text: '📟 داشبورد', callback_data: 'cmd:dashboard' }
+            { text: '📟 داشبورد', callback_data: 'cmd:dashboard' },
+            { text: '🔎 جست‌وجو', callback_data: 'cmd:ask' }
           ],
           [
             { text: '👁 پربازدید', callback_data: 'cmd:top' },
@@ -710,6 +814,8 @@ async function handleMessage(msg, env, BASE, CHANNEL_ID, ADMIN_ID) {
     await askClearQueue(env, BASE, ADMIN_ID);
   } else if (text === '/runs') {
     await sendLong(BASE, ADMIN_ID, runsReport(await getJSON(env, 'run_log', []), env));
+  } else if (/^\/ask\b/i.test(text)) {
+    await handleAsk(text, env, BASE, ADMIN_ID, CHANNEL_ID, true);
   } else if (text === '/dashboard') {
     await sendLong(BASE, ADMIN_ID, dashboardReport({
       runs: await getJSON(env, 'run_log', []),

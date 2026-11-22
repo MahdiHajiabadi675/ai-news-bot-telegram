@@ -289,7 +289,7 @@ check('/start: طول کپشن مجاز (زیر ۱۰۲۴)', startMsg.caption.len
 {
   // قاعدهٔ پروژه: هر دستور منو هم دکمه دارد و هم در لیست متن /start آمده است
   const btns = startMsg.reply_markup.inline_keyboard.flat().map(b => b.callback_data);
-  for (const c of ['status', 'pending', 'sources', 'feeds', 'runs', 'dashboard', 'stats', 'top', 'weekly', 'tips', 'backup', 'clear']) {
+  for (const c of ['status', 'pending', 'sources', 'feeds', 'runs', 'dashboard', 'ask', 'stats', 'top', 'weekly', 'tips', 'backup', 'clear']) {
     check(`/start: دکمهٔ ${c}`, btns.includes('cmd:' + c));
   }
   check('/start: /dashboard در لیست متن', startMsg.caption.includes('/dashboard'));
@@ -742,6 +742,65 @@ console.log('Engagement features:');
   const shareCall = calls.find(c => c.method === 'editMessageReplyMarkup'
     && JSON.stringify(c.body.reply_markup || {}).includes('t.me/share'));
   check('اشتراک‌گذاری: دکمهٔ «فرستادن به دوست» زیر پست می‌آید', !!shareCall);
+}
+
+
+// ───────── /ask: جست‌وجوی آرشیو ─────────
+console.log('Archive search (/ask):');
+{
+  const dm = (text, chatId = 901) => ({ message: { text, chat: { id: chatId, type: 'private' }, from: { id: chatId, first_name: 'ک' } } });
+  const now = new Date().toISOString();
+  set('published', [
+    { published: true, title_fa: 'OpenAI مدل جدید معرفی کرد', summary_fa: 'خلاصه', hashtags: ['OpenAI'], category: 'model_release', link: 'https://x.test/1', published_at: now, message_id: 11 },
+    { published: true, title_fa: 'انتشار مدل‌های متن‌باز Llama', summary_fa: 'متا مدل تازه داد', hashtags: ['Llama'], category: 'model_release', link: 'https://x.test/2', published_at: now },
+    { published: true, title_fa: 'کیفیت تصویر', summary_fa: 'ي و ك عربی در متن: كتاب', hashtags: [], category: 'tool_release', link: 'https://x.test/3', published_at: now },
+    { published: false, title_fa: 'OpenAI ردشده', link: 'https://x.test/4' },
+    { published: true, deleted: true, title_fa: 'OpenAI حذف‌شده', link: 'https://x.test/5' },
+  ]);
+  store.delete('ask_rate');
+  await send(dm('/ask openai'));
+  let r = calls.filter(c => c.method === 'sendMessage').map(c => c.body.text).join('\n');
+  check('/ask: نتیجهٔ مرتبط با لینک پست کانال', r.includes('OpenAI مدل جدید') && r.includes('https://t.me/chan/11'));
+  check('/ask: ردشده و حذف‌شده نمی‌آید', !r.includes('ردشده') && !r.includes('حذف‌شده'));
+  await send(dm('/ask مدل متن باز'));
+  r = calls.filter(c => c.method === 'sendMessage').map(c => c.body.text).join('\n');
+  check('/ask: نیم‌فاصله و پسوند (متن‌باز / مدل‌های)', r.includes('Llama') && r.includes('https://x.test/2'));
+  await send(dm('/ask کتاب'));
+  r = calls.filter(c => c.method === 'sendMessage').map(c => c.body.text).join('\n');
+  check('/ask: یکسان‌سازی ی/ک عربی', r.includes('کیفیت تصویر'));
+  await send(dm('/ask zzzzqq'));
+  check('/ask: بدون نتیجه پیام راهنما', last('sendMessage').body.text.includes('پیدا نشد'));
+  await send(dm('/ask'));
+  check('/ask بدون کلمه: راهنمای استفاده', last('sendMessage').body.text.includes('/ask OpenAI'));
+  check('/ask: لینک تزریق‌شده HTML نمی‌شود', (() => { set('published', [{ published: true, title_fa: 'x <b>OpenAI</b> "q"', link: 'javascript:alert(1)', published_at: now }]); return true; })());
+  await send(dm('/ask openai', 902));
+  r = last('sendMessage').body.text;
+  check('/ask: عنوان escape می‌شود و لینک خطرناک حذف', r.includes('&lt;b&gt;') && !r.includes('javascript:'));
+
+  // سهمیه
+  set('published', []);
+  store.delete('ask_rate');
+  for (let i = 0; i < 10; i++) await send(dm('/ask gemini', 903));
+  await send(dm('/ask gemini', 903));
+  check('/ask: سقف ساعتی برای هر کاربر', last('sendMessage').body.text.includes('حداکثر 10'));
+  await send(dm('/ask gemini', 904));
+  check('/ask: کاربر دیگر محدود نیست', !last('sendMessage').body.text.includes('حداکثر'));
+  const rates = get('ask_rate');
+  check('/ask: شمارندهٔ روزانهٔ کل', rates._day && rates._day.n >= 11);
+  const envBak = env.ASK_MAX_PER_DAY; env.ASK_MAX_PER_DAY = '10';
+  await send(dm('/ask gemini', 905));
+  check('/ask: سقف روزانهٔ کل', last('sendMessage').body.text.includes('امروز سهمیهٔ جست‌وجو پر شده'));
+  if (envBak === undefined) delete env.ASK_MAX_PER_DAY; else env.ASK_MAX_PER_DAY = envBak;
+
+  // ادمین: بدون سهمیه و بدون نوشتن KV
+  set('published', [{ published: true, title_fa: 'Gemini تازه', link: 'https://x.test/9', published_at: now }]);
+  store.delete('ask_rate');
+  await send(msg('/ask gemini'));
+  check('/ask ادمین: نتیجه می‌دهد و سهمیه نمی‌نویسد', last('sendMessage').body.text.includes('Gemini تازه') && !store.has('ask_rate'));
+  await send(cb('cmd:ask'));
+  check('دکمهٔ منوی جست‌وجو راهنما می‌دهد', last('sendMessage').body.text.includes('/ask OpenAI'));
+  await send(dm('/help', 906));
+  check('راهنمای عمومی: /ask معرفی شده', last('sendMessage').body.text.includes('/ask'));
 }
 
 console.log(`\n${passed} تست Worker با موفقیت گذشت ✅`);
