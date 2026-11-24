@@ -265,7 +265,7 @@ async function handleCallback(cb, env, BASE, CHANNEL_ID, ADMIN_ID) {
   const itemHash = parts[1] || '';
 
   // دکمه‌های منوی /start → همان دستورها را اجرا می‌کنند
-  const menuCommands = ['status', 'pending', 'sources', 'feeds', 'runs', 'stats', 'clear', 'auto', 'top', 'weekly', 'backup', 'tips', 'dashboard', 'ask', 'quizboard'];
+  const menuCommands = ['status', 'pending', 'sources', 'feeds', 'runs', 'stats', 'clear', 'auto', 'top', 'weekly', 'backup', 'tips', 'dashboard', 'ask', 'quizboard', 'promo'];
   if (action === 'cmd' && menuCommands.includes(itemHash)) {
     await answerCallback(BASE, cbId);
     await handleMessage({ text: '/' + itemHash, chat: { id: ADMIN_ID } }, env, BASE, CHANNEL_ID, ADMIN_ID);
@@ -917,7 +917,7 @@ async function handleMessage(msg, env, BASE, CHANNEL_ID, ADMIN_ID) {
       '━━━━━━━━━━━━━━\n' +
       '⌨️ <b>دستورهای پرکاربرد</b>\n' +
       '<code>/status</code> · <code>/pending</code> · <code>/stats</code> — وضعیت، صف تایید، آمار\n' +
-      '<code>/auto</code> · <code>/edu</code> — انتشار خودکار، پست آموزشی\n' +
+      '<code>/auto</code> · <code>/edu</code> · <code>/promo</code> — خودکار، آموزشی، تبلیغ سایت\n' +
       '<code>/pause</code> · <code>/resume</code> · <code>/clear</code> — توقف، ادامه، پاک‌کردن صف\n' +
       '<code>/undo</code> · <code>/editlast</code> · <code>/welcome</code> — حذف/ویرایش آخرین پست، خوش‌آمد\n' +
       '<code>/sources</code> · <code>/feeds</code> · <code>/runs</code> — منابع، فیدها، اجراها\n' +
@@ -944,7 +944,8 @@ async function handleMessage(msg, env, BASE, CHANNEL_ID, ADMIN_ID) {
             { text: '🔎 جست‌وجو', callback_data: 'cmd:ask' }
           ],
           [
-            { text: '🏆 جدول کوییز', callback_data: 'cmd:quizboard' }
+            { text: '🏆 جدول کوییز', callback_data: 'cmd:quizboard' },
+            { text: '📣 تبلیغ سایت', callback_data: 'cmd:promo' }
           ],
           [
             { text: '👁 پربازدید', callback_data: 'cmd:top' },
@@ -1114,6 +1115,29 @@ async function handleMessage(msg, env, BASE, CHANNEL_ID, ADMIN_ID) {
       await sendMessage(BASE, ADMIN_ID,
         `✏️ <b>ویرایش آخرین پست</b>\n\n«${escapeHtml(item.title_fa || item.title || '?')}»\n\n` +
         'متن خلاصهٔ جدید را بفرست. (قالب، عنوان و منبع حفظ می‌شوند.)');
+    }
+  } else if (/^\/promo\b/i.test(text)) {
+    // 📣 تبلیغ دوره‌ای سایت/ربات در کانال: /promo (وضعیت) | on | off | now (در اجرای بعدی pipeline)
+    const arg = (text.split(/\s+/)[1] || '').toLowerCase();
+    if (arg === 'on' || arg === 'off') {
+      await updateState(env, { promo_enabled: arg === 'on' });
+      await sendMessage(BASE, ADMIN_ID, `📣 تبلیغ دوره‌ای سایت: ${arg === 'on' ? 'روشن ✅' : 'خاموش ❌'}`);
+    } else if (arg === 'now') {
+      await updateState(env, { promo_force: true });
+      await sendMessage(BASE, ADMIN_ID, '📣 در اجرای بعدی ربات (حداکثر حدود یک ساعت) پست تبلیغ سایت در کانال منتشر می‌شود.\n' +
+        'اگر زودتر می‌خواهی: Actions → Run pipeline.');
+    } else {
+      const ps = await getJSON(env, 'promo_state', {});
+      const every = Math.max(1, Number(env.PROMO_EVERY_DAYS) || 3);
+      const on = state.promo_enabled !== false;
+      await sendMessage(BASE, ADMIN_ID,
+        `📣 <b>تبلیغ دوره‌ای سایت</b>: ${on ? 'روشن ✅' : 'خاموش ❌'}\n` +
+        `🔁 هر ${every} روز یک‌بار، حدود ساعت ${Number(env.PROMO_HOUR) || 18}:۰۰ تهران\n` +
+        `📤 تعداد ارسال تاکنون: ${Number(ps.count) || 0}\n` +
+        `🕐 آخرین ارسال: ${ps.last_at ? agoText(ps.last_at) : 'هنوز نرفته'}\n` +
+        (state.promo_force ? '⏳ ارسال فوری در اجرای بعدی در صف است.\n' : '') +
+        '\nتغییر: <code>/promo on</code> · <code>/promo off</code> · <code>/promo now</code>\n' +
+        '<i>برای فعال‌بودن، متغیر SITE_URL باید در GitHub (Secrets یا Variables) تنظیم باشد.</i>');
     }
   } else if (/^\/edu/i.test(text)) {
     // پست آموزشی (Gemini + OpenRouter رایگان، بازهٔ طولانی): /edu on | /edu off | /edu (وضعیت)

@@ -44,6 +44,7 @@ from src import arxiv_daily
 from src import brief
 from src import views
 from src import weekly
+from src import promo
 from src import storylines
 from src import backup
 from src import translator
@@ -400,6 +401,9 @@ def _run(force=False):
 
     # 9. جمع‌بندی و نظرسنجی هفتگی (شنبه شب، حداکثر یک‌بار در هفته)
     state = _safe("weekly", weekly.maybe_post, state, default=state)
+
+    # 9.5 📣 تبلیغ دوره‌ای پلتفرم (هر چند روز یک‌بار، ساعت ثابت؛ بدون SITE_URL خاموش)
+    state = _safe("promo", promo.maybe_post, state, force=force, default=state)
 
     # 10. Save state
     state = set_stage(state, "waiting")

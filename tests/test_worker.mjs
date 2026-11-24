@@ -289,7 +289,7 @@ check('/start: طول کپشن مجاز (زیر ۱۰۲۴)', startMsg.caption.len
 {
   // قاعدهٔ پروژه: هر دستور منو هم دکمه دارد و هم در لیست متن /start آمده است
   const btns = startMsg.reply_markup.inline_keyboard.flat().map(b => b.callback_data);
-  for (const c of ['status', 'pending', 'sources', 'feeds', 'runs', 'dashboard', 'ask', 'quizboard', 'stats', 'top', 'weekly', 'tips', 'backup', 'clear']) {
+  for (const c of ['status', 'pending', 'sources', 'feeds', 'runs', 'dashboard', 'ask', 'quizboard', 'promo', 'stats', 'top', 'weekly', 'tips', 'backup', 'clear']) {
     check(`/start: دکمهٔ ${c}`, btns.includes('cmd:' + c));
   }
   check('/start: /dashboard در لیست متن', startMsg.caption.includes('/dashboard'));
@@ -919,6 +919,36 @@ console.log('Scored quiz (/quiz):');
   check('qzpost: جدول در کانال منتشر می‌شود', !!chPost && chPost.body.text.includes('سارا') && chPost.body.text.includes('/quiz'));
   await send(cb('qzpost', 12345));
   check('qzpost: غیرادمین رد می‌شود', !calls.some(c => c.method === 'sendMessage' && c.body.chat_id === '@chan'));
+}
+
+
+// ───────── /promo: تبلیغ دوره‌ای سایت ─────────
+console.log('Promo (/promo):');
+{
+  set('promo_state', {});
+  await send(msg('/promo'));
+  let t = last('sendMessage').body.text;
+  check('/promo: وضعیت پیش‌فرض روشن و «هنوز نرفته»', t.includes('روشن') && t.includes('هنوز نرفته') && t.includes('هر 3 روز'));
+  await send(msg('/promo off'));
+  check('/promo off: state.promo_enabled=false', get('state').promo_enabled === false && last('sendMessage').body.text.includes('خاموش'));
+  await send(msg('/promo'));
+  check('/promo: وضعیت خاموش', last('sendMessage').body.text.includes('خاموش'));
+  await send(msg('/promo on'));
+  check('/promo on', get('state').promo_enabled === true);
+  await send(msg('/promo now'));
+  check('/promo now: پرچم فوری', get('state').promo_force === true && last('sendMessage').body.text.includes('اجرای بعدی'));
+  await send(msg('/promo'));
+  check('/promo: نمایش ارسال فوری در صف', last('sendMessage').body.text.includes('در صف'));
+  set('promo_state', { count: 4, last_at: new Date(Date.now() - 3600000).toISOString() });
+  await send(msg('/promo'));
+  t = last('sendMessage').body.text;
+  check('/promo: تعداد و زمان آخرین ارسال', t.includes('تاکنون: 4') && !t.includes('هنوز نرفته'));
+  await send(cb('cmd:promo'));
+  check('دکمهٔ منو: /promo', last('sendMessage').body.text.includes('تبلیغ دوره‌ای سایت'));
+  await send(msg('/promo off'));
+  await send(msg('/promo on'));
+  await send({ message: { text: '/promo off', chat: { id: 777001, type: 'private' }, from: { id: 777001, first_name: 'x' } } });
+  check('/promo: غیرادمین نمی‌تواند خاموش کند', get('state').promo_enabled === true);
 }
 
 console.log(`\n${passed} تست Worker با موفقیت گذشت ✅`);

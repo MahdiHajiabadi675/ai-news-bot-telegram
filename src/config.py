@@ -156,6 +156,13 @@ PUBLISH_MIN_GAP_MIN = _int_env("PUBLISH_MIN_GAP_MIN", 0)
 SHARE_BUTTON_ENABLED = os.getenv("SHARE_BUTTON_ENABLED", "true").strip().lower() not in ("0", "false", "no", "off")
 
 # ───────── صبحانهٔ AI (src/brief.py) ─────────
+# 📣 پست تبلیغ دوره‌ای پلتفرم (سایت + ربات). بدون SITE_URL هیچ پستی نمی‌رود.
+SITE_URL = (os.getenv("SITE_URL", "") or "").strip()
+PROMO_ENABLED = os.getenv("PROMO_ENABLED", "true").strip().lower() not in ("0", "false", "no", "off")
+PROMO_EVERY_DAYS = max(1, _int_env("PROMO_EVERY_DAYS", 3))  # هر چند روز یک‌بار
+PROMO_HOUR = _int_env("PROMO_HOUR", 18)                      # ساعت به وقت ایران
+BOT_USERNAME = (os.getenv("BOT_USERNAME", "") or "").strip().lstrip("@")  # اگر خالی باشد با getMe پیدا می‌شود
+
 BRIEF_ENABLED = os.getenv("BRIEF_ENABLED", "true").strip().lower() not in ("0", "false", "no", "off")
 # ساعت انتشار به وقت ایران (۰ تا ۲۳)
 BRIEF_HOUR = _int_env("BRIEF_HOUR", 8)

@@ -2247,4 +2247,95 @@ check("sync_bank: با تغییر بانک دوباره نوشته می‌شود
 quiz.QUIZ_BANK[:] = _orig_bank
 quiz.sync_bank()
 
+# ── 📣 تبلیغ دوره‌ای پلتفرم ──
+print("Promo:")
+from datetime import datetime as _dt, timedelta as _td  # noqa: E402
+from src import promo  # noqa: E402
+
+_sent = []
+promo.send_message = lambda chat, text, **kw: (_sent.append((chat, text, kw)), {"ok": True, "result": {"message_id": 1}})[1]
+promo.CHANNEL_ID = "@chan"
+promo.SITE_URL = "https://u.github.io/repo/"
+promo.BOT_USERNAME = "my_bot"
+promo.PROMO_ENABLED = True
+promo.DRY_RUN = False
+promo.DISPLAY_TZ_OFFSET_MIN = 210
+promo.PROMO_HOUR = 18
+promo.PROMO_EVERY_DAYS = 3
+promo.EDU_PUBLISH_HOURS = (19, 20, 21, 22)
+# ۱۸:۱۰ تهران = ۱۴:۴۰ UTC
+_t18 = _dt(2026, 11, 24, 14, 40)
+
+
+def _reset_promo():
+    _sent.clear()
+    _store.pop("promo_state", None)
+
+
+_reset_promo()
+promo.maybe_post({}, now=_dt(2026, 11, 24, 9, 0))
+check("خارج از ساعت مجاز: نمی‌فرستد", not _sent)
+promo.maybe_post({}, now=_t18)
+check("در ساعت ۱۸: می‌فرستد", len(_sent) == 1 and _sent[0][0] == "@chan")
+_kb = _sent[0][2]["reply_markup"]["inline_keyboard"]
+check("دکمه‌ها: سایت و ربات", _kb[0][0]["url"] == "https://u.github.io/repo/" and _kb[1][0]["url"] == "https://t.me/my_bot")
+check("متن بدون لینک خام (بدون پیش‌نمایش)", "http" not in _sent[0][1])
+check("حالت ذخیره شد", _store["promo_state"]["count"] == 1 and _store["promo_state"]["idx"] == 1)
+promo.maybe_post({}, now=_t18 + _td(hours=1))
+check("همان روز دوباره نمی‌فرستد", len(_sent) == 1)
+promo.maybe_post({}, now=_t18 + _td(days=2))
+check("بعد از ۲ روز هنوز زود است", len(_sent) == 1)
+promo.maybe_post({}, now=_t18 + _td(days=3))
+check("بعد از ۳ روز می‌فرستد", len(_sent) == 2)
+check("قالب بعدی می‌چرخد", _sent[0][1] != _sent[1][1])
+_seen_t = {promo.pick_template(i) for i in range(8)}
+check("همهٔ ۴ قالب چرخشی‌اند", len(_seen_t) == len(promo.TEMPLATES))
+check("قالب‌ها HTML متوازن و بدون لینک", all(t.count("<b>") == t.count("</b>") and "http" not in t for t in promo.TEMPLATES))
+
+_reset_promo()
+promo.maybe_post({}, now=_dt(2026, 11, 24, 15, 40))  # ۱۹:۱۰ تهران = ساعت پست آموزشی
+check("ساعت پست آموزشی (۱۹): نمی‌آید", not _sent)
+check("ساعت‌های مجاز فقط ۱۸", promo.allowed_hours() == [18])
+promo.PROMO_HOUR = 20
+check("اگر ساعت تبلیغ با پست آموزشی هم‌پوشان شود: خالی", promo.allowed_hours() == [])
+promo.PROMO_HOUR = 17
+check("PROMO_HOUR=17: ۱۷ و ۱۸ مجاز", promo.allowed_hours() == [17, 18])
+promo.PROMO_HOUR = 18
+
+_reset_promo()
+promo.maybe_post({"paused": True}, now=_t18)
+promo.maybe_post({"promo_enabled": False}, now=_t18)
+check("pause و /promo off احترام گذاشته می‌شود", not _sent)
+promo.PROMO_ENABLED = False
+promo.maybe_post({}, now=_t18)
+promo.PROMO_ENABLED = True
+check("PROMO_ENABLED=false خاموش است", not _sent)
+promo.SITE_URL = ""
+promo.maybe_post({}, now=_t18)
+promo.SITE_URL = "javascript:alert(1)"
+promo.maybe_post({}, now=_t18)
+promo.SITE_URL = "https://u.github.io/repo/"
+check("بدون SITE_URL معتبر چیزی نمی‌رود", not _sent)
+promo.DRY_RUN = True
+promo.maybe_post({}, now=_t18)
+promo.DRY_RUN = False
+check("dry-run نمی‌فرستد", not _sent)
+
+_reset_promo()
+_st = promo.maybe_post({"promo_force": True}, now=_dt(2026, 11, 24, 9, 0))
+check("/promo now: خارج از ساعت هم می‌فرستد و پرچم پاک می‌شود", len(_sent) == 1 and _st["promo_force"] is False)
+
+_reset_promo()
+promo.send_message = lambda *a, **k: {"ok": False}
+promo.maybe_post({}, now=_t18)
+check("شکست ارسال: حالت ذخیره نمی‌شود (دوباره تلاش می‌کند)", "promo_state" not in _store)
+promo.send_message = lambda chat, text, **kw: (_sent.append((chat, text, kw)), {"ok": True})[1]
+
+promo.BOT_USERNAME = ""
+promo._bot_username = lambda: ""
+_reset_promo()
+promo.maybe_post({}, now=_t18)
+check("بدون یوزرنیم ربات: فقط دکمهٔ سایت", len(_sent[0][2]["reply_markup"]["inline_keyboard"]) == 1)
+promo.BOT_USERNAME = "my_bot"
+
 print(f"\n{_passed} تست با موفقیت گذشت ✅")
