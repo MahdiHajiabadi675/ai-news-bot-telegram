@@ -56,6 +56,9 @@ jobs:
           CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
           # هندل عمومی کانال برای خواندن بازدید از t.me/s (بدون آن، این قابلیت خاموش می‌ماند)
           CHANNEL_HANDLE: ${{ secrets.CHANNEL_HANDLE }}
+          # آدرس سایت برای پست تبلیغ دوره‌ای (از Secrets یا Variables؛ هرکدام تنظیم شده باشد)
+          SITE_URL: ${{ secrets.SITE_URL || vars.SITE_URL }}
+          BOT_USERNAME: ${{ vars.BOT_USERNAME }}
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "$TRIGGER" != "cron" ]; then
             python main.py run --force
