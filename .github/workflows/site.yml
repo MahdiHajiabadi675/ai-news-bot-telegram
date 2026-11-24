@@ -1,0 +1,54 @@
+name: Site
+
+# وب‌سایت ایستای آرشیو اخبار → GitHub Pages
+# پیش‌نیاز (یک‌بار): Settings → Pages → Source = «GitHub Actions»، و در Settings → Secrets and variables →
+# Actions → Variables مقدار SITE_API_URL = آدرس Worker (مثلاً https://xxx.workers.dev).
+# تا وقتی SITE_API_URL تنظیم نشده، این workflow بی‌صدا رد می‌شود.
+on:
+  schedule:
+    - cron: '23 */6 * * *'      # هر ۶ ساعت؛ مستقل از pipeline ساعتی
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['site/**', '.github/workflows/site.yml']
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: ${{ vars.SITE_API_URL != '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - name: Build site
+        env:
+          SITE_API_URL: ${{ vars.SITE_API_URL }}
+          SITE_BASE_URL: ${{ vars.SITE_BASE_URL }}
+          SITE_TITLE: ${{ vars.SITE_TITLE }}
+          SITE_CHANNEL_URL: ${{ vars.SITE_CHANNEL_URL }}
+        run: python site/build.py
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

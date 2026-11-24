@@ -28,6 +28,8 @@ jobs:
         run: |
           python tests/test_smoke.py > smoke.log 2>&1 || { cat smoke.log; exit 1; }
           tail -n 1 smoke.log
+      - name: Site tests
+        run: python tests/test_site.py | tail -n 1
 
   worker:
     runs-on: ubuntu-latest
