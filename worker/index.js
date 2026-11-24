@@ -44,22 +44,49 @@ export default {
 
     // ── /api/news: نسخهٔ JSON آخرین خبرها ──
     if (path === '/api/news' && request.method === 'GET') {
-      const limit = Math.min(Math.max(Number(url.searchParams.get('limit')) || 20, 1), 100);
+      // full=1 → فیلدهای غنی‌تر برای وب‌سایت (id، خلاصه، برچسب، شناسهٔ پست کانال) و سقف ۳۰۰.
+      // CORS باز است (داده عمومی است) و پاسخ ۵ دقیقه در کش لبهٔ Cloudflare می‌ماند تا CPU/KV مصرف نشود.
+      const full = url.searchParams.get('full') === '1';
+      const limit = Math.min(Math.max(Number(url.searchParams.get('limit')) || 20, 1), full ? 300 : 100);
+      const cacheKey = new Request(`${url.origin}/api/news?full=${full ? 1 : 0}&limit=${limit}`);
+      const edge = typeof caches !== 'undefined' ? caches.default : null;
+      if (edge) {
+        const hit = await edge.match(cacheKey);
+        if (hit) return hit;
+      }
       const published = await getJSON(env, 'published', []);
       const items = published
         .filter(p => p && p.published && !p.deleted)
         .slice(-limit)
         .reverse()
-        .map(p => ({
-          title: p.title_fa || p.title || '',
-          source: p.source || '',
-          link: p.link || '',
-          category: p.category || '',
-          published_at: p.published_at || null,
-        }));
-      return new Response(JSON.stringify({ count: items.length, items }, null, 2), {
-        headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'public, max-age=300' },
+        .map(p => {
+          const base = {
+            title: p.title_fa || p.title || '',
+            source: p.source || '',
+            link: p.link || '',
+            category: p.category || '',
+            published_at: p.published_at || null,
+          };
+          if (!full) return base;
+          return {
+            ...base,
+            id: String(p.id || p.hash || '').slice(0, 64),
+            summary: String(p.summary_fa || p.summary || '').slice(0, 600),
+            tags: Array.isArray(p.hashtags) ? p.hashtags.slice(0, 6) : [],
+            message_id: Number.isInteger(p.message_id) ? p.message_id : null,
+          };
+        });
+      const payload = { count: items.length, items };
+      if (full) payload.channel = String(CHANNEL_ID || '').startsWith('@') ? String(CHANNEL_ID).slice(1) : '';
+      const resp = new Response(JSON.stringify(payload, null, full ? 0 : 2), {
+        headers: {
+          'Content-Type': 'application/json; charset=utf-8',
+          'Cache-Control': 'public, max-age=300',
+          'Access-Control-Allow-Origin': '*',
+        },
       });
+      if (edge && ctx && typeof ctx.waitUntil === 'function') ctx.waitUntil(edge.put(cacheKey, resp.clone()));
+      return resp;
     }
 
     // ── /health: پایش ساده (برای UptimeRobot و انسان) ──

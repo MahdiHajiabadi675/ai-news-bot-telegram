@@ -360,6 +360,20 @@ python main.py run --dry-run
 - لینک پست کانال فقط وقتی ساخته می‌شود که `CHANNEL_ID` از نوع `@handle` باشد و `message_id` ثبت شده باشد؛ وگرنه لینک خبر اصلی.
 - **سهمیه (برای حفظ سقف نوشتن KV):** `ASK_MAX_PER_HOUR` (پیش‌فرض ۱۰ برای هر نفر) و `ASK_MAX_PER_DAY` (پیش‌فرض ۲۰۰ برای کل). ادمین سهمیه و نوشتن KV ندارد.
 
+## 🌐 وب‌سایت آرشیو (GitHub Pages)
+
+یک سایت **کاملاً ایستا** از آرشیو خبرها: صفحهٔ هر خبر (برای ورودی از گوگل: عنوان، توضیح، JSON-LD، sitemap)، صفحهٔ هر دسته، آرشیو صفحه‌بندی‌شده و جست‌وجوی فارسی سمت مرورگر (همان یکسان‌سازی `/ask`). تاریخ‌ها جلالی‌اند. تم روشن/تاریک خودکار است و روی موبایل بهینه است.
+
+**راه‌اندازی (یک‌بار):**
+1. در ریپو: Settings → Pages → Source = **GitHub Actions**.
+2. Settings → Secrets and variables → Actions → **Variables**: `SITE_API_URL` = آدرس Worker (مثل `https://xxx.workers.dev`).
+   اختیاری: `SITE_BASE_URL` (دامنهٔ دلخواه؛ پیش‌فرض `https://<owner>.github.io/<repo>`)، `SITE_TITLE`، `SITE_CHANNEL_URL`.
+3. Actions → «Site» → Run workflow. آدرس سایت در خروجی `deploy` می‌آید.
+
+تا وقتی `SITE_API_URL` تنظیم نشده، workflow بی‌صدا رد می‌شود. ساخت هر ۶ ساعت (مستقل از pipeline ساعتی) انجام می‌شود و ~۳۰ ثانیه دقیقهٔ Actions می‌برد.
+محدودیت: سایت فقط تا ۳۰۰ خبر آخر را دارد (سقف API)؛ خبرهای قدیمی‌تر از سایت می‌افتند.
+اجرای محلی برای آزمایش: `SITE_API_URL=https://... python site/build.py` و باز کردن `dist/index.html`.
+
 ## 🧠 کوییز امتیازی (چت خصوصی)
 
 نظرسنجی‌های کانال در تلگرام **ناشناس** هستند و پاسخ هر نفر قابل ثبت نیست؛ برای همین کوییزهای شبانهٔ کانال همان‌طور که هستند می‌مانند و کوییز **امتیازی** جداگانه در چت خصوصی ربات انجام می‌شود:
@@ -416,6 +430,7 @@ Cloudflare فعال کن.
 |---|---|
 | `https://<WORKER_URL>/rss.xml` | ۳۰ خبر آخر به‌صورت RSS 2.0 |
 | `https://<WORKER_URL>/api/news?limit=20` | JSON: عنوان، منبع، لینک، دسته، زمان انتشار |
+| `https://<WORKER_URL>/api/news?full=1&limit=300` | نسخهٔ کامل برای وب‌سایت: + `id`، خلاصه، برچسب‌ها، `message_id`، `channel` (CORS باز، کش ۵ دقیقه‌ای در لبه) |
 
 خبرهای حذف‌شده (`/undo`) و ردشده در هر دو خروجی نمی‌آیند؛ هر دو با `Cache-Control: max-age=300` کش می‌شوند.
 
@@ -495,7 +510,9 @@ Cloudflare فعال کن.
 
 ```
 ai-news-bot/
+├── site/build.py                   # سازندهٔ وب‌سایت ایستا (stdlib)
 ├── .github/workflows/
+│   ├── site.yml                    # ساخت و انتشار سایت روی Pages (هر ۶ ساعت)
 │   ├── pipeline.yml                # اجرای خودکار هر ۱ ساعت
 │   └── tests.yml                   # ruff + تست‌ها روی هر push/PR
 ├── src/

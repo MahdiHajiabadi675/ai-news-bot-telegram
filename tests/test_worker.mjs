@@ -508,6 +508,22 @@ console.log('Public feed & API:');
   check('api/news: JSON با شمارش و فیلدهای لازم',
     api.status === 200 && body.count === 1 && body.items[0].link === 'https://example.com/a'
     && body.items[0].category === 'model_release');
+  check('api/news: نسخهٔ ساده فیلد اضافه (id/summary) ندارد', body.items[0].id === undefined && body.items[0].summary === undefined);
+  check('api/news: CORS باز', api.headers.get('Access-Control-Allow-Origin') === '*');
+
+  set('published', [
+    { id: 'abc123', title_fa: 'خبر کامل', summary_fa: 'خلاصهٔ خبر', source: 'S', link: 'https://example.com/a', category: 'research',
+      published: true, published_at: new Date().toISOString(), message_id: 42, hashtags: ['AI', 'LLM'] },
+  ]);
+  const apiFull = await worker.fetch(new Request('https://w.example/api/news?full=1&limit=300'), env);
+  const fb = await apiFull.json();
+  check('api/news?full=1: فیلدهای وب‌سایت', fb.items[0].id === 'abc123' && fb.items[0].summary === 'خلاصهٔ خبر'
+    && fb.items[0].message_id === 42 && fb.items[0].tags.length === 2 && fb.channel === 'chan');
+  const many = Array.from({ length: 350 }, (_, i) => ({ id: 'n' + i, title_fa: 't' + i, published: true, published_at: new Date().toISOString() }));
+  set('published', many);
+  const capped = await (await worker.fetch(new Request('https://w.example/api/news?full=1&limit=999'), env)).json();
+  const cappedPlain = await (await worker.fetch(new Request('https://w.example/api/news?limit=999'), env)).json();
+  check('api/news: سقف ۳۰۰ برای full و ۱۰۰ برای ساده', capped.count === 300 && cappedPlain.count === 100);
 }
 
 // ───────────── آینهٔ Bluesky ─────────────
