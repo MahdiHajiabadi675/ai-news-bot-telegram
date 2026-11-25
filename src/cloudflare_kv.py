@@ -9,6 +9,7 @@ Cloudflare KV Client — برای GitHub Actions
 import json
 import os
 import time
+from datetime import date, datetime
 
 import requests
 
@@ -65,10 +66,21 @@ def get(key: str, default=None):
     return default
 
 
+def _json_fallback(obj):
+    """شبکهٔ ایمنی: تاریخ/مجموعه به‌جای شکستن کل pipeline به شکل قابل‌ذخیره درمی‌آید (و هشدار چاپ می‌شود)."""
+    if isinstance(obj, (datetime, date, set, frozenset)):
+        print(f"[WARN] KV: مقدار {type(obj).__name__} به شکل JSON-امن تبدیل شد (منبع را اصلاح کن)")
+    if isinstance(obj, (datetime, date)):
+        return obj.isoformat() + ("Z" if isinstance(obj, datetime) and obj.tzinfo is None else "")
+    if isinstance(obj, (set, frozenset)):
+        return sorted(obj, key=str)
+    raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
+
+
 def put(key: str, value):
     """نوشتن در KV — True یعنی ذخیره شد، False یعنی شکست (لایهٔ بالاتر باید تصمیم بگیرد)."""
     try:
-        body = json.dumps(value, ensure_ascii=False).encode("utf-8")
+        body = json.dumps(value, ensure_ascii=False, default=_json_fallback).encode("utf-8")
     except (TypeError, ValueError) as e:
         print(f"[ERROR] KV put {key}: not JSON-serializable: {e}")
         return False

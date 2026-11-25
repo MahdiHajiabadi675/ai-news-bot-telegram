@@ -2049,6 +2049,18 @@ check("پیش‌زمینه: موجودیت‌ها استخراج می‌شوند
 check("پیش‌زمینه: لینک پست قبلی اضافه می‌شود",
       _story_links == 1
       and _story_items[0]["background"][0]["link"] == "https://t.me/testchan/11")
+# رگرسیون: «at» (datetime) نباید داخل آیتم بماند؛ آیتم در KV (pending/approved) ذخیره می‌شود
+try:
+    _story_json = __import__("json").dumps(_story_items, ensure_ascii=False)
+except TypeError:
+    _story_json = None
+check("پیش‌زمینه: آیتم کاملاً JSON-پذیر است (باگ pending)", _story_json is not None)
+check("پیش‌زمینه: فقط عنوان و لینک می‌ماند", set(_story_items[0]["background"][0]) == {"title", "link"})
+_story_items2 = [{"id": "new-2", "title": "OpenAI releases another model", "category": "model_release"}]
+_store["stories"] = {"openai": [{"id": "old-2", "title": "بدون تاریخ", "message_id": 12}]}
+storylines.enrich(_story_items2, _now_w)
+check("پیش‌زمینه: ردیف بدون تاریخ (datetime.min) هم JSON-پذیر است",
+      __import__("json").dumps(_story_items2, ensure_ascii=False) and _story_items2[0]["background"][0]["link"].endswith("/12"))
 storylines.record(_story_items[0], 22, _now_w)
 _story_index = storylines.load_index()
 check("پیش‌زمینه: پست جدید در تایم‌لاین ثبت می‌شود",
@@ -2337,5 +2349,87 @@ _reset_promo()
 promo.maybe_post({}, now=_t18)
 check("بدون یوزرنیم ربات: فقط دکمهٔ سایت", len(_sent[0][2]["reply_markup"]["inline_keyboard"]) == 1)
 promo.BOT_USERNAME = "my_bot"
+
+# ── انتها‌به‌انتهای main.run: شکست نوشتن pending نباید خبر یا دکمه را گم کند ──
+print("Pipeline e2e (KV failure safety):")
+_orig = {k: getattr(_main, k) for k in ("collect", "poll_updates", "analyze_articles", "notify_admin_new", "_send_review",
+                                         "send_message", "publish_approved")}
+_notices = []
+_ok_when_notified = []
+
+
+def _e2e_item():
+    return {
+        "id": "e2e-1", "source": "TestSrc", "lang": "en", "trusted": True, "official": False, "fast_track": False,
+        "title": "OpenAI releases GPT-9", "link": "https://e.test/1", "summary": "OpenAI released a new model today.",
+        "title_fa": "OpenAI مدل GPT-9 را منتشر کرد", "summary_fa": "مدل جدید امروز منتشر شد.", "importance": "high",
+        "confidence": "high", "category": "model_release", "published_at": None, "status": "new", "published": False,
+        "translated": True, "source_trust": 3.0, "score": 10, "hot": 30, "hot_threshold": 60.0,
+    }
+
+
+def _setup_e2e(fail_pending):
+    _store.clear()
+    _store["state"] = {"auto_publish_enabled": False}
+    _store["seen"] = ["old"]
+    _notices.clear()
+    _ok_when_notified.clear()
+    _main.collect = lambda seen: [_e2e_item()]
+    _main.poll_updates = lambda st: (st, [])
+    _main.analyze_articles = lambda arts, stats: [dict(a) for a in arts]
+    _main.send_message = lambda *a, **k: {"ok": True}
+    _main.publish_approved = lambda st, items: st
+
+    def _note(it):
+        _notices.append(it["id"])
+        _ok_when_notified.append(any(p.get("id") == it["id"] for p in _store.get("pending", [])))
+
+    _main.notify_admin_new = _note
+    _main._send_review = _note
+    for mod, fn in ((_main.edu_post, "maybe_post"), (_main.digest, "maybe_post"), (_main.arxiv_daily, "maybe_post"),
+                    (_main.brief, "maybe_post"), (_main.weekly, "maybe_post"), (_main.promo, "maybe_post")):
+        setattr(mod, fn, lambda st, *a, **k: st)
+    _main.backup.maybe_send = lambda st: None
+    _main.hn.enrich = lambda items, limit=0: items
+    _main.views.sync = lambda: None
+
+    def _put(key, value):
+        if fail_pending and key == "pending":
+            return False
+        _store[key] = value
+    kv.put = _put
+
+
+_setup_e2e(fail_pending=True)
+try:
+    _main.run(force=True)
+    _raised = False
+except (storage.KVError, SystemExit):  # run() خطای KV را FATAL می‌کند و با کد خروج ۱ تمام می‌شود
+    _raised = True
+check("e2e: شکست نوشتن pending → اجرا متوقف می‌شود (جلوگیری از پست تکراری)", _raised)
+check("e2e: دکمهٔ ادمین برای خبری که ذخیره نشد فرستاده نمی‌شود", _notices == [])
+check("e2e: خبرِ ذخیره‌نشده از seen برمی‌گردد تا دوباره جمع شود", "e2e-1" not in _store.get("seen", []) and "old" in _store["seen"])
+
+_setup_e2e(fail_pending=False)
+_main.run(force=True)
+check("e2e: حالت عادی: خبر در pending ذخیره می‌شود", any(p.get("id") == "e2e-1" for p in _store.get("pending", [])))
+check("e2e: اعلان ادمین فقط بعد از ذخیره‌شدن pending", _notices == ["e2e-1"] and _ok_when_notified == [True])
+check("e2e: خبر در seen می‌ماند", "e2e-1" in _store["seen"])
+check("e2e: آیتم pending کاملاً JSON-پذیر است", bool(__import__("json").dumps(_store["pending"], default=None)))
+
+for _k, _v in _orig.items():
+    setattr(_main, _k, _v)
+
+print("KV JSON safety net:")
+import json as _json2  # noqa: E402
+from src import cloudflare_kv as _ckv  # noqa: E402
+_dumped = _json2.loads(_json2.dumps({"a": _dt(2026, 11, 25, 6, 17), "d": _dt(2026, 1, 2).date(), "s": {"b", "a"}}, default=_ckv._json_fallback))
+check("KV: datetime/date/set به مقدار JSON-امن تبدیل می‌شود", _dumped == {"a": "2026-11-25T06:17:00Z", "d": "2026-01-02", "s": ["a", "b"]})
+try:
+    _json2.dumps({"x": object()}, default=_ckv._json_fallback)
+    _unk = False
+except TypeError:
+    _unk = True
+check("KV: نوع ناشناخته همچنان خطا می‌دهد (پنهان نمی‌شود)", _unk)
 
 print(f"\n{_passed} تست با موفقیت گذشت ✅")

@@ -142,7 +142,9 @@ def enrich(items, now=None) -> int:
         if not candidates:
             continue
         candidates.sort(key=lambda c: c["at"], reverse=True)
-        item["background"] = candidates[:max(1, STORY_LINKS_MAX)]
+        # «at» فقط برای مرتب‌سازی است: datetime در JSON نمی‌رود و آیتم در KV (pending/approved) ذخیره می‌شود.
+        # (باگ: همین فیلد نوشتن pending را می‌شکست و pipeline کامل متوقف می‌شد.)
+        item["background"] = [{"title": c["title"], "link": c["link"]} for c in candidates[:max(1, STORY_LINKS_MAX)]]
         linked += 1
 
     if linked:

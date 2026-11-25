@@ -97,6 +97,18 @@ def _should_collect(force, last_collect, now=None, interval_min=None):
         return True
 
 
+def _unsee(ids, keep=()):
+    """برگرداندن شناسهٔ خبرها از «دیده‌شده‌ها» (بهترین‌تلاش) تا اجرای بعد دوباره جمع‌آوری‌شان کند."""
+    drop = {i for i in ids if i and i not in keep}
+    if not drop:
+        return
+    try:
+        storage.save_seen(storage.load_seen() - drop)
+        print(f"[RECOVER] {len(drop)} article id(s) removed from seen to be re-collected next run")
+    except Exception as e:  # noqa: BLE001
+        print(f"[RECOVER] could not roll back seen: {type(e).__name__}")
+
+
 def _safe(name, fn, *args, default=None, **kwargs):
     """اجرای یک ماژول اختیاری؛ خرابی‌اش pipeline (و انتشار خبر) را نمی‌خواباند.
 
@@ -291,6 +303,7 @@ def _run(force=False):
                 pending = storage.load_pending()
                 approved = storage.load_approved()
                 reviews_sent = 0
+                deferred_notices = []
                 notices_sent = 0
                 pending_this_run = 0
                 translated_ok = translated_fail = 0
@@ -335,7 +348,7 @@ def _run(force=False):
                         item["admin_action"] = "auto_approved"
                         approved.append(item)
                         if notices_sent < MAX_REVIEWS_PER_RUN:
-                            notify_admin_new(item)
+                            deferred_notices.append((notify_admin_new, item))
                             notices_sent += 1
                         print(f"[AUTO] Approved: {item['title_fa'][:50]} (score: {item['score']}, trust: {source_trust_now}, via: {item['auto_reason']}, hot: {item['hot']})")
                     else:
@@ -344,7 +357,7 @@ def _run(force=False):
                         pending.append(item)
                         pending_this_run += 1
                         if reviews_sent < MAX_REVIEWS_PER_RUN:
-                            _send_review(item)
+                            deferred_notices.append((_send_review, item))
                             reviews_sent += 1
                         print(f"[PENDING] {item['title_fa'][:50]} (score: {item['score']}, trust: {source_trust_now}, hot: {item['hot']}/{item['hot_threshold']:.0f})")
 
@@ -361,6 +374,23 @@ def _run(force=False):
                     state["last_error"] = None
                 print(f"[INFO] Translated: {translated_ok}, untranslated: {translated_fail}")
 
+                # ذخیره اول، اعلان دوم: اگر نوشتن KV شکست بخورد، نه دکمهٔ «یافت نشد» برای ادمین می‌ماند
+                # و نه خبرهای این دسته (که قبلاً «دیده‌شده» ثبت شده‌اند) برای همیشه گم می‌شوند.
+                pending_saved = False
+                try:
+                    storage.save_pending(pending)
+                    pending_saved = True
+                    storage.save_approved(approved)
+                except storage.KVError:
+                    keep = {i.get("id") for i in pending} if pending_saved else set()
+                    _unsee([a.get("id", a.get("hash", "")) for a in articles], keep)
+                    raise
+
+                for fn, it in deferred_notices:
+                    try:
+                        fn(it)
+                    except Exception as e:  # noqa: BLE001
+                        print(f"[WARN] admin notice failed: {type(e).__name__}")
                 hidden = pending_this_run - reviews_sent
                 if hidden > 0 and ADMIN_ID:
                     send_message(
@@ -368,9 +398,6 @@ def _run(force=False):
                         f"📋 {hidden} خبر دیگر در انتظار تایید است — /pending",
                         reply_markup={"inline_keyboard": [[{"text": "🗑 پاک کردن کل صف", "callback_data": "clearq"}]]},
                     )
-
-                storage.save_pending(pending)
-                storage.save_approved(approved)
                 approved_to_publish = approved
                 print(f"[INFO] Routed: {len(analyzed)} items")
 
