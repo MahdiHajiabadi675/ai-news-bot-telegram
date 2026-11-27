@@ -951,4 +951,79 @@ console.log('Promo (/promo):');
   check('/promo: غیرادمین نمی‌تواند خاموش کند', get('state').promo_enabled === true);
 }
 
+// ───────── /learn: مسیر یادگیری ۳۰روزه ─────────
+console.log('Learning path (/learn):');
+{
+  const dm = (text, chatId = 2001, name = 'علی') => ({ message: { text, chat: { id: chatId, type: 'private' }, from: { id: chatId, first_name: name } } });
+  const press = (data, chatId = 2001) => ({ callback_query: { id: 'cbl', data, from: { id: chatId, first_name: 'علی' }, message: { chat: { id: chatId }, message_id: 60 } } });
+  const lv = ['beginner', 'intermediate', 'advanced'];
+  const lessons = Array.from({ length: 30 }, (_, i) => ({ id: 'l' + String(i + 1).padStart(2, '0'), lv: lv[Math.floor(i / 10)], t: `عنوان ${i + 1}`, b: `متن درس ${i + 1}`, x: `تمرین ${i + 1}` }));
+  const course = { levels: { beginner: 'مبتدی', intermediate: 'متوسط', advanced: 'پیشرفته' }, lessons };
+  const realNow = Date.now;
+  let clockMs = Date.UTC(2026, 10, 25, 10, 0, 0);
+  Date.now = () => clockMs;
+  const lastText = () => last('sendMessage').body.text;
+  const btnData = () => (last('sendMessage').body.reply_markup?.inline_keyboard || []).flat().map(b => b.callback_data);
+
+  store.delete('learn_course'); store.delete('learn_progress');
+  await send(dm('/learn'));
+  check('/learn بدون درس در KV: پیام آماده‌نبودن', lastText().includes('هنوز آماده نیست'));
+
+  set('learn_course', course);
+  await send(dm('/learn'));
+  check('/learn کاربر جدید: انتخاب سطح', btnData().join() === 'ln:s:beginner,ln:s:intermediate,ln:s:advanced' || btnData().includes('ln:s:beginner'));
+  check('/learn کاربر جدید: چیزی نوشته نمی‌شود', !store.has('learn_progress'));
+
+  await send(press('ln:s:intermediate'));
+  check('شروع از سطح متوسط: درس ۱۱', lastText().includes('عنوان 11') && lastText().includes('سطح متوسط'));
+  check('درس: دکمهٔ بعدی و فهرست', btnData().includes('ln:list') && btnData().includes('qz:next'));
+  check('پیشرفت ذخیره شد', get('learn_progress').users['2001'].done === 11);
+
+  const writesBefore = JSON.stringify(get('learn_progress'));
+  await send(dm('/learn'));
+  check('همان روز: همان درس بدون نوشتن', lastText().includes('عنوان 11') && lastText().includes('فردا') && JSON.stringify(get('learn_progress')) === writesBefore);
+
+  await send(press('ln:s:beginner'));
+  check('دکمهٔ قدیمی سطح، پیشرفت را بازنویسی نمی‌کند', get('learn_progress').users['2001'].done === 11 && lastText().includes('قبلاً شروع'));
+
+  clockMs += 24 * 3600 * 1000;
+  await send(dm('/learn'));
+  check('روز بعد: درس ۱۲', lastText().includes('عنوان 12') && get('learn_progress').users['2001'].done === 12);
+
+  await send(dm('/learn list'));
+  check('فهرست: علامت‌ها', lastText().includes('✅') && lastText().includes('📍') && lastText().includes('▫️') && lastText().includes('سطح پیشرفته'));
+
+  // پایان مسیر
+  { const lp = get('learn_progress'); lp.users['2001'].done = 29; lp.users['2001'].at = '2000-01-01'; set('learn_progress', lp); }
+  await send(dm('/learn'));
+  check('آخرین درس: دکمهٔ شروع دوباره', lastText().includes('عنوان 30') && btnData().includes('ln:reset'));
+  clockMs += 24 * 3600 * 1000;
+  await send(dm('/learn'));
+  check('پایان مسیر: تبریک', lastText().includes('تبریک') && btnData().includes('ln:reset'));
+
+  await send(dm('/learn reset'));
+  check('reset: پیشرفت پاک و انتخاب سطح', !get('learn_progress').users['2001'] && btnData().includes('ln:s:beginner'));
+  await send(press('ln:s:beginner'));
+  check('شروع مبتدی: درس ۱', lastText().includes('عنوان 1') && !lastText().includes('عنوان 11'));
+  await send(press('ln:s:advanced', 2002));
+  check('کاربر دیگر مستقل است (پیشرفته: درس ۲۱)', lastText().includes('عنوان 21') && get('learn_progress').users['2002'].done === 21);
+
+  // سقف روزانهٔ کل
+  env.LEARN_MAX_DELIVERIES_PER_DAY = '10';
+  { const lp = get('learn_progress'); lp._meta.n = 10; set('learn_progress', lp); }
+  await send(press('ln:s:beginner', 2003));
+  check('سقف روزانهٔ کل: پیام ظرفیت و بدون پیشرفت', lastText().includes('ظرفیت امروز') && !get('learn_progress').users['2003']);
+  delete env.LEARN_MAX_DELIVERIES_PER_DAY;
+
+  // /start و راهنما
+  await send(msg('/learn'));
+  check('/learn ادمین: مسیر کار می‌کند', btnData().length > 0);
+  await send(msg('/start'));
+  check('/start: دکمهٔ مسیر یادگیری', JSON.stringify(last('sendPhoto')?.body || last('sendMessage').body).includes('cmd:learn'));
+  await send(dm('/help'));
+  check('راهنمای عمومی: /learn معرفی شده', lastText().includes('/learn'));
+
+  Date.now = realNow;
+}
+
 console.log(`\n${passed} تست Worker با موفقیت گذشت ✅`);

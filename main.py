@@ -39,6 +39,7 @@ from src.bot import poll_updates, _send_review, notify_admin_new, send_message
 from src.publisher import publish_approved
 from src import edu_post
 from src import quiz
+from src import learn
 from src import digest
 from src import arxiv_daily
 from src import brief
@@ -406,6 +407,7 @@ def _run(force=False):
 
     # 3.9 بانک سؤال کوییز خصوصی (/quiz در چت ربات) → KV؛ فقط وقتی بانک عوض شده نوشته می‌شود
     _safe("quiz_bank", quiz.sync_bank)
+    _safe("learn_course", learn.sync_course)
 
     # 4. پست آموزشی (فقط متن) — قبل از انتشار اخبار، تا اگر انتشار طول کشید یا
     #    اجرا به تایم‌اوت نزدیک شد، اسلات آموزشی از دست نرود.

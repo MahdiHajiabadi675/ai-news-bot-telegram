@@ -2301,7 +2301,7 @@ promo.maybe_post({}, now=_t18 + _td(days=3))
 check("بعد از ۳ روز می‌فرستد", len(_sent) == 2)
 check("قالب بعدی می‌چرخد", _sent[0][1] != _sent[1][1])
 _seen_t = {promo.pick_template(i) for i in range(8)}
-check("همهٔ ۴ قالب چرخشی‌اند", len(_seen_t) == len(promo.TEMPLATES))
+check("همهٔ قالب‌ها چرخشی‌اند", len(_seen_t) == len(promo.TEMPLATES))
 check("قالب‌ها HTML متوازن و بدون لینک", all(t.count("<b>") == t.count("</b>") and "http" not in t for t in promo.TEMPLATES))
 
 _reset_promo()
@@ -2431,5 +2431,23 @@ try:
 except TypeError:
     _unk = True
 check("KV: نوع ناشناخته همچنان خطا می‌دهد (پنهان نمی‌شود)", _unk)
+
+# ── 📚 مسیر یادگیری ۳۰روزه ──
+print("Learning path:")
+from src import learn  # noqa: E402
+_cw = learn.course_for_worker()
+check("learn: ۳۰ درس و ۱۰ درس برای هر سطح", len(_cw) == 30 and all(sum(1 for x in _cw if x["lv"] == lv) == 10 for lv in learn.LEVELS))
+check("learn: ترتیب سطح‌ها مبتدی→متوسط→پیشرفته", [x["lv"] for x in _cw] == ["beginner"] * 10 + ["intermediate"] * 10 + ["advanced"] * 10)
+check("learn: id یکتا", len({x["id"] for x in _cw}) == 30)
+check("learn: هر درس عنوان/متن/تمرین دارد و طول مناسب پیام تلگرام", all(x["t"] and 100 < len(x["b"]) < 900 and x["x"] for x in _cw))
+check("learn: HTML خام در متن درس نیست", all("<" not in x["b"] + x["t"] + x["x"] for x in _cw))
+_store.pop("learn_course", None); _store.pop("learn_course_ver", None)
+check("sync_course: بار اول می‌نویسد", learn.sync_course() is True and len(_store["learn_course"]["lessons"]) == 30 and _store["learn_course"]["levels"] == learn.LEVELS)
+check("sync_course: بار دوم چیزی نمی‌نویسد", (lambda before: learn.sync_course() is False and _store["learn_course"] is before)(_store["learn_course"]))
+_orig_course = list(learn.COURSE)
+learn.COURSE[0] = {**_orig_course[0], "title": "عنوان تغییرکرده"}
+check("sync_course: با تغییر درس دوباره می‌نویسد", learn.sync_course() is True and _store["learn_course"]["lessons"][0]["t"] == "عنوان تغییرکرده")
+learn.COURSE[:] = _orig_course
+learn.sync_course()
 
 print(f"\n{_passed} تست با موفقیت گذشت ✅")

@@ -254,6 +254,10 @@ async function handleCallback(cb, env, BASE, CHANNEL_ID, ADMIN_ID) {
     await handleQuizCallback(cb, env, BASE, CHANNEL_ID);
     return;
   }
+  if (String(cb.data || '').startsWith('ln:')) {
+    await handleLearnCallback(cb, env, BASE);
+    return;
+  }
   if (Number(cb.from?.id) !== ADMIN_ID) {
     await answerCallback(BASE, cb.id, '⛔️ دسترسی ندارید', true);
     return;
@@ -265,7 +269,7 @@ async function handleCallback(cb, env, BASE, CHANNEL_ID, ADMIN_ID) {
   const itemHash = parts[1] || '';
 
   // دکمه‌های منوی /start → همان دستورها را اجرا می‌کنند
-  const menuCommands = ['status', 'pending', 'sources', 'feeds', 'runs', 'stats', 'clear', 'auto', 'top', 'weekly', 'backup', 'tips', 'dashboard', 'ask', 'quizboard', 'promo'];
+  const menuCommands = ['status', 'pending', 'sources', 'feeds', 'runs', 'stats', 'clear', 'auto', 'top', 'weekly', 'backup', 'tips', 'dashboard', 'ask', 'quizboard', 'promo', 'learn'];
   if (action === 'cmd' && menuCommands.includes(itemHash)) {
     await answerCallback(BASE, cbId);
     await handleMessage({ text: '/' + itemHash, chat: { id: ADMIN_ID } }, env, BASE, CHANNEL_ID, ADMIN_ID);
@@ -744,6 +748,180 @@ async function handleQuizCommand(text, env, BASE, chatId, from, now = Date.now()
   }
 }
 
+// ───────────── 📚 مسیر یادگیری ۳۰روزه (/learn در چت خصوصی) ─────────────
+// ۳۰ درس در سه سطح؛ هر روز (به وقت نمایش) یک درس. درس‌ها را pipeline در KV (learn_course) می‌گذارد.
+// سقف نوشتن KV: هر کاربر روزی حداکثر یک نوشتن (تحویل درس) + سقف روزانهٔ کل تحویل‌ها.
+
+const LEARN_LEVEL_START = { beginner: 0, intermediate: 10, advanced: 20 };
+
+function learnProgressBar(done, total, width = 10) {
+  const filled = Math.round((Math.min(done, total) / total) * width);
+  return '▰'.repeat(filled) + '▱'.repeat(width - filled);
+}
+
+function lessonText(course, idx) {
+  const l = course.lessons[idx];
+  const total = course.lessons.length;
+  const level = (course.levels || {})[l.lv] || '';
+  return `📚 <b>روز ${faNum(idx + 1)} از ${faNum(total)}</b>${level ? ` · سطح ${escapeHtml(level)}` : ''}\n` +
+    `${learnProgressBar(idx + 1, total)}\n\n` +
+    `<b>${escapeHtml(l.t)}</b>\n\n${escapeHtml(l.b)}\n\n✏️ <b>تمرین:</b> ${escapeHtml(l.x)}`;
+}
+
+function lessonKeyboard(isLast) {
+  const rows = [[
+    { text: '🧠 کوییز تمرینی', callback_data: 'qz:next' },
+    { text: '📚 فهرست درس‌ها', callback_data: 'ln:list' },
+  ]];
+  if (isLast) rows.push([{ text: '🔁 شروع دوباره', callback_data: 'ln:reset' }]);
+  return { inline_keyboard: rows };
+}
+
+function learnLevelPicker() {
+  return {
+    inline_keyboard: [
+      [{ text: '🌱 مبتدی (از صفر)', callback_data: 'ln:s:beginner' }],
+      [{ text: '🌿 متوسط (با پرامپت و مفاهیم پایه آشنا هستم)', callback_data: 'ln:s:intermediate' }],
+      [{ text: '🌳 پیشرفته (می‌خواهم سراغ مفاهیم فنی بروم)', callback_data: 'ln:s:advanced' }],
+    ],
+  };
+}
+
+function learnToday(now, env) {
+  const off = (Number(env.DISPLAY_TZ_OFFSET_MIN) || 210) * 60000;
+  return new Date(now + off).toISOString().slice(0, 10);
+}
+
+function normLearn(raw) {
+  const lp = raw && typeof raw === 'object' ? raw : {};
+  if (!lp.users || typeof lp.users !== 'object') lp.users = {};
+  return lp;
+}
+
+async function saveLearn(env, lp) {
+  const ids = Object.keys(lp.users);
+  if (ids.length > 2000) {              // رشد بی‌پایان ندارد: قدیمی‌ترین‌ها حذف می‌شوند
+    ids.sort((a, b) => String(lp.users[a].at || '').localeCompare(String(lp.users[b].at || '')));
+    for (const id of ids.slice(0, ids.length - 2000)) delete lp.users[id];
+  }
+  await saveJSON(env, 'learn_progress', lp);
+}
+
+/** تحویل درس بعدی؛ همهٔ شاخه‌ها یک نوشتن (یا هیچ) دارند. startIdx فقط برای شروع/ری‌ست. */
+async function deliverLesson(env, BASE, chatId, from, course, startIdx = null, now = Date.now()) {
+  const lp = normLearn(await getJSON(env, 'learn_progress', {}));
+  const today = learnToday(now, env);
+  const id = String(from.id ?? chatId);
+  let u = lp.users[id];
+  const total = course.lessons.length;
+
+  if (startIdx === null && !u) {
+    await sendMessage(BASE, chatId,
+      '📚 <b>مسیر یادگیری ۳۰روزه هوش مصنوعی</b>\n\nهر روز یک درس کوتاه (حدود یک دقیقه) با یک تمرین؛ در ۳۰ روز از مفاهیم پایه تا موضوعات پیشرفته. ' +
+      'سطح شروعت را انتخاب کن:', learnLevelPicker());
+    return;
+  }
+  if (startIdx === null && u.done >= total) {
+    await sendMessage(BASE, chatId, '🎉 تبریک! هر ۳۰ درس را تمام کردی. می‌توانی دوباره از اول شروع کنی یا با /quiz خودت را بسنجی.',
+      { inline_keyboard: [[{ text: '🔁 شروع دوباره', callback_data: 'ln:reset' }]] });
+    return;
+  }
+
+  // امروز درس را گرفته: همان را دوباره نشان بده (بدون نوشتن)
+  if (startIdx === null && u.at === today && u.done > 0) {
+    const idx = Math.min(u.done, total) - 1;
+    await sendMessage(BASE, chatId, lessonText(course, idx) +
+      '\n\n⏳ درس بعدی فردا باز می‌شود. تا آن موقع با کوییز تمرین کن.', lessonKeyboard(false));
+    return;
+  }
+  const perDay = Math.max(10, Number(env.LEARN_MAX_DELIVERIES_PER_DAY) || 80);
+  if (!lp._meta || lp._meta.d !== today) lp._meta = { d: today, n: 0 };
+  if (lp._meta.n >= perDay) {
+    await sendMessage(BASE, chatId, '⏳ ظرفیت امروز مسیر یادگیری پر شده؛ فردا دوباره امتحان کن.');
+    return;
+  }
+  if (startIdx !== null) {
+    u = { n: String(from.first_name || '').slice(0, 20), done: Math.max(0, Math.min(startIdx, total - 1)), at: '' };
+    lp.users[id] = u;
+  }
+  const idx = u.done;
+  u.done = idx + 1;
+  u.at = today;
+  lp._meta.n++;
+  await saveLearn(env, lp);
+  await sendMessage(BASE, chatId, lessonText(course, idx), lessonKeyboard(idx + 1 >= total));
+}
+
+async function learnList(env, BASE, chatId, from, course) {
+  const lp = normLearn(await getJSON(env, 'learn_progress', {}));
+  const u = lp.users[String(from.id ?? chatId)];
+  const done = u ? u.done : 0;
+  const lines = ['📚 <b>فهرست درس‌ها</b>\n'];
+  let lastLv = '';
+  course.lessons.forEach((l, i) => {
+    if (l.lv !== lastLv) {
+      lastLv = l.lv;
+      lines.push(`\n<b>سطح ${escapeHtml((course.levels || {})[l.lv] || l.lv)}</b>`);
+    }
+    const mark = i < done ? '✅' : (i === done ? '📍' : '▫️');
+    lines.push(`${mark} ${faNum(i + 1)}. ${escapeHtml(l.t)}`);
+  });
+  lines.push(u ? '\nبرای درس امروز: /learn' : '\nشروع: /learn');
+  await sendLong(BASE, chatId, lines.join('\n'));
+}
+
+async function loadCourse(env) {
+  const c = await getJSON(env, 'learn_course', null);
+  return c && Array.isArray(c.lessons) && c.lessons.length ? c : null;
+}
+
+async function handleLearn(text, env, BASE, chatId, from, now = Date.now()) {
+  const course = await loadCourse(env);
+  if (!course) {
+    await sendMessage(BASE, chatId, '📚 مسیر یادگیری هنوز آماده نیست؛ بعد از اجرای بعدی ربات دوباره امتحان کن.');
+    return;
+  }
+  const arg = (text.split(/\s+/)[1] || '').toLowerCase();
+  if (arg === 'list' || arg === 'فهرست') return learnList(env, BASE, chatId, from, course);
+  if (arg === 'reset') return learnReset(env, BASE, chatId, from);
+  return deliverLesson(env, BASE, chatId, from, course, null, now);
+}
+
+async function learnReset(env, BASE, chatId, from) {
+  const lp = normLearn(await getJSON(env, 'learn_progress', {}));
+  const id = String(from.id ?? chatId);
+  if (lp.users[id]) {
+    delete lp.users[id];
+    await saveLearn(env, lp);
+  }
+  await sendMessage(BASE, chatId, '🔁 مسیر از اول شروع می‌شود. سطح شروعت را انتخاب کن:', learnLevelPicker());
+}
+
+async function handleLearnCallback(cb, env, BASE, now = Date.now()) {
+  const chatId = cb.message && cb.message.chat && cb.message.chat.id;
+  const from = cb.from || {};
+  await answerCallback(BASE, cb.id);
+  if (!chatId) return;
+  const course = await loadCourse(env);
+  if (!course) {
+    await sendMessage(BASE, chatId, '📚 مسیر یادگیری هنوز آماده نیست.');
+    return;
+  }
+  const parts = String(cb.data || '').split(':');
+  if (parts[1] === 'list') return learnList(env, BASE, chatId, from, course);
+  if (parts[1] === 'reset') return learnReset(env, BASE, chatId, from);
+  if (parts[1] === 's' && Object.prototype.hasOwnProperty.call(LEARN_LEVEL_START, parts[2])) {
+    const lp = normLearn(await getJSON(env, 'learn_progress', {}));
+    const existing = lp.users[String(from.id ?? chatId)];
+    if (existing && existing.done > 0) {
+      // دوبار زدن دکمهٔ قدیمی نباید پیشرفت را پاک کند
+      await sendMessage(BASE, chatId, 'مسیرت قبلاً شروع شده. درس امروز: /learn');
+      return;
+    }
+    return deliverLesson(env, BASE, chatId, from, course, LEARN_LEVEL_START[parts[2]], now);
+  }
+}
+
 async function handlePublicMessage(msg, env, BASE, CHANNEL_ID, ADMIN_ID) {
   const text = (msg.text || '').trim();
   const chat = msg.chat || {};
@@ -759,6 +937,7 @@ async function handlePublicMessage(msg, env, BASE, CHANNEL_ID, ADMIN_ID) {
       '• <code>/subscribe</code> — دریافت خلاصهٔ صبح در چت خصوصی\n' +
       '• <code>/unsubscribe</code> — قطع اشتراک\n' +
       '• <code>/ask کلمه</code> — جست‌وجو در آرشیو کانال\n' +
+      '• <code>/learn</code> — مسیر یادگیری ۳۰روزه (هر روز یک درس)\n' +
       '• <code>/quiz</code> — کوییز امتیازی · <code>/me</code> امتیاز من · <code>/leaderboard</code> جدول\n' +
       '• <code>/tip متن سوژه</code> — فرستادن خبر/لینک برای بررسی\n\n' +
       '<i>کانال خبری جدا از این چت است.</i>');
@@ -772,6 +951,11 @@ async function handlePublicMessage(msg, env, BASE, CHANNEL_ID, ADMIN_ID) {
 
   if (/^\/(quiz|me|leaderboard|hide)\b/i.test(text)) {
     await handleQuizCommand(text, env, BASE, chatId, from);
+    return;
+  }
+
+  if (/^\/learn\b/i.test(text)) {
+    await handleLearn(text, env, BASE, chatId, from);
     return;
   }
 
@@ -840,7 +1024,7 @@ async function handlePublicMessage(msg, env, BASE, CHANNEL_ID, ADMIN_ID) {
     return;
   }
 
-  await sendMessage(BASE, chatId, 'دستورها: /ask کلمه · /quiz · /me · /leaderboard · /subscribe · /unsubscribe · /tip متن سوژه');
+  await sendMessage(BASE, chatId, 'دستورها: /learn · /ask کلمه · /quiz · /me · /leaderboard · /subscribe · /unsubscribe · /tip متن سوژه');
 }
 
 async function handleMessage(msg, env, BASE, CHANNEL_ID, ADMIN_ID) {
@@ -922,7 +1106,7 @@ async function handleMessage(msg, env, BASE, CHANNEL_ID, ADMIN_ID) {
       '<code>/undo</code> · <code>/editlast</code> · <code>/welcome</code> — حذف/ویرایش آخرین پست، خوش‌آمد\n' +
       '<code>/sources</code> · <code>/feeds</code> · <code>/runs</code> — منابع، فیدها، اجراها\n' +
       '<code>/dashboard</code> · <code>/top</code> · <code>/weekly</code> · <code>/quizboard</code> — داشبورد، پربازدید، هفتگی، جدول کوییز\n' +
-      '<code>/ask</code> کلمه — جست‌وجو در آرشیو\n\n' +
+      '<code>/ask</code> کلمه — جست‌وجو در آرشیو · <code>/learn</code> — مسیر یادگیری\n\n' +
       '━━━━━━━━━━━━━━\n' +
       '💡 <i>از دکمه‌های زیر هم می‌توانی استفاده کنی.</i>',
       {
@@ -946,6 +1130,9 @@ async function handleMessage(msg, env, BASE, CHANNEL_ID, ADMIN_ID) {
           [
             { text: '🏆 جدول کوییز', callback_data: 'cmd:quizboard' },
             { text: '📣 تبلیغ سایت', callback_data: 'cmd:promo' }
+          ],
+          [
+            { text: '📚 مسیر یادگیری', callback_data: 'cmd:learn' }
           ],
           [
             { text: '👁 پربازدید', callback_data: 'cmd:top' },
@@ -1055,6 +1242,8 @@ async function handleMessage(msg, env, BASE, CHANNEL_ID, ADMIN_ID) {
     await handleAsk(text, env, BASE, ADMIN_ID, CHANNEL_ID, true);
   } else if (/^\/(quiz|me|leaderboard|hide)\b/i.test(text)) {
     await handleQuizCommand(text, env, BASE, ADMIN_ID, msg.from || { id: ADMIN_ID, first_name: 'ادمین' });
+  } else if (/^\/learn\b/i.test(text)) {
+    await handleLearn(text, env, BASE, ADMIN_ID, msg.from || { id: ADMIN_ID, first_name: 'ادمین' });
   } else if (text === '/quizboard') {
     const off = (Number(env.DISPLAY_TZ_OFFSET_MIN) || 210) * 60000;
     await sendLong(BASE, ADMIN_ID, leaderboardText(normScores(await getJSON(env, 'quiz_scores', {})), quizWeekId(Date.now(), off)),
